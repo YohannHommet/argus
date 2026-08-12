@@ -1,0 +1,8 @@
+{
+  "session_id": "sess-0001",
+  "prompt_id": "prompt-0001",
+  "hook_event_name": "SubagentStart",
+  "agent_id": "agent-0001",
+  "agent_type": "explore",
+  "parent_agent_id": "agent-0000"
+}

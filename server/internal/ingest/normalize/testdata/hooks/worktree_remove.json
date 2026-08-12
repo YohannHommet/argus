@@ -1,0 +1,5 @@
+{
+  "session_id": "sess-0001",
+  "hook_event_name": "WorktreeRemove",
+  "file_path": "/home/dev/project-worktrees/feature-x"
+}

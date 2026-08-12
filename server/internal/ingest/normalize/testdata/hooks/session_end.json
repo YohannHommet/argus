@@ -1,0 +1,6 @@
+{
+  "session_id": "sess-0001",
+  "hook_event_name": "SessionEnd",
+  "cwd": "/home/dev/project",
+  "reason": "clean_exit"
+}

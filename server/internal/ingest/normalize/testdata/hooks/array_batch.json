@@ -1,0 +1,5 @@
+[
+  { "session_id": "sess-0001", "hook_event_name": "Notification" },
+  { "session_id": "sess-0002", "hook_event_name": "Notification" },
+  { "session_id": "sess-0003", "hook_event_name": "Notification" }
+]
