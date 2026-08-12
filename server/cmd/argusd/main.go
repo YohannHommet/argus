@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/YohannHommet/argus/server/internal/config"
+	"github.com/YohannHommet/argus/server/internal/store/postgres"
 	"github.com/YohannHommet/argus/server/internal/telemetry"
 )
 
@@ -34,7 +35,6 @@ Commands:
 // ticket/phase that will wire it up, per P1-02's brief.
 var notImplemented = map[string]string{
 	"serve":               "not implemented yet (arrives in P1-05: HTTP skeleton)",
-	"migrate":             "not implemented yet (arrives in P1-04: store skeleton, embedded goose migrations)",
 	"sim":                 "not implemented yet (arrives in Phase 4: traffic simulator)",
 	"retention":           "not implemented yet (arrives in Phase 2: retention job)",
 	"rebuild-projections": "not implemented yet (arrives in Phase 2: rollups/projections)",
@@ -60,7 +60,9 @@ func run(args []string) int {
 		return runConfig(rest)
 	case "healthcheck":
 		return runHealthcheck(rest)
-	case "serve", "migrate", "sim", "retention", "rebuild-projections", "prices":
+	case "migrate":
+		return runMigrate(rest)
+	case "serve", "sim", "retention", "rebuild-projections", "prices":
 		return runStub(cmd, rest)
 	default:
 		fmt.Fprintf(os.Stderr, "argusd: unknown command %q\n\n", cmd)
@@ -114,6 +116,66 @@ func runConfig(args []string) int {
 	}
 	fmt.Print(cfg.Print())
 	return 0
+}
+
+// runMigrate implements `argusd migrate [up|status]` (SPEC §3.8). `up` is
+// the default action, matching `up` (default), `status`, `down-to N`;
+// `down-to` is not wired yet — P1-04's scope is Migrate/MigrateStatus, and
+// nothing in Phase 1 needs a rollback path.
+func runMigrate(args []string) int {
+	fs := flag.NewFlagSet("migrate", flag.ContinueOnError)
+	configPath := fs.String("config", "", "path to an optional YAML config file")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+
+	action := "up"
+	if rest := fs.Args(); len(rest) > 0 {
+		action = rest[0]
+	}
+
+	cfg, _, err := config.Load(*configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "argusd: %v\n", err)
+		return 1
+	}
+
+	ctx := context.Background()
+	pool, err := postgres.NewPool(ctx, cfg.DatabaseURL, cfg.DBMaxConns)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "argusd: migrate: %v\n", err)
+		return 1
+	}
+	defer pool.Close()
+
+	store := postgres.New(pool)
+
+	switch action {
+	case "up":
+		if err := store.Migrate(ctx); err != nil {
+			fmt.Fprintf(os.Stderr, "argusd: migrate: %v\n", err)
+			return 1
+		}
+		fmt.Println("argusd: migrate: up to date")
+		return 0
+	case "status":
+		statuses, err := store.MigrateStatus(ctx)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "argusd: migrate: %v\n", err)
+			return 1
+		}
+		for _, s := range statuses {
+			state := "pending"
+			if s.Applied {
+				state = "applied"
+			}
+			fmt.Printf("%d\t%s\n", s.Version, state)
+		}
+		return 0
+	default:
+		fmt.Fprintf(os.Stderr, "argusd: migrate: unknown action %q (want up or status)\n", action)
+		return 2
+	}
 }
 
 func runHealthcheck(args []string) int {
