@@ -1,0 +1,42 @@
+# Repo-root .dockerignore (build context = repo root, SPEC §8.1).
+# Keeps the context small: only Go sources under server/ and web sources
+# under web/ are actually needed by the multi-stage build.
+
+.git
+.github
+.gitignore
+.gitattributes
+.editorconfig
+
+# Docs — not needed to build the binary or the SPA
+docs/
+*.md
+LICENSE
+
+# Deploy/scripts — not COPYed into the image, only referenced via `-f`/host
+deploy/
+scripts/
+
+# Go build artifacts
+server/bin/
+server/argusd
+server/argus-sim
+**/*.test
+**/*.out
+cover.out
+
+# Node / web build artifacts — the Dockerfile builds these itself
+node_modules/
+web/node_modules/
+web/dist/
+web/coverage/
+.pnpm-store/
+pnpm-debug.log*
+npm-debug.log*
+
+# Local dev / IDE / OS cruft
+.vscode/
+.idea/
+.DS_Store
+*.swp
+*.swo

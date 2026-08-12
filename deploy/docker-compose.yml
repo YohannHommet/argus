@@ -1,0 +1,49 @@
+# Local/production stack (docs/SPEC.md §8.2). No `version:` key — obsolete
+# in modern compose. No DB port published by default; docker-compose.dev.yml
+# adds one for local `psql` access.
+services:
+  postgres:
+    image: postgres:18-alpine # uuidv7() requires 18+
+    environment:
+      POSTGRES_DB: argus
+      POSTGRES_USER: argus
+      POSTGRES_PASSWORD: argus
+    # postgres:18+ images changed their default data-directory layout: a
+    # volume mounted at the old .../data path is now flagged as an "unused
+    # mount" and the entrypoint refuses to start (see
+    # docker-library/postgres#1259). The image's own error message names the
+    # fix: mount the parent /var/lib/postgresql instead and let the
+    # entrypoint place its major-version-specific data dir underneath.
+    # Deviation from SPEC §8.2's literal `argus-pgdata:/var/lib/postgresql/data`.
+    volumes:
+      - argus-pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U argus"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  argusd:
+    image: ghcr.io/yohannhommet/argus:latest # docker-compose.dev.yml adds `build:` for local dev
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ARGUS_DATABASE_URL: postgres://argus:argus@postgres:5432/argus?sslmode=disable
+      ARGUS_HTTP_ADDR: ":8080"
+    # Host port is configurable: SPEC §8.2 pins 8080, but that port is
+    # already occupied by other stacks on some dev machines / CI runners.
+    # ARGUS_HTTP_PORT lets `ARGUS_HTTP_PORT=18080 docker compose up` rebind
+    # without touching the container's own listener (still :8080 inside).
+    ports:
+      - "${ARGUS_HTTP_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "/argusd", "healthcheck"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+volumes:
+  argus-pgdata:

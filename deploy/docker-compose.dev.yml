@@ -1,0 +1,17 @@
+# Dev overlay: `docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.dev.yml up`
+#
+# - publishes 5432 so `psql` can reach postgres directly from the host
+# - builds argusd from source (server/Dockerfile) instead of pulling the
+#   published ghcr.io image
+services:
+  postgres:
+    ports:
+      - "5432:5432"
+
+  argusd:
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
+      args:
+        VERSION: ${VERSION:-dev}
+        COMMIT: ${COMMIT:-unknown}
