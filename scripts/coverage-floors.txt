@@ -9,4 +9,4 @@
 # only once the package exists. Later tickets raise these numbers as they add
 # tests; they must never go down without a matching drop in real coverage.
 github.com/YohannHommet/argus/server/internal/httpapi 64.0
-github.com/YohannHommet/argus/server/internal/store/postgres 80.0
+github.com/YohannHommet/argus/server/internal/store/postgres 83.0

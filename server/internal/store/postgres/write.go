@@ -245,14 +245,11 @@ func correctSessionTurnCounts(ctx context.Context, tx pgx.Tx, aggs map[string]*s
 	return nil
 }
 
-// upsertToolCalls is the P2-07 seam: tool_calls projections (SPEC §1.6, §2.3)
-// built from tool.pre/tool.decision/tool.permission_request/tool.result
-// events, keyed by the deterministic UUIDv5 id described there. Its slot in
-// the lock order is right after events, before subagents. No-op until
-// P2-07 lands.
-func upsertToolCalls(_ context.Context, _ pgx.Tx, _ []model.Event) error {
-	return nil
-}
+// upsertToolCalls is implemented in upsert_toolcall.go (P2-07): tool_calls
+// projections (SPEC §1.6, §2.3) built from
+// tool.pre/tool.decision/tool.permission_request/tool.result events, keyed
+// by the deterministic UUIDv5 id described there. Its slot in the lock
+// order is right after events, before subagents.
 
 // upsertSubagents is the P2-08 seam: subagents projections (SPEC §1.6, §2.3)
 // built from subagent.start/subagent.stop events plus hook tool.* events
