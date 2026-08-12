@@ -11,3 +11,4 @@
 github.com/YohannHommet/argus/server/internal/httpapi 66.0
 github.com/YohannHommet/argus/server/internal/store/postgres 83.0
 github.com/YohannHommet/argus/server/internal/ingest 87.0
+github.com/YohannHommet/argus/server/internal/sim 85.0

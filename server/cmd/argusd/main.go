@@ -16,6 +16,7 @@ import (
 
 	"github.com/YohannHommet/argus/server/internal/app"
 	"github.com/YohannHommet/argus/server/internal/config"
+	"github.com/YohannHommet/argus/server/internal/sim"
 	"github.com/YohannHommet/argus/server/internal/store/postgres"
 	"github.com/YohannHommet/argus/server/internal/telemetry"
 )
@@ -35,9 +36,9 @@ Commands:
 `
 
 // notImplemented is the message printed by stub subcommands. Each names the
-// ticket/phase that will wire it up, per P1-02's brief.
+// ticket/phase that will wire it up, per P1-02's brief. "sim" is wired
+// (ticket P2-12, runSim below) and no longer listed here.
 var notImplemented = map[string]string{
-	"sim":                 "not implemented yet (arrives in Phase 4: traffic simulator)",
 	"retention":           "not implemented yet (arrives in Phase 2: retention job)",
 	"rebuild-projections": "not implemented yet (arrives in Phase 2: rollups/projections)",
 	"prices":              "not implemented yet (arrives in Phase 3: model price table)",
@@ -66,7 +67,9 @@ func run(args []string) int {
 		return runMigrate(rest)
 	case "serve":
 		return runServe(rest)
-	case "sim", "retention", "rebuild-projections", "prices":
+	case "sim":
+		return sim.RunCLI(rest, os.Stdout, os.Stderr)
+	case "retention", "rebuild-projections", "prices":
 		return runStub(cmd, rest)
 	default:
 		fmt.Fprintf(os.Stderr, "argusd: unknown command %q\n\n", cmd)
