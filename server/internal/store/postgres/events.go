@@ -168,13 +168,33 @@ INSERT INTO events (
     agent_id, parent_agent_id, agent_type, permission_mode, file_path,
     request_id, message_uuid, clock_skewed, dedup_key, attrs
 )
-SELECT * FROM unnest(
-    $1::uuid[], $2::timestamptz[], $3::timestamptz[], $4::text[], $5::text[], $6::text[], $7::text[], $8::text[], $9::text[], $10::bigint[],
+-- id is passed as text, not uuid[], so an event whose ID the producer never
+-- set (the normal case: the normalizers do not mint ids, and SPEC §1.6 says
+-- events.id stays uuidv7() because events are never rebuilt) falls back to the
+-- column's uuidv7() default instead of failing the whole batch with
+-- "invalid input syntax for type uuid" on an empty string. A producer that
+-- does supply an id still wins, which keeps the rebuild path open.
+SELECT coalesce(nullif(u.id, '')::uuid, uuidv7()), u.ts, u.ingested_at, u.session_id, u.prompt_id,
+       u.vendor, u.source, u.kind, u.event_name, u.vendor_seq,
+       u.tool_name, u.tool_use_id, u.decision, u.decision_source, u.tool_source, u.query_source, u.model,
+       u.input_tokens, u.output_tokens, u.cache_read_tokens, u.cache_creation_tokens,
+       u.cost_usd, u.cost_source, u.duration_ms, u.success, u.error_type,
+       u.agent_id, u.parent_agent_id, u.agent_type, u.permission_mode, u.file_path,
+       u.request_id, u.message_uuid, u.clock_skewed, u.dedup_key, u.attrs
+FROM unnest(
+    $1::text[], $2::timestamptz[], $3::timestamptz[], $4::text[], $5::text[], $6::text[], $7::text[], $8::text[], $9::text[], $10::bigint[],
     $11::text[], $12::text[], $13::text[], $14::text[], $15::text[], $16::text[], $17::text[],
     $18::bigint[], $19::bigint[], $20::bigint[], $21::bigint[],
     $22::float8[], $23::text[], $24::int[], $25::bool[], $26::text[],
     $27::text[], $28::text[], $29::text[], $30::text[], $31::text[],
     $32::text[], $33::text[], $34::bool[], $35::text[], $36::jsonb[]
+) AS u(
+    id, ts, ingested_at, session_id, prompt_id, vendor, source, kind, event_name, vendor_seq,
+    tool_name, tool_use_id, decision, decision_source, tool_source, query_source, model,
+    input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
+    cost_usd, cost_source, duration_ms, success, error_type,
+    agent_id, parent_agent_id, agent_type, permission_mode, file_path,
+    request_id, message_uuid, clock_skewed, dedup_key, attrs
 )
 ON CONFLICT (ts, dedup_key) DO NOTHING
 RETURNING ts, seq, dedup_key

@@ -316,7 +316,14 @@ func TestWriteBatch_FailureRollsBackCompletely(t *testing.T) {
 	sessionID := "session-rollback"
 	good := mkEvent(t, sessionID, model.KindLLMRequest, model.SourceOTelLog, base, withTokens(3, 4))
 	bad := mkEvent(t, sessionID, model.KindLLMRequest, model.SourceOTelLog, base.Add(time.Second), withTokens(1, 1))
-	bad.ID = "" // invalid uuid literal: forces a Postgres error on the events INSERT, aborting the whole transaction.
+	// Force a Postgres error on the events INSERT so the whole transaction
+	// aborts: cost_usd is numeric(16,8), so it holds at most 8 integer digits
+	// and 1e9 overflows the column's precision (SQLSTATE 22003). Deliberately
+	// not an empty Event.ID — that used to fail as "invalid input syntax for
+	// type uuid", so this test passed for the wrong reason until the insert
+	// learned to fall back to the column's uuidv7() default.
+	overflow := 1e9
+	bad.CostUSD = &overflow
 
 	_, err := st.WriteBatch(ctx, []model.Event{good, bad})
 	require.Error(t, err)
@@ -426,7 +433,14 @@ func TestWriteBatch_RolledBackBatchLeavesNoDirtyRows(t *testing.T) {
 	sessionID := "session-rollup-dirty-rollback"
 	good := mkEvent(t, sessionID, model.KindLLMRequest, model.SourceOTelLog, base, withTokens(1, 1))
 	bad := mkEvent(t, sessionID, model.KindLLMRequest, model.SourceOTelLog, base.Add(time.Hour), withTokens(1, 1))
-	bad.ID = ""
+	// Inject a genuine Postgres error: cost_usd is numeric(16,8), so it holds
+	// at most 8 integer digits and 1e9 overflows the column's precision
+	// (SQLSTATE 22003). This deliberately does NOT use an empty Event.ID —
+	// that used to fail as "invalid input syntax for type uuid" and so made
+	// this test pass for the wrong reason, until the events insert learned to
+	// fall back to the column's uuidv7() default.
+	overflow := 1e9
+	bad.CostUSD = &overflow
 
 	_, err := st.WriteBatch(ctx, []model.Event{good, bad})
 	require.Error(t, err)

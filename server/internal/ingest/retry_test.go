@@ -31,6 +31,12 @@ func TestClassifyError_Table(t *testing.T) {
 		{"undefined_column", &pgconn.PgError{Code: "42703"}, ingest.ClassPermanent},
 		{"unrecognized_generic_error", errors.New("boom"), ingest.ClassTransient},
 		{"unrecognized_sqlstate_class", &pgconn.PgError{Code: "53300"}, ingest.ClassTransient}, // too_many_connections: not named by SPEC §3.6
+		// Class 22 (data exception) is permanent: the same bytes fail
+		// identically on every attempt. Regression guard for the integration
+		// bug where an empty Event.ID produced 22P02 and burned the transient
+		// retry budget before the batch was dropped.
+		{"invalid_text_representation", &pgconn.PgError{Code: "22P02"}, ingest.ClassPermanent},
+		{"numeric_value_out_of_range", &pgconn.PgError{Code: "22003"}, ingest.ClassPermanent},
 	}
 
 	for _, tc := range tests {

@@ -73,7 +73,21 @@ type weighted[T any] struct {
 // others do not) safe against floating-point drift without a normalization
 // pass.
 func pick[T any](r *rand.Rand, table []weighted[T]) T {
-	u := r.Float64()
+	// The draw is scaled by the table's total weight rather than assuming the
+	// weights sum to exactly 1. Some SPEC §7.1 distributions do not: the
+	// tool_decision `source` table sums to 1.02 as the spec writes it
+	// (0.55+0.05+0.15+0.15+0.08+0.02+0.02), and with an unscaled u in [0,1)
+	// the cumulative scan reached 1.0 at `user_abort` and the final entry —
+	// the *invented* source value SPEC §7.1 explicitly requires, and which
+	// Phase-2 exit criterion 6 asserts reaches the database — could never be
+	// drawn at all. Scaling preserves the documented relative weights while
+	// making every entry reachable, and protects every other table from the
+	// same silent-unreachability class of bug.
+	var total float64
+	for _, w := range table {
+		total += w.prob
+	}
+	u := r.Float64() * total
 	var acc float64
 	for _, w := range table {
 		acc += w.prob

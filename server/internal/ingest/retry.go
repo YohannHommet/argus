@@ -62,7 +62,17 @@ var conflictSQLSTATEs = map[string]bool{
 
 const transientAdminShutdown = "57P01"
 
-var permanentSQLSTATEPrefixes = []string{"23", "42"}
+// permanentSQLSTATEPrefixes are the SQLSTATE classes a retry can never fix.
+// SPEC §3.6 names 23 (integrity constraint violation) and 42 (syntax
+// error / access rule violation). Class 22 (data exception: 22P02 invalid
+// text representation, 22003 numeric value out of range, 22001 string data
+// right truncation, ...) is added here as a deviation reported to the owner:
+// the spec's list does not mention it, so it fell through to the transient
+// default and a malformed value burned the full retry budget before being
+// dropped — and, worse, was counted as class="transient", telling an operator
+// to look for a flaky database instead of a bad payload. The same bytes fail
+// identically on every attempt, so retrying is provably pointless.
+var permanentSQLSTATEPrefixes = []string{"22", "23", "42"}
 
 // ClassifyError applies SPEC §3.6's retry classification to a
 // WriteBatch/WriteMetrics error. A non-pgconn error (including

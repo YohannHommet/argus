@@ -348,7 +348,15 @@ func (b *sessionBuilder) emitToolCall(promptID, cwd string, depth int, agentID s
 	}
 
 	if toolName == "Task" && depth < maxSubagentDepth {
-		b.runSubagent(promptID, cwd, depth+1, toolUseID)
+		// The spawned subagent's parent is the agent that is *running* this
+		// tool call — agentID, which is "" at the top level so a directly
+		// spawned subagent correctly reports no parent (SPEC §2.3: a NULL
+		// parent_agent_id means the root/main agent). Passing the spawning
+		// tool_use_id here instead fabricated a parent_agent_id that was not
+		// an agent id at all, which both lied about the tree's root and made
+		// a depth-2 tree impossible, because no child's parent_agent_id could
+		// ever match another subagent's agent_id (Phase-2 exit criterion 7).
+		b.runSubagent(promptID, cwd, depth+1, agentID)
 	}
 
 	success := bernoulli(b.r.Rand, pToolResultSuccess)
