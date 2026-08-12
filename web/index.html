@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Argus</title>
+    <script>
+      // Anti-flash theme init. Must agree exactly with src/stores/ui.ts's
+      // precedence: localStorage wins; else prefers-color-scheme: light
+      // match uses light; else (no match / unsupported) dark.
+      ;(function () {
+        try {
+          var stored = localStorage.getItem('argus-ui')
+          var theme = null
+          if (stored) {
+            var parsed = JSON.parse(stored)
+            theme = parsed && parsed.theme
+          }
+          if (theme !== 'dark' && theme !== 'light') {
+            var prefersLight =
+              window.matchMedia &&
+              window.matchMedia('(prefers-color-scheme: light)').matches
+            theme = prefersLight ? 'light' : 'dark'
+          }
+          document.documentElement.classList.add(theme)
+        } catch (e) {
+          document.documentElement.classList.add('dark')
+        }
+      })()
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
