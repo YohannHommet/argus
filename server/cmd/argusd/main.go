@@ -9,9 +9,12 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
+	"github.com/YohannHommet/argus/server/internal/app"
 	"github.com/YohannHommet/argus/server/internal/config"
 	"github.com/YohannHommet/argus/server/internal/store/postgres"
 	"github.com/YohannHommet/argus/server/internal/telemetry"
@@ -34,7 +37,6 @@ Commands:
 // notImplemented is the message printed by stub subcommands. Each names the
 // ticket/phase that will wire it up, per P1-02's brief.
 var notImplemented = map[string]string{
-	"serve":               "not implemented yet (arrives in P1-05: HTTP skeleton)",
 	"sim":                 "not implemented yet (arrives in Phase 4: traffic simulator)",
 	"retention":           "not implemented yet (arrives in Phase 2: retention job)",
 	"rebuild-projections": "not implemented yet (arrives in Phase 2: rollups/projections)",
@@ -62,7 +64,9 @@ func run(args []string) int {
 		return runHealthcheck(rest)
 	case "migrate":
 		return runMigrate(rest)
-	case "serve", "sim", "retention", "rebuild-projections", "prices":
+	case "serve":
+		return runServe(rest)
+	case "sim", "retention", "rebuild-projections", "prices":
 		return runStub(cmd, rest)
 	default:
 		fmt.Fprintf(os.Stderr, "argusd: unknown command %q\n\n", cmd)
@@ -176,6 +180,47 @@ func runMigrate(args []string) int {
 		fmt.Fprintf(os.Stderr, "argusd: migrate: unknown action %q (want up or status)\n", action)
 		return 2
 	}
+}
+
+// runServe implements `argusd serve` (SPEC §3.8): load config, build the
+// App (connect + optionally migrate), then run the HTTP server until
+// SIGINT/SIGTERM triggers the graceful-shutdown sequence.
+func runServe(args []string) int {
+	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
+	configPath := fs.String("config", "", "path to an optional YAML config file")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+
+	cfg, warnings, err := config.Load(*configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "argusd: %v\n", err)
+		return 1
+	}
+
+	logger, err := telemetry.NewLogger(os.Stderr, cfg.LogLevel, cfg.LogFormat)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "argusd: %v\n", err)
+		return 1
+	}
+	for _, w := range warnings {
+		logger.Warn(w)
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	a, err := app.New(ctx, cfg, logger)
+	if err != nil {
+		logger.Error("argusd: serve: startup failed", "error", err)
+		return 1
+	}
+
+	if err := a.Serve(ctx); err != nil {
+		logger.Error("argusd: serve: shutdown error", "error", err)
+		return 1
+	}
+	return 0
 }
 
 func runHealthcheck(args []string) int {
