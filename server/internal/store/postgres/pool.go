@@ -12,18 +12,53 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/YohannHommet/argus/server/internal/model"
 	"github.com/YohannHommet/argus/server/internal/store"
+	"github.com/YohannHommet/argus/server/internal/store/postgres/gen"
 )
 
 // applicationName identifies argusd's connections in pg_stat_activity.
 const applicationName = "argusd"
 
+// defaultRollupSessionRemarkMax is SPEC §3.7's ARGUS_ROLLUP_SESSION_REMARK_MAX
+// default (720 = 30 days of hourly buckets): the cap on how many rollup_dirty
+// hour buckets one session's project/cwd change can re-mark (§2.4).
+const defaultRollupSessionRemarkMax = 720
+
 // Store is the postgres-backed store.Store implementation.
 type Store struct {
 	pool *pgxpool.Pool
+
+	// rollupSessionRemarkMax caps the dirty-bucket re-mark WriteBatch performs
+	// when a session's project/cwd changes (SPEC §2.4). It arrives through an
+	// Option rather than internal/config directly: internal/store must not
+	// import internal/config (depguard, SPEC §3.1), so app.New reads
+	// cfg.RollupSessionRemarkMax and passes it in via WithRollupSessionRemarkMax.
+	rollupSessionRemarkMax int
+}
+
+// Option configures a Store at construction time. The functional-options
+// shape (rather than adding New parameters) is what lets New keep its
+// existing single-argument call sites (internal/app, internal/store/testing,
+// pool_test.go) compiling unchanged while P2-06 threads
+// ARGUS_ROLLUP_SESSION_REMARK_MAX through without postgres importing
+// internal/config.
+type Option func(*Store)
+
+// WithRollupSessionRemarkMax overrides the default cap (720) on how many
+// rollup_dirty buckets a single session's project/cwd change may re-mark
+// (SPEC §2.4). n <= 0 is ignored (keeps the default) rather than disabling
+// the cap, since an unbounded re-mark is exactly what SPEC §2.4 warns
+// against.
+func WithRollupSessionRemarkMax(n int) Option {
+	return func(s *Store) {
+		if n > 0 {
+			s.rollupSessionRemarkMax = n
+		}
+	}
 }
 
 // NewPool builds a pgxpool.Pool from a database URL, applying the pool
@@ -58,8 +93,12 @@ func NewPool(ctx context.Context, databaseURL string, maxConns int) (*pgxpool.Po
 
 // New wraps an already-constructed pool in a Store. Callers that only need
 // NewPool + Migrate (e.g. the `migrate` subcommand) can skip this.
-func New(pool *pgxpool.Pool) *Store {
-	return &Store{pool: pool}
+func New(pool *pgxpool.Pool, opts ...Option) *Store {
+	s := &Store{pool: pool, rollupSessionRemarkMax: defaultRollupSessionRemarkMax}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 // Health pings the pool. Used by GET /readyz (SPEC §3.8).
@@ -75,12 +114,7 @@ func (s *Store) Close() {
 	s.pool.Close()
 }
 
-// --- Writer -----------------------------------------------------------
-
-// WriteBatch implements store.Writer; not yet implemented (P1-04 stub).
-func (s *Store) WriteBatch(_ context.Context, _ []model.Event) (store.BatchResult, error) {
-	return store.BatchResult{}, store.ErrNotImplemented
-}
+// --- Writer: WriteBatch and WriteMetrics live in write.go (P2-06). --------
 
 // --- Reader -------------------------------------------------------------
 
@@ -172,9 +206,20 @@ func (s *Store) RunRollups(_ context.Context, _ int) (store.RollupStats, error) 
 	return store.RollupStats{}, store.ErrNotImplemented
 }
 
-// SweepAbandoned implements store.Maintenance; not yet implemented (P1-04 stub).
-func (s *Store) SweepAbandoned(_ context.Context, _ time.Duration) (int64, error) {
-	return 0, store.ErrNotImplemented
+// SweepAbandoned implements store.Maintenance (SPEC §1.7, §1.9, §2.4): moves
+// every session whose status is active|unknown, has no ended_at, and has
+// been idle longer than idle to abandoned. Implemented in P2-06 (the ticket
+// that makes status a real stored column) rather than left for a later
+// ticket — SPEC assigns it no separate owner and P2-06's AC (e) needs it
+// working. A later session.end still moves the row back to ended (handled
+// by the ordinary WriteBatch session upsert, not here).
+func (s *Store) SweepAbandoned(ctx context.Context, idle time.Duration) (int64, error) {
+	cutoff := time.Now().Add(-idle)
+	n, err := gen.New(s.pool).SweepAbandoned(ctx, pgtype.Timestamptz{Time: cutoff, Valid: true})
+	if err != nil {
+		return 0, fmt.Errorf("postgres: sweep abandoned: %w", err)
+	}
+	return n, nil
 }
 
 // ApplyRetention implements store.Maintenance; not yet implemented (P1-04 stub).

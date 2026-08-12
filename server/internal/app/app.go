@@ -46,7 +46,10 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger) (*App, er
 		return nil, fmt.Errorf("app: connecting to database: %w", err)
 	}
 
-	st := postgres.New(pool)
+	// WithRollupSessionRemarkMax threads ARGUS_ROLLUP_SESSION_REMARK_MAX
+	// (SPEC §2.4, §3.7) into the store without postgres importing
+	// internal/config (depguard, SPEC §3.1) — see pool.go's Option doc.
+	st := postgres.New(pool, postgres.WithRollupSessionRemarkMax(cfg.RollupSessionRemarkMax))
 
 	if cfg.AutoMigrate {
 		if err := st.Migrate(ctx); err != nil {

@@ -11,6 +11,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -145,4 +147,82 @@ func IsTooOld(err error) bool {
 		return false
 	}
 	return strings.HasPrefix(pgErr.Message, tooOldMessagePrefix)
+}
+
+// monthlyPartitionName matches the `<parent>_YYYY_MM` naming
+// ensureMonthlyPartition uses, so partitionCoverage can recover a
+// partition's [start, end) range from its name alone instead of parsing
+// pg_get_expr's textual partition-bound representation.
+var monthlyPartitionName = regexp.MustCompile(`^(.+)_(\d{4})_(\d{2})$`)
+
+// monthRange is one events/metric_samples monthly partition's covered
+// [Start, End) window, UTC.
+type monthRange struct {
+	Start, End time.Time
+}
+
+// partitionCoverage reads, inside tx, the set of monthly partitions
+// currently attached to parent ("events" or "metric_samples") and returns a
+// predicate reporting whether a given ts falls inside one of them.
+//
+// WriteBatch/WriteMetrics use this as a pre-flight, in-transaction
+// too_old check performed *before* building the sessions/turns/rollup_dirty
+// projection statements (SPEC §1.7 rule 3), rather than relying solely on
+// the reactive "no partition of relation" error IsTooOld classifies. This is
+// a deliberate P2-06 design choice, not a spec deviation in the ON CONFLICT
+// or ledger sense: SPEC §1.6's fixed lock order updates sessions/turns
+// *before* events, so by the time an events insert could raise IsTooOld the
+// projection statements touching those rows would already be queued. Precomputing
+// too_old membership up front keeps the projection aggregates in Go
+// consistent with exactly the rows that will actually reach `events`,
+// without reordering the invariant's table sequence. IsTooOld itself is
+// still exercised as defence in depth: if a partition is dropped by the
+// retention job between this check and the insert (an unavoidable, narrow
+// TOCTOU window), the insert still errors and that error still propagates
+// as a normal write failure — an accepted, documented trade-off for a race
+// this rare.
+func partitionCoverage(ctx context.Context, tx pgx.Tx, parent string) (func(ts time.Time) bool, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT c.relname
+		FROM pg_inherits i
+		JOIN pg_class c ON c.oid = i.inhrelid
+		JOIN pg_class p ON p.oid = i.inhparent
+		JOIN pg_namespace n ON n.oid = p.relnamespace
+		WHERE p.relname = $1 AND n.nspname = current_schema()`, parent)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: partition coverage: listing %s partitions: %w", parent, err)
+	}
+	defer rows.Close()
+
+	var ranges []monthRange
+	for rows.Next() {
+		var relname string
+		if err := rows.Scan(&relname); err != nil {
+			return nil, fmt.Errorf("postgres: partition coverage: scanning %s partitions: %w", parent, err)
+		}
+		m := monthlyPartitionName.FindStringSubmatch(relname)
+		if m == nil || m[1] != parent {
+			continue
+		}
+		year, yerr := strconv.Atoi(m[2])
+		month, merr := strconv.Atoi(m[3])
+		if yerr != nil || merr != nil {
+			continue
+		}
+		start := time.Date(year, time.Month(month), 1, 0, 0, 0, 0, time.UTC)
+		ranges = append(ranges, monthRange{Start: start, End: start.AddDate(0, 1, 0)})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("postgres: partition coverage: %s: %w", parent, err)
+	}
+
+	return func(ts time.Time) bool {
+		t := ts.UTC()
+		for _, r := range ranges {
+			if !t.Before(r.Start) && t.Before(r.End) {
+				return true
+			}
+		}
+		return false
+	}, nil
 }
