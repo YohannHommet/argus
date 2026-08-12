@@ -25,7 +25,7 @@ func NewLogger(w io.Writer, level, format string) (*slog.Logger, error) {
 	case "json":
 		handler = slog.NewJSONHandler(w, &slog.HandlerOptions{Level: lvl})
 	case "text":
-		handler = tint.NewHandler(w, &tint.Options{Level: lvl})
+		handler = tint.NewTextHandler(w, &tint.Options{Level: lvl})
 	default:
 		return nil, fmt.Errorf("telemetry: unknown log format %q (want json or text)", format)
 	}

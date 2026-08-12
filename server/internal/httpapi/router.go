@@ -74,7 +74,7 @@ func New(d Deps) http.Handler {
 	r := chi.NewRouter()
 	r.Use(chimw.RequestID)
 	r.Use(chimw.Recoverer)
-	r.Use(chimw.RealIP)
+	r.Use(chimw.RealIP) //nolint:staticcheck // deprecated (IP spoofing risk) with no chi-provided trusted-proxy replacement yet; acceptable for the Phase 1 single-host walking skeleton, revisit before exposing Argus behind an untrusted load balancer
 	r.Use(chimw.Timeout(requestTimeout))
 	if d.Logger != nil {
 		r.Use(AccessLog(d.Logger, accessLogSampleRate))

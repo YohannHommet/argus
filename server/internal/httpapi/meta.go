@@ -19,7 +19,7 @@ type metaResponse struct {
 }
 
 func metaHandler(cfg *config.Config) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, _ *http.Request) {
 		resp := metaResponse{
 			Version: telemetry.Version,
 			Commit:  telemetry.Commit,

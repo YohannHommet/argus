@@ -28,7 +28,7 @@ func AccessLog(logger *slog.Logger, sampleRate int) func(http.Handler) http.Hand
 			if status == 0 {
 				status = http.StatusOK
 			}
-			if status >= http.StatusBadRequest || sampleRate <= 1 || rand.IntN(sampleRate) == 0 {
+			if status >= http.StatusBadRequest || sampleRate <= 1 || rand.IntN(sampleRate) == 0 { //nolint:gosec // sampling access-log volume, not security-sensitive
 				logger.LogAttrs(r.Context(), slog.LevelInfo, "http_request",
 					slog.String("request_id", chimw.GetReqID(r.Context())),
 					slog.String("method", r.Method),

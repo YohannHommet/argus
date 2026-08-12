@@ -53,14 +53,14 @@ func NewPool(t *testing.T) *pgxpool.Pool {
 	}
 	defer admin.Close()
 
-	if _, err := admin.Exec(ctx, "CREATE SCHEMA "+schema); err != nil {
-		t.Fatalf("store/testing: creating schema %s: %v", schema, err)
+	if _, execErr := admin.Exec(ctx, "CREATE SCHEMA "+schema); execErr != nil {
+		t.Fatalf("store/testing: creating schema %s: %v", schema, execErr)
 	}
 	t.Cleanup(func() {
 		dropCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		dropper, err := pgxpool.New(dropCtx, base)
-		if err != nil {
+		dropper, dropErr := pgxpool.New(dropCtx, base)
+		if dropErr != nil {
 			return
 		}
 		defer dropper.Close()

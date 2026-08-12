@@ -35,8 +35,8 @@ func (s *Store) Migrate(ctx context.Context) error {
 	}
 	defer conn.Release()
 
-	if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock($1)", migrationLockKey); err != nil {
-		return fmt.Errorf("postgres: migrate: acquiring advisory lock: %w", err)
+	if _, lockErr := conn.Exec(ctx, "SELECT pg_advisory_lock($1)", migrationLockKey); lockErr != nil {
+		return fmt.Errorf("postgres: migrate: acquiring advisory lock: %w", lockErr)
 	}
 	defer func() {
 		// Unlock on the same backend connection that took the lock

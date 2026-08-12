@@ -1,0 +1,12 @@
+# Per-package coverage floors read by scripts/coverage-floor.sh.
+#
+# Format: <package import path suffix> <minimum coverage percentage>
+# One entry per line; blank lines and lines starting with '#' are ignored.
+#
+# Floors are set to CURRENT MEASURED REALITY (P1-06), not to the eventual
+# SPEC §8.3 targets (normalize 90%, store/postgres 70%, httpapi 75%).
+# `internal/normalize` does not exist yet, so it has no entry here — add one
+# only once the package exists. Later tickets raise these numbers as they add
+# tests; they must never go down without a matching drop in real coverage.
+github.com/YohannHommet/argus/server/internal/httpapi 64.0
+github.com/YohannHommet/argus/server/internal/store/postgres 50.0

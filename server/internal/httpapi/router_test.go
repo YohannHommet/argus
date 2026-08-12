@@ -23,7 +23,7 @@ type fakeStore struct {
 	err error
 }
 
-func (f fakeStore) Health(ctx context.Context) error { return f.err }
+func (f fakeStore) Health(_ context.Context) error { return f.err }
 
 // mounterFunc lets a test satisfy httpapi.Mounter with a plain function,
 // exercising the ingest.Mounter-shaped seam the PLAN's file-ownership note
@@ -45,7 +45,7 @@ func TestHealthz_OKWithoutDB(t *testing.T) {
 	r := httpapi.New(httpapi.Deps{Assets: testAssets(t)})
 
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	r.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/healthz", nil))
 
 	require.Equal(t, http.StatusOK, rec.Code)
 }
@@ -57,7 +57,7 @@ func TestReadyz_DownDB(t *testing.T) {
 	})
 
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	r.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/readyz", nil))
 
 	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
 	require.Equal(t, "application/problem+json", rec.Header().Get("Content-Type"))
@@ -71,7 +71,7 @@ func TestReadyz_UpDB(t *testing.T) {
 	})
 
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	r.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/readyz", nil))
 
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.JSONEq(t, `{"status":"ok","migrations":"current"}`, rec.Body.String())
@@ -81,7 +81,7 @@ func TestUnknownAPIRoute_404Problem(t *testing.T) {
 	r := httpapi.New(httpapi.Deps{Assets: testAssets(t)})
 
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/nope", nil))
+	r.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/nope", nil))
 
 	require.Equal(t, http.StatusNotFound, rec.Code)
 	require.Equal(t, "application/problem+json", rec.Header().Get("Content-Type"))
@@ -92,7 +92,7 @@ func TestSPAFallback_ServesIndexHTML(t *testing.T) {
 	r := httpapi.New(httpapi.Deps{Assets: testAssets(t)})
 
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/frontend/route", nil))
+	r.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/frontend/route", nil))
 
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Contains(t, rec.Header().Get("Content-Type"), "text/html")
@@ -103,7 +103,7 @@ func TestHashedAsset_ImmutableCacheHeader(t *testing.T) {
 	r := httpapi.New(httpapi.Deps{Assets: testAssets(t)})
 
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/assets/x.js", nil))
+	r.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/assets/x.js", nil))
 
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Contains(t, rec.Header().Get("Cache-Control"), "immutable")
@@ -114,11 +114,11 @@ func TestAPIToken_401WithoutBearer200With(t *testing.T) {
 	r := httpapi.New(httpapi.Deps{Config: cfg, Assets: testAssets(t)})
 
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/meta", nil))
+	r.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/meta", nil))
 	require.Equal(t, http.StatusUnauthorized, rec.Code)
 	require.Equal(t, "application/problem+json", rec.Header().Get("Content-Type"))
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/meta", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/meta", nil)
 	req.Header.Set("Authorization", "Bearer s3cret")
 	rec = httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
@@ -130,7 +130,7 @@ func TestMeta_NoTokenConfigured_AlwaysOK(t *testing.T) {
 	r := httpapi.New(httpapi.Deps{Config: cfg, Assets: testAssets(t)})
 
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/meta", nil))
+	r.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/meta", nil))
 
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Contains(t, rec.Body.String(), `"retention_days":90`)
@@ -147,7 +147,7 @@ func TestShutdown_InFlightRequestCompletes(t *testing.T) {
 	release := make(chan struct{})
 
 	slow := mounterFunc(func(r chi.Router) {
-		r.Get("/slow", func(w http.ResponseWriter, r *http.Request) {
+		r.Get("/slow", func(w http.ResponseWriter, _ *http.Request) {
 			close(started)
 			<-release
 			w.WriteHeader(http.StatusOK)
@@ -162,7 +162,12 @@ func TestShutdown_InFlightRequestCompletes(t *testing.T) {
 	reqDone := make(chan struct{})
 	go func() {
 		defer close(reqDone)
-		resp, err := http.Get(srv.URL + "/slow")
+		req, buildErr := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL+"/slow", nil)
+		if buildErr != nil {
+			reqErr = buildErr
+			return
+		}
+		resp, err := http.DefaultClient.Do(req)
 		reqErr = err
 		if resp != nil {
 			_ = resp.Body.Close()

@@ -146,7 +146,7 @@ func TestLoadEnvOverridesYAML(t *testing.T) {
 		"http_addr: \":9090\"",
 		"db_max_conns: 25",
 		"database_url: \"postgres://from-yaml/argus\"",
-	}, "\n")), 0o644))
+	}, "\n")), 0o600))
 
 	cfg, _, err := load(path, environOf(map[string]string{
 		"ARGUS_DB_MAX_CONNS": "42",
@@ -169,7 +169,7 @@ func TestLoadUnknownEnvWarning(t *testing.T) {
 }
 
 func TestPrintRedactsSecrets(t *testing.T) {
-	cfg, _, err := load("", environOf(map[string]string{
+	cfg, _, err := load("", environOf(map[string]string{ //nolint:gosec // test fixture credentials, not real secrets
 		"ARGUS_DATABASE_URL": "postgres://user:pass@localhost/argus",
 		"ARGUS_INGEST_TOKEN": "ingest-secret",
 		"ARGUS_API_TOKEN":    "api-secret",

@@ -42,7 +42,7 @@ func (s *ReadyState) Ready() bool {
 
 // healthzHandler is liveness only (SPEC §3.8): no DB, no readiness check, so
 // it stays cheap and correct even while the store is unavailable.
-func healthzHandler(w http.ResponseWriter, r *http.Request) {
+func healthzHandler(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 

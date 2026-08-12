@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/YohannHommet/argus/server/internal/httpapi"
 )
@@ -32,8 +33,9 @@ func (a *App) Serve(ctx context.Context) error {
 	})
 
 	a.server = &http.Server{
-		Addr:    a.cfg.HTTPAddr,
-		Handler: handler,
+		Addr:              a.cfg.HTTPAddr,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
 	}
 
 	serveErr := make(chan error, 1)
@@ -53,7 +55,7 @@ func (a *App) Serve(ctx context.Context) error {
 	case <-ctx.Done():
 	}
 
-	return a.shutdown()
+	return a.shutdown() //nolint:contextcheck // ctx is already Done() here (that's why we're shutting down); shutdown deliberately derives its own bounded context from Background rather than a cancelled one
 }
 
 // shutdown runs steps (1)-(4) of the SPEC §3.8 sequence in order. Step (4)
@@ -84,6 +86,6 @@ func (a *App) shutdown() error {
 // queue and waiting for it to fully drain. No queue exists until P2's
 // internal/ingest pipeline lands; this seam exists now so that pipeline
 // only has to fill in a body, not change Serve's ordering.
-func (a *App) drainIngest(ctx context.Context) error {
+func (a *App) drainIngest(_ context.Context) error {
 	return nil
 }

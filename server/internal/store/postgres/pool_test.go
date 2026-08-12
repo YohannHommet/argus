@@ -28,13 +28,13 @@ func TestMigrate_CreatesCoreTables(t *testing.T) {
 	pool := storetesting.NewPool(t)
 	ctx := context.Background()
 
-	tables := queryStrings(t, ctx, pool, `
+	tables := queryStrings(ctx, t, pool, `
 		SELECT table_name FROM information_schema.tables
 		WHERE table_schema = current_schema() AND table_name IN ('sessions','turns','ingest_dedup')
 		ORDER BY table_name`)
 	require.Equal(t, []string{"ingest_dedup", "sessions", "turns"}, tables, "sessions/turns/ingest_dedup must all exist")
 
-	sessionCols := queryStrings(t, ctx, pool, `
+	sessionCols := queryStrings(ctx, t, pool, `
 		SELECT column_name FROM information_schema.columns
 		WHERE table_schema = current_schema() AND table_name = 'sessions'
 		ORDER BY column_name`)
@@ -51,7 +51,7 @@ func TestMigrate_CreatesCoreTables(t *testing.T) {
 		require.Contains(t, sessionCols, want, "sessions.%s must exist", want)
 	}
 
-	turnCols := queryStrings(t, ctx, pool, `
+	turnCols := queryStrings(ctx, t, pool, `
 		SELECT column_name FROM information_schema.columns
 		WHERE table_schema = current_schema() AND table_name = 'turns'
 		ORDER BY column_name`)
@@ -66,7 +66,7 @@ func TestMigrate_CreatesCoreTables(t *testing.T) {
 	}
 	require.NotContains(t, turnCols, "cost_source", "turns must NOT have a cost_source column")
 
-	dedupCols := queryStrings(t, ctx, pool, `
+	dedupCols := queryStrings(ctx, t, pool, `
 		SELECT column_name FROM information_schema.columns
 		WHERE table_schema = current_schema() AND table_name = 'ingest_dedup'
 		ORDER BY column_name`)
@@ -77,7 +77,7 @@ func TestMigrate_CreatesSessionsIndexes(t *testing.T) {
 	pool := storetesting.NewPool(t)
 	ctx := context.Background()
 
-	got := queryStrings(t, ctx, pool, `
+	got := queryStrings(ctx, t, pool, `
 		SELECT indexname FROM pg_indexes
 		WHERE schemaname = current_schema() AND tablename = 'sessions'`)
 
@@ -85,12 +85,12 @@ func TestMigrate_CreatesSessionsIndexes(t *testing.T) {
 		require.Contains(t, got, want, "index %s must exist on sessions", want)
 	}
 
-	turnIdx := queryStrings(t, ctx, pool, `
+	turnIdx := queryStrings(ctx, t, pool, `
 		SELECT indexname FROM pg_indexes
 		WHERE schemaname = current_schema() AND tablename = 'turns'`)
 	require.Contains(t, turnIdx, "turns_session_started_idx")
 
-	dedupIdx := queryStrings(t, ctx, pool, `
+	dedupIdx := queryStrings(ctx, t, pool, `
 		SELECT indexname FROM pg_indexes
 		WHERE schemaname = current_schema() AND tablename = 'ingest_dedup'`)
 	require.Contains(t, dedupIdx, "ingest_dedup_age_idx")
@@ -209,7 +209,7 @@ func TestHarness_ParallelTestsGetNonCollidingSchemas(t *testing.T) {
 	require.NotEqual(t, schemas[0], schemas[1], "two harness pools must land in different schemas")
 }
 
-func queryStrings(t *testing.T, ctx context.Context, pool *pgxpool.Pool, sql string) []string {
+func queryStrings(ctx context.Context, t *testing.T, pool *pgxpool.Pool, sql string) []string {
 	t.Helper()
 	rows, err := pool.Query(ctx, sql)
 	require.NoError(t, err)

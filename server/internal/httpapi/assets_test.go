@@ -11,15 +11,15 @@ import (
 	"github.com/YohannHommet/argus/server/internal/httpapi"
 )
 
-// TestEmbeddedAssets_ServesCommittedPlaceholder exercises the real
-// go:embed build (no Deps.Assets override), proving the placeholder
-// committed at assets/dist/index.html compiles into the binary and is
-// served for a clean checkout that has never run `pnpm build`.
+// TestEmbeddedAssets_ServesCommittedPlaceholder exercises the real embed
+// build (no Deps.Assets override), proving the placeholder committed at
+// assets/dist/index.html compiles into the binary and is served for a clean
+// checkout that has never run `pnpm build`.
 func TestEmbeddedAssets_ServesCommittedPlaceholder(t *testing.T) {
 	r := httpapi.New(httpapi.Deps{})
 
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	r.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil))
 
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Contains(t, rec.Header().Get("Content-Type"), "text/html")
@@ -33,7 +33,7 @@ func TestEmbeddedAssets_UIDisabled(t *testing.T) {
 	r := httpapi.New(httpapi.Deps{Config: &config.Config{UIEnabled: false}})
 
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	r.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil))
 
 	require.Equal(t, http.StatusNotFound, rec.Code)
 	require.Equal(t, "application/problem+json", rec.Header().Get("Content-Type"))

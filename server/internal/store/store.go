@@ -64,7 +64,7 @@ type Reader interface {
 type Maintenance interface {
 	Migrate(ctx context.Context) error
 	EnsurePartitions(ctx context.Context, from, to time.Time) error
-	RunRollups(ctx context.Context, max int) (RollupStats, error)
+	RunRollups(ctx context.Context, maxBuckets int) (RollupStats, error)
 	SweepAbandoned(ctx context.Context, idle time.Duration) (int64, error)
 	ApplyRetention(ctx context.Context, cutoff time.Time, dryRun bool) ([]string, error)
 	PruneDedup(ctx context.Context, cutoff time.Time) (int64, error)

@@ -8,6 +8,7 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -37,6 +38,9 @@ func NewPool(ctx context.Context, databaseURL string, maxConns int) (*pgxpool.Po
 	}
 
 	if maxConns > 0 {
+		if maxConns > math.MaxInt32 {
+			return nil, fmt.Errorf("postgres: max conns %d overflows int32", maxConns)
+		}
 		cfg.MaxConns = int32(maxConns)
 	}
 	cfg.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeCacheStatement
@@ -73,99 +77,122 @@ func (s *Store) Close() {
 
 // --- Writer -----------------------------------------------------------
 
-func (s *Store) WriteBatch(ctx context.Context, b []model.Event) (store.BatchResult, error) {
+// WriteBatch implements store.Writer; not yet implemented (P1-04 stub).
+func (s *Store) WriteBatch(_ context.Context, _ []model.Event) (store.BatchResult, error) {
 	return store.BatchResult{}, store.ErrNotImplemented
 }
 
 // --- Reader -------------------------------------------------------------
 
-func (s *Store) ListSessions(ctx context.Context, f store.SessionFilter, p store.Page) ([]model.SessionSummary, store.Cursor, error) {
+// ListSessions implements store.Reader; not yet implemented (P1-04 stub).
+func (s *Store) ListSessions(_ context.Context, _ store.SessionFilter, _ store.Page) ([]model.SessionSummary, store.Cursor, error) {
 	return nil, "", store.ErrNotImplemented
 }
 
-func (s *Store) GetSession(ctx context.Context, id string) (*model.SessionDetail, error) {
+// GetSession implements store.Reader; not yet implemented (P1-04 stub).
+func (s *Store) GetSession(_ context.Context, _ string) (*model.SessionDetail, error) {
 	return nil, store.ErrNotImplemented
 }
 
-func (s *Store) ListTurns(ctx context.Context, sessionID string) ([]model.Turn, error) {
+// ListTurns implements store.Reader; not yet implemented (P1-04 stub).
+func (s *Store) ListTurns(_ context.Context, _ string) ([]model.Turn, error) {
 	return nil, store.ErrNotImplemented
 }
 
-func (s *Store) ListEvents(ctx context.Context, f store.EventFilter, p store.Page) ([]model.Event, store.Cursor, error) {
+// ListEvents implements store.Reader; not yet implemented (P1-04 stub).
+func (s *Store) ListEvents(_ context.Context, _ store.EventFilter, _ store.Page) ([]model.Event, store.Cursor, error) {
 	return nil, "", store.ErrNotImplemented
 }
 
-func (s *Store) GetEvent(ctx context.Context, ref model.EventRef) (*model.Event, error) {
+// GetEvent implements store.Reader; not yet implemented (P1-04 stub).
+func (s *Store) GetEvent(_ context.Context, _ model.EventRef) (*model.Event, error) {
 	return nil, store.ErrNotImplemented
 }
 
-func (s *Store) ListToolCalls(ctx context.Context, f store.ToolCallFilter, p store.Page) ([]model.ToolCall, store.Cursor, error) {
+// ListToolCalls implements store.Reader; not yet implemented (P1-04 stub).
+func (s *Store) ListToolCalls(_ context.Context, _ store.ToolCallFilter, _ store.Page) ([]model.ToolCall, store.Cursor, error) {
 	return nil, "", store.ErrNotImplemented
 }
 
-func (s *Store) SubagentTree(ctx context.Context, sessionID string) (model.SubagentTree, error) {
+// SubagentTree implements store.Reader; not yet implemented (P1-04 stub).
+func (s *Store) SubagentTree(_ context.Context, _ string) (model.SubagentTree, error) {
 	return model.SubagentTree{}, store.ErrNotImplemented
 }
 
-func (s *Store) AnalyticsSummary(ctx context.Context, f store.AnalyticsFilter) (model.Summary, error) {
+// AnalyticsSummary implements store.Reader; not yet implemented (P1-04 stub).
+func (s *Store) AnalyticsSummary(_ context.Context, _ store.AnalyticsFilter) (model.Summary, error) {
 	return model.Summary{}, store.ErrNotImplemented
 }
 
-func (s *Store) AnalyticsSeries(ctx context.Context, f store.AnalyticsFilter, g store.Grouping) (model.Series, error) {
+// AnalyticsSeries implements store.Reader; not yet implemented (P1-04 stub).
+func (s *Store) AnalyticsSeries(_ context.Context, _ store.AnalyticsFilter, _ store.Grouping) (model.Series, error) {
 	return model.Series{}, store.ErrNotImplemented
 }
 
-func (s *Store) AnalyticsBreakdown(ctx context.Context, f store.AnalyticsFilter, d store.Dimension) (model.Breakdown, error) {
+// AnalyticsBreakdown implements store.Reader; not yet implemented (P1-04 stub).
+func (s *Store) AnalyticsBreakdown(_ context.Context, _ store.AnalyticsFilter, _ store.Dimension) (model.Breakdown, error) {
 	return model.Breakdown{}, store.ErrNotImplemented
 }
 
-func (s *Store) AnalyticsDecisions(ctx context.Context, f store.AnalyticsFilter) (model.DecisionMatrix, error) {
+// AnalyticsDecisions implements store.Reader; not yet implemented (P1-04 stub).
+func (s *Store) AnalyticsDecisions(_ context.Context, _ store.AnalyticsFilter) (model.DecisionMatrix, error) {
 	return model.DecisionMatrix{}, store.ErrNotImplemented
 }
 
-func (s *Store) EventsSince(ctx context.Context, after model.EventRef, windowStart time.Time, limit int) ([]model.Event, error) {
+// EventsSince implements store.Reader; not yet implemented (P1-04 stub).
+func (s *Store) EventsSince(_ context.Context, _ model.EventRef, _ time.Time, _ int) ([]model.Event, error) {
 	return nil, store.ErrNotImplemented
 }
 
-func (s *Store) Facets(ctx context.Context) (model.Facets, error) {
+// Facets implements store.Reader; not yet implemented (P1-04 stub).
+func (s *Store) Facets(_ context.Context) (model.Facets, error) {
 	return model.Facets{}, store.ErrNotImplemented
 }
 
-func (s *Store) DataQuality(ctx context.Context) (model.DataQuality, error) {
+// DataQuality implements store.Reader; not yet implemented (P1-04 stub).
+func (s *Store) DataQuality(_ context.Context) (model.DataQuality, error) {
 	return model.DataQuality{}, store.ErrNotImplemented
 }
 
-func (s *Store) UnknownKinds(ctx context.Context, since time.Time, limit int) ([]model.UnknownKindGroup, error) {
+// UnknownKinds implements store.Reader; not yet implemented (P1-04 stub).
+func (s *Store) UnknownKinds(_ context.Context, _ time.Time, _ int) ([]model.UnknownKindGroup, error) {
 	return nil, store.ErrNotImplemented
 }
 
-func (s *Store) HookLatency(ctx context.Context, f store.AnalyticsFilter) (model.HookLatency, error) {
+// HookLatency implements store.Reader; not yet implemented (P1-04 stub).
+func (s *Store) HookLatency(_ context.Context, _ store.AnalyticsFilter) (model.HookLatency, error) {
 	return model.HookLatency{}, store.ErrNotImplemented
 }
 
 // --- Maintenance (Migrate excepted; see migrate.go) ----------------------
 
-func (s *Store) EnsurePartitions(ctx context.Context, from, to time.Time) error {
+// EnsurePartitions implements store.Maintenance; not yet implemented (P1-04 stub).
+func (s *Store) EnsurePartitions(_ context.Context, _, _ time.Time) error {
 	return store.ErrNotImplemented
 }
 
-func (s *Store) RunRollups(ctx context.Context, max int) (store.RollupStats, error) {
+// RunRollups implements store.Maintenance; not yet implemented (P1-04 stub).
+func (s *Store) RunRollups(_ context.Context, _ int) (store.RollupStats, error) {
 	return store.RollupStats{}, store.ErrNotImplemented
 }
 
-func (s *Store) SweepAbandoned(ctx context.Context, idle time.Duration) (int64, error) {
+// SweepAbandoned implements store.Maintenance; not yet implemented (P1-04 stub).
+func (s *Store) SweepAbandoned(_ context.Context, _ time.Duration) (int64, error) {
 	return 0, store.ErrNotImplemented
 }
 
-func (s *Store) ApplyRetention(ctx context.Context, cutoff time.Time, dryRun bool) ([]string, error) {
+// ApplyRetention implements store.Maintenance; not yet implemented (P1-04 stub).
+func (s *Store) ApplyRetention(_ context.Context, _ time.Time, _ bool) ([]string, error) {
 	return nil, store.ErrNotImplemented
 }
 
-func (s *Store) PruneDedup(ctx context.Context, cutoff time.Time) (int64, error) {
+// PruneDedup implements store.Maintenance; not yet implemented (P1-04 stub).
+func (s *Store) PruneDedup(_ context.Context, _ time.Time) (int64, error) {
 	return 0, store.ErrNotImplemented
 }
 
-func (s *Store) RebuildProjections(ctx context.Context, fromTS time.Time) error {
+// RebuildProjections implements store.Maintenance; not yet implemented (P1-04 stub).
+func (s *Store) RebuildProjections(_ context.Context, _ time.Time) error {
 	return store.ErrNotImplemented
 }
 
