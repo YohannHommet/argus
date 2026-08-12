@@ -164,12 +164,8 @@ func (s *Store) HookLatency(_ context.Context, _ store.AnalyticsFilter) (model.H
 	return model.HookLatency{}, store.ErrNotImplemented
 }
 
-// --- Maintenance (Migrate excepted; see migrate.go) ----------------------
-
-// EnsurePartitions implements store.Maintenance; not yet implemented (P1-04 stub).
-func (s *Store) EnsurePartitions(_ context.Context, _, _ time.Time) error {
-	return store.ErrNotImplemented
-}
+// --- Maintenance (Migrate, EnsurePartitions, MigrationsCurrent excepted;
+// see migrate.go and partitions.go) ---------------------------------------
 
 // RunRollups implements store.Maintenance; not yet implemented (P1-04 stub).
 func (s *Store) RunRollups(_ context.Context, _ int) (store.RollupStats, error) {

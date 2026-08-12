@@ -47,6 +47,13 @@ func (a *App) Serve(ctx context.Context) error {
 		serveErr <- nil
 	}()
 
+	// The partition-manager job (SPEC §2.4) watches the same ctx as the
+	// server: it stops ticking as soon as ctx is cancelled and needs no
+	// entry in the shutdown() sequence below — a tick in flight when the
+	// pool closes just logs one error, never corrupts state, since
+	// EnsurePartitions is idempotent.
+	go a.partitions.Run(ctx)
+
 	select {
 	case err := <-serveErr:
 		// The server exited on its own (e.g. a bind failure) before ctx was

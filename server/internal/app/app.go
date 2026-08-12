@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/YohannHommet/argus/server/internal/config"
 	"github.com/YohannHommet/argus/server/internal/httpapi"
@@ -26,13 +27,19 @@ type App struct {
 	store  *postgres.Store
 	ready  *httpapi.ReadyState
 
+	partitions *PartitionJob // started by Serve
+
 	server *http.Server // set by Serve
 }
 
 // New connects the database pool, wraps it in the postgres Store, and runs
 // migrations when ARGUS_AUTO_MIGRATE is true (SPEC §3.7, §3.8) — all before
 // the HTTP listener exists, so a `serve` that fails to migrate never starts
-// accepting traffic. It does not start serving; call Serve for that.
+// accepting traffic. It then ensures the current-through-two-months-ahead
+// partitions exist (SPEC §2.4's "startup fails loudly if the current
+// month's partition cannot be created") for the same reason: an ingest
+// request landing before the first hourly PartitionJob tick must never hit
+// a missing partition. It does not start serving; call Serve for that.
 func New(ctx context.Context, cfg *config.Config, logger *slog.Logger) (*App, error) {
 	pool, err := postgres.NewPool(ctx, cfg.DatabaseURL, cfg.DBMaxConns)
 	if err != nil {
@@ -48,10 +55,17 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger) (*App, er
 		}
 	}
 
+	now := time.Now()
+	if err := st.EnsurePartitions(ctx, now, now.Add(partitionJobHorizon)); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("app: ensuring startup partitions: %w", err)
+	}
+
 	return &App{
-		cfg:    cfg,
-		logger: logger,
-		store:  st,
-		ready:  httpapi.NewReadyState(),
+		cfg:        cfg,
+		logger:     logger,
+		store:      st,
+		ready:      httpapi.NewReadyState(),
+		partitions: NewPartitionJob(st, logger),
 	}, nil
 }

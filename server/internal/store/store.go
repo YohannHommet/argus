@@ -63,6 +63,13 @@ type Reader interface {
 // implements all of it, but only Migrate has a real body in P1-04.
 type Maintenance interface {
 	Migrate(ctx context.Context) error
+	// MigrationsCurrent reports whether every migration goose knows about
+	// (embedded in the running binary) has been applied to this database —
+	// true iff none are pending. It backs GET /readyz's "migrations":
+	// "current" condition (SPEC §3.8; Phase-1 deviation D-5 recorded that
+	// /readyz previously asserted this without checking). Wired into
+	// httpapi by P2-09, not here.
+	MigrationsCurrent(ctx context.Context) (bool, error)
 	EnsurePartitions(ctx context.Context, from, to time.Time) error
 	RunRollups(ctx context.Context, maxBuckets int) (RollupStats, error)
 	SweepAbandoned(ctx context.Context, idle time.Duration) (int64, error)

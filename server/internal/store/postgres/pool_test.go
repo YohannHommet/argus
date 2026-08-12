@@ -174,9 +174,11 @@ func TestMigrateStatus_ReportsAppliedVersions(t *testing.T) {
 
 	statuses, err := store.MigrateStatus(ctx)
 	require.NoError(t, err)
-	require.Len(t, statuses, 1, "001_core.sql is the only migration so far")
-	require.Equal(t, int64(1), statuses[0].Version)
-	require.True(t, statuses[0].Applied)
+	require.Len(t, statuses, 3, "001_core.sql, 002_events.sql, 003_projections.sql are the only migrations so far")
+	for i, want := range []int64{1, 2, 3} {
+		require.Equal(t, want, statuses[i].Version)
+		require.True(t, statuses[i].Applied)
+	}
 }
 
 // TestHarness_ParallelTestsGetNonCollidingSchemas is the SPEC §8.4

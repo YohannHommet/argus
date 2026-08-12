@@ -90,6 +90,25 @@ func (s *Store) MigrateStatus(ctx context.Context) ([]AppliedMigration, error) {
 	return out, nil
 }
 
+// MigrationsCurrent implements store.Maintenance.MigrationsCurrent: true iff
+// MigrateStatus reports every known migration as applied (i.e. nothing
+// pending). It reuses MigrateStatus rather than duplicating goose's Status
+// call, and — like MigrateStatus — does not take the advisory lock, since it
+// only reads goose's version table. Backs GET /readyz's live migrations
+// check (wired by P2-09), replacing the Phase-1 assertion (deviation D-5).
+func (s *Store) MigrationsCurrent(ctx context.Context) (bool, error) {
+	statuses, err := s.MigrateStatus(ctx)
+	if err != nil {
+		return false, fmt.Errorf("postgres: migrations current: %w", err)
+	}
+	for _, st := range statuses {
+		if !st.Applied {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
 // newGooseProvider wires goose to the embedded migrations over a
 // database/sql handle backed by the existing pgxpool (see the deviation
 // note on Migrate).
