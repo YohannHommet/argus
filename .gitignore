@@ -1,0 +1,31 @@
+# Go
+/bin/
+/server/bin/
+/server/argusd
+/server/argus-sim
+*.test
+*.out
+cover.out
+
+# Node
+node_modules/
+web/dist/
+web/coverage/
+.pnpm-store/
+pnpm-debug.log*
+npm-debug.log*
+
+# Build output
+dist/
+
+# Env
+.env
+.env.*
+!.env.example
+
+# OS / editor cruft
+.DS_Store
+*.swp
+*.swo
+.idea/
+.vscode/
