@@ -65,7 +65,12 @@ jobs:
           cache-dependency-path: server/go.sum
       - name: go test
         working-directory: server
-        run: go test -race -covermode=atomic -coverprofile=cover.out ./...
+        # -tags=e2e runs P2-13's end-to-end suite (internal/app/e2e_ingest_test.go)
+        # alongside every other package's tests in the same invocation, so it
+        # shares this job's coverage profile and Postgres service — the tag
+        # exists to keep it out of a plain `go test ./...`, not to give it a
+        # separate CI job.
+        run: go test -tags=e2e -race -covermode=atomic -coverprofile=cover.out ./...
       - name: coverage floor
         working-directory: server
         run: ../scripts/coverage-floor.sh cover.out ../scripts/coverage-floors.txt

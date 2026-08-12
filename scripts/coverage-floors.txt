@@ -4,17 +4,17 @@
 # One entry per line; blank lines and lines starting with '#' are ignored.
 #
 # Floors are set to CURRENT MEASURED REALITY (P1-06), not to the eventual
-# SPEC §8.3 targets (normalize 90%, store/postgres 70%, httpapi 75%).
-# `internal/normalize` does not exist yet, so it has no entry here — add one
-# only once the package exists. Later tickets raise these numbers as they add
-# tests; they must never go down without a matching drop in real coverage.
+# SPEC §8.3 targets (store/postgres 70%, httpapi 75%) — normalize's own SPEC
+# §8.3 target (90%) was reached and is now enforced below (P2-13).
+# Later tickets raise these numbers as they add tests; they must never go
+# down without a matching drop in real coverage.
 github.com/YohannHommet/argus/server/internal/httpapi 66.0
 github.com/YohannHommet/argus/server/internal/store/postgres 83.0
 github.com/YohannHommet/argus/server/internal/ingest 87.0
 # The entry above is a prefix match and therefore conflates the ingest
 # subpackages; these guard each one so a regression in a low-coverage package
-# cannot hide behind a high-coverage sibling. normalize gets its own floor
-# raised to 90 by P2-13.
+# cannot hide behind a high-coverage sibling.
 github.com/YohannHommet/argus/server/internal/ingest/otlp 91.0
 github.com/YohannHommet/argus/server/internal/ingest/hooks 84.0
+github.com/YohannHommet/argus/server/internal/ingest/normalize 90.0
 github.com/YohannHommet/argus/server/internal/sim 85.0

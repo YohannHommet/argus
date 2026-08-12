@@ -13,6 +13,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/YohannHommet/argus/server/internal/config"
 	"github.com/YohannHommet/argus/server/internal/httpapi"
 	"github.com/YohannHommet/argus/server/internal/ingest"
@@ -21,6 +23,26 @@ import (
 	"github.com/YohannHommet/argus/server/internal/ingest/otlp"
 	"github.com/YohannHommet/argus/server/internal/store/postgres"
 )
+
+// Option configures an optional aspect of New's construction. The zero
+// value (no options passed) is production behaviour in every case.
+type Option func(*options)
+
+type options struct {
+	registerer prometheus.Registerer
+}
+
+// WithRegisterer overrides the Prometheus registerer the ingest pipeline's
+// metrics register against (default: prometheus.DefaultRegisterer, via
+// ingest.NewMetrics's own nil-means-default convention). Production never
+// needs this; a test process that constructs more than one App (P2-13's
+// end-to-end test, which starts a second App with a deliberately tiny
+// ingest queue for its load-capacity check) does, since the default
+// registry is a package-level global and registering the same metric names
+// on it twice panics.
+func WithRegisterer(reg prometheus.Registerer) Option {
+	return func(o *options) { o.registerer = reg }
+}
 
 // App is a constructed, ready-to-serve Argus process: a live database pool
 // wrapped in the postgres Store, and the readiness flag Serve's shutdown
@@ -37,6 +59,13 @@ type App struct {
 	otlp       *otlp.Handler    // P2-10: POST /v1/{logs,metrics,traces}, wired into httpapi.Deps.OTLPMounter by Serve
 
 	server *http.Server // set by Serve
+
+	// listenAddr/addrReady let a caller that started Serve on an ephemeral
+	// port (cfg.HTTPAddr == "…:0", e.g. P2-13's end-to-end test) discover
+	// the OS-assigned real address instead of guessing a free port ahead of
+	// time and racing Serve's own bind — see Addr/Listening.
+	listenAddr string
+	addrReady  chan struct{}
 }
 
 // New connects the database pool, wraps it in the postgres Store, and runs
@@ -47,7 +76,12 @@ type App struct {
 // month's partition cannot be created") for the same reason: an ingest
 // request landing before the first hourly PartitionJob tick must never hit
 // a missing partition. It does not start serving; call Serve for that.
-func New(ctx context.Context, cfg *config.Config, logger *slog.Logger) (*App, error) {
+func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, opts ...Option) (*App, error) {
+	var o options
+	for _, opt := range opts {
+		opt(&o)
+	}
+
 	pool, err := postgres.NewPool(ctx, cfg.DatabaseURL, cfg.DBMaxConns)
 	if err != nil {
 		return nil, fmt.Errorf("app: connecting to database: %w", err)
@@ -71,6 +105,10 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger) (*App, er
 		return nil, fmt.Errorf("app: ensuring startup partitions: %w", err)
 	}
 
+	ingestOpts := []ingest.Option{ingest.WithLogger(logger)}
+	if o.registerer != nil {
+		ingestOpts = append(ingestOpts, ingest.WithRegisterer(o.registerer))
+	}
 	ing := ingest.New(st, ingest.PipelineConfig{
 		QueueCap:       cfg.IngestQueue,
 		Workers:        cfg.IngestWorkers,
@@ -78,7 +116,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger) (*App, er
 		FlushInterval:  cfg.IngestFlush,
 		RetryConflict:  cfg.IngestRetryConflict,
 		RetryTransient: cfg.IngestRetryTransient,
-	}, ingest.WithLogger(logger))
+	}, ingestOpts...)
 
 	// P2-11: the hooks webhook (SPEC §3.5). hookNormalizer is built here
 	// (not inside internal/ingest/hooks) because it needs
@@ -93,7 +131,11 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger) (*App, er
 		time.Duration(cfg.RetentionRawDays)*24*time.Hour,
 		cfg.IngestHookAllowMessageDisplay,
 	)
-	hookHandler := hooks.NewHandler(ing, hookNormalizer, cfg.IngestMaxBodyBytes, hooks.WithLogger(logger))
+	hookHandlerOpts := []hooks.Option{hooks.WithLogger(logger)}
+	if o.registerer != nil {
+		hookHandlerOpts = append(hookHandlerOpts, hooks.WithRegisterer(o.registerer))
+	}
+	hookHandler := hooks.NewHandler(ing, hookNormalizer, cfg.IngestMaxBodyBytes, hookHandlerOpts...)
 	hookMounter := hooks.NewMounter(hookHandler, httpapi.RequireIngestToken(cfg.IngestToken))
 
 	// P2-10: the OTLP/HTTP receiver (SPEC §3.4). otlpNormalizer is built
@@ -101,7 +143,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger) (*App, er
 	// above (internal/ingest/otlp must not import internal/config); ing
 	// satisfies otlp.Enqueuer structurally via EnqueueEvents/EnqueueMetrics.
 	otlpNormalizer := normalize.NewNormalizer(time.Now, time.Duration(cfg.RetentionRawDays)*24*time.Hour)
-	otlpHandler := otlp.New(ing, otlpNormalizer, cfg.IngestMaxBodyBytes, httpapi.RequireIngestToken(cfg.IngestToken), logger, nil)
+	otlpHandler := otlp.New(ing, otlpNormalizer, cfg.IngestMaxBodyBytes, httpapi.RequireIngestToken(cfg.IngestToken), logger, o.registerer)
 
 	return &App{
 		cfg:        cfg,
@@ -112,5 +154,18 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger) (*App, er
 		ingest:     ing,
 		hooks:      hookMounter,
 		otlp:       otlpHandler,
+		addrReady:  make(chan struct{}),
 	}, nil
 }
+
+// Addr returns the address Serve actually bound to, resolving an
+// ephemeral ":0" port to the OS-assigned one. Only meaningful after
+// Listening() has been closed; before that it is "".
+func (a *App) Addr() string { return a.listenAddr }
+
+// Listening is closed the moment Serve has bound its listener (Addr is
+// valid from then on) or immediately if binding failed (Addr stays ""). A
+// caller that starts Serve in a goroutine with an ephemeral port waits on
+// this instead of guessing a free port ahead of time and racing Serve's own
+// bind.
+func (a *App) Listening() <-chan struct{} { return a.addrReady }

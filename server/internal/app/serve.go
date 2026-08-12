@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"time"
 
@@ -46,15 +47,34 @@ func (a *App) Serve(ctx context.Context) error {
 		OTLPMounter: a.otlp,
 	})
 
+	// The listener is bound synchronously, before Addr()/Listening() has any
+	// meaning to a caller, and before the accept loop's own goroutine
+	// starts — net.Listen is fast and this keeps "Serve has bound its
+	// listener" an unambiguous, race-free signal rather than something a
+	// caller has to poll for. Binding this way (rather than
+	// http.Server.ListenAndServe, which opens its own listener internally
+	// with no way to read back the resolved address) is what lets a caller
+	// pass HTTPAddr="127.0.0.1:0" and discover the OS-assigned port via
+	// Addr() instead of guessing a free one ahead of time and racing this
+	// bind (P2-13's end-to-end test needs exactly that: an ephemeral port,
+	// never a hardcoded one).
+	var lc net.ListenConfig
+	ln, err := lc.Listen(ctx, "tcp", a.cfg.HTTPAddr)
+	if err != nil {
+		close(a.addrReady)
+		return fmt.Errorf("app: listen on %s: %w", a.cfg.HTTPAddr, err)
+	}
+	a.listenAddr = ln.Addr().String()
+	close(a.addrReady)
+
 	a.server = &http.Server{
-		Addr:              a.cfg.HTTPAddr,
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
 	serveErr := make(chan error, 1)
 	go func() {
-		if err := a.server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := a.server.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serveErr <- err
 			return
 		}

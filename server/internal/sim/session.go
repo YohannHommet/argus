@@ -93,6 +93,13 @@ type sessionBuilder struct {
 	result sessionResult
 	cursor time.Duration
 	logSeq int64
+
+	// chaosR is chaos.go's own RNG stream for this session (--chaos-*
+	// per-event draws: clock skew), kept separate from r so enabling a
+	// chaos flag never perturbs the ordinary content generation a clean
+	// run with the same --seed would have produced (chaosRand's doc
+	// comment). Built lazily only when a chaos flag needing it is on.
+	chaosR *rand.Rand
 }
 
 // newSessionBuilder starts a session at startOffset (SPEC §7.2's
@@ -101,6 +108,10 @@ type sessionBuilder struct {
 func newSessionBuilder(cfg Config, clock Clock, seed uint64, sessionOrdinal int, startOffset time.Duration) *sessionBuilder {
 	r := newSessionRNG(seed, sessionOrdinal)
 	id := newSessionIdentity(r)
+	var chaosR *rand.Rand
+	if cfg.ChaosClockSkew {
+		chaosR = chaosRand(seed, sessionOrdinal)
+	}
 	return &sessionBuilder{
 		cfg:    cfg,
 		clock:  clock,
@@ -108,10 +119,22 @@ func newSessionBuilder(cfg Config, clock Clock, seed uint64, sessionOrdinal int,
 		id:     id,
 		cursor: startOffset,
 		result: sessionResult{SessionID: id.sessionID, Identity: id},
+		chaosR: chaosR,
 	}
 }
 
-func (b *sessionBuilder) now() time.Time { return b.clock.At(b.cursor) }
+// now returns the wall timestamp for the builder's current cursor,
+// optionally skewed by --chaos-clock-skew (chaos.go's maybeSkewTimestamp):
+// every timestamp this package stamps onto an event goes through here or
+// through advance below, which is also this file's only caller of it —
+// exactly the single seam doc.go's chaos-hooks note describes.
+func (b *sessionBuilder) now() time.Time {
+	ts := b.clock.At(b.cursor)
+	if b.cfg.ChaosClockSkew {
+		ts = maybeSkewTimestamp(b.chaosR, ts)
+	}
+	return ts
+}
 
 // advance moves the cursor forward by d and returns the new "now" — every
 // inter-event gap in the generator goes through this one function so the
@@ -162,6 +185,19 @@ func generateSession(cfg Config, clock Clock, sessionOrdinal int, startOffset ti
 	}
 	b.emitMetric(buildSessionCountMetric(b.id.sessionID, uint64(b.cursor.Seconds()), startType), sessionStartTS)
 
+	if cfg.ChaosUnknown && logsOnly {
+		// --chaos-unknown (SPEC §7.1): one invented event.name per session,
+		// same builder every other event uses (chaos.go).
+		b.emitLog(buildChaosUnknownEvent(b.id, sessionStartTS, b.nextSeq(), nil), sessionStartTS)
+	}
+	if cfg.ChaosClockSkew && logsOnly && sessionOrdinal == 0 {
+		// --chaos-clock-skew's opt-in beyond-retention event (SPEC §7.1):
+		// emitted once for the whole run, not once per session — it is a
+		// single deliberate repro, not a distribution (chaos.go's doc
+		// comment on buildChaosTooOldEvent explains the mechanism).
+		b.emitLog(buildChaosTooOldEvent(b.id, sessionStartTS, b.nextSeq()), sessionStartTS)
+	}
+
 	// nextMetricTick is relative to this session's own start (b.cursor,
 	// already seeded with startOffset by newSessionBuilder), not to the
 	// simulation origin: a demo session backfilled 14 days into the past
@@ -190,6 +226,9 @@ func generateSession(cfg Config, clock Clock, sessionOrdinal int, startOffset ti
 		}
 	}
 
+	if cfg.ChaosOrphans && logsOnly {
+		return applyChaosOrphans(b.result)
+	}
 	return b.result
 }
 

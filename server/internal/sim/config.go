@@ -96,6 +96,32 @@ type Config struct {
 	// ToolUseIDInDecision implements --tool-use-id-in-decision (default
 	// true, SPEC §7.1: "live-capture-verified").
 	ToolUseIDInDecision bool
+
+	// Chaos* implement SPEC §7.1's five --chaos-* flags (chaos.go). All
+	// default false and are independently switchable (P2-13 lead note 1):
+	// the end-to-end test needs both a clean run (kind='unknown' = 0, no
+	// dedup-triggered surprises) and each chaos path assertable on its own,
+	// so no two flags may be entangled behind one knob.
+	//
+	// ChaosDuplicates resends ~3% of sends byte-identical (dedup ledger).
+	ChaosDuplicates bool
+	// ChaosOutOfOrder holds ~5% of sends for a random 5-60s real delay
+	// before delivering them (late rollups via rollup_dirty).
+	ChaosOutOfOrder bool
+	// ChaosOrphans delivers a session's SessionStart hook after several of
+	// that session's own turn events (stub-on-reference + the late-project
+	// rollup re-mark, SPEC §2.4).
+	ChaosOrphans bool
+	// ChaosClockSkew skews ~2% of event timestamps by up to ±1h, and adds
+	// one opt-in event timestamped chaosTooOldMonthsBack calendar months
+	// back — legitimately inside default retention but in a month the
+	// partition manager never creates ahead of time (see chaos.go's doc
+	// comment for why this, not the §1.2 clamp, is the reachable path to
+	// argus_ingest_too_old_total).
+	ChaosClockSkew bool
+	// ChaosUnknown emits one event per session whose event.name is not in
+	// the §1.5.1 mapping table, exercising the kind='unknown' fallback.
+	ChaosUnknown bool
 }
 
 // DefaultConfig returns Config with every SPEC §7.2 default applied except
