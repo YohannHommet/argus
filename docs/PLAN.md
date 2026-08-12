@@ -46,7 +46,8 @@ Postgres, and CI is green — before any feature exists.
    `200 {"status":"ok","migrations":"current"}`.
 3. `curl -fsS localhost:8080/api/v1/meta` returns `{"version":"…","commit":"…","retention_days":90,…}`.
 4. `http://localhost:8080/` serves the Vue SPA from embedded assets, in dark mode, with a working
-   theme toggle and a sidebar containing the six routes.
+   theme toggle and a sidebar containing five of the six routes (`/sessions/:id` is reached from
+   the session list, not the nav).
 5. `psql \dt` shows `sessions`, `turns`, `ingest_dedup`, `goose_db_version`.
 6. LICENSE (MIT) and a README with the quickstart skeleton are committed.
 
@@ -83,7 +84,8 @@ clear "not implemented until <ticket>" message rather than a confusing error; `g
 no build artefacts; `.gitattributes` sets `* text=auto eol=lf`.
 
 **P1-02 — Go module, subcommand skeleton, config, logging**
-Scope: `go.mod` (module path per SPEC §3.1 using the **answered OQ-1** slug; `go 1.25`);
+Scope: `go.mod` (module path per SPEC §3.1 using the **answered OQ-1** slug; `go 1.25.7` — pinned
+`goose` v3.27.3 requires ≥1.25.7);
 `cmd/argusd/main.go` dispatching `serve|migrate|sim|retention|rebuild-projections|prices|config|
 version|healthcheck` (stubs allowed except `version`, `config`, `healthcheck`); `internal/config`
 implementing **the complete key table in SPEC §3.7** via koanf (defaults ← YAML ← `ARGUS_` env),
@@ -101,11 +103,12 @@ env-overrides-YAML, invalid duration → error, missing `ARGUS_DATABASE_URL` →
 `argusd nonsense` exits 2 with usage.
 
 **P1-03 — Web app scaffold**
-Scope: pnpm project (`vue@3.5.41`, `vite@8.2.1`, `typescript@7.0.2`, `vue-router@5`, `pinia@4`,
+Scope: pnpm project (`vue@3.5.41`, `vite@8.2.1`, `typescript@6.0.3`, `vue-router@5`, `pinia@4`,
 `tailwindcss@4.3.3` via `@tailwindcss/vite`, `vitest@4.1.10`, `@vue/test-utils`, eslint flat config,
 `vue-tsc`); `shadcn-vue` init with 4 primitives (button, card, badge, switch);
 `src/assets/theme.css` with the full token set from SPEC §6.1 including Argus semantic tokens;
-`AppShell.vue` (sidebar with the **six** nav items from SPEC §6.2, topbar, `ThemeToggle`); `uiStore`
+`AppShell.vue` (sidebar with the **five** nav items from SPEC §6.2 — `/sessions/:id` is reached
+from the session list, not the nav — topbar, `ThemeToggle`); `uiStore`
 with persisted theme plus the anti-flash inline script in `index.html`; six placeholder route views
 + `NotFoundView`; Vite dev proxy for `/api`, `/v1`, `/ingest`.
 Files: everything under `web/` (`package.json`, `pnpm-lock.yaml`, `vite.config.ts`, `tsconfig*.json`,
@@ -114,7 +117,7 @@ Files: everything under `web/` (`package.json`, `pnpm-lock.yaml`, `vite.config.t
 `src/**/__tests__/`).
 AC: `pnpm build` emits `web/dist`; `pnpm unit` passes with a test asserting `uiStore.toggle()` flips
 `document.documentElement.classList` between dark/light and persists to `localStorage`, and a mount
-test of `AppShell` asserting **six** nav links resolving to the six routes; `pnpm type-check` and
+test of `AppShell` asserting **five** nav links resolving to five of the six routes; `pnpm type-check` and
 `pnpm lint` clean; dark is the default with no `localStorage` entry and no `prefers-color-scheme`
 match.
 

@@ -963,8 +963,9 @@ that test's allow-list, bounded to their windows.
 
 - Module path: `github.com/YohannHommet/argus/server` (OQ-1 resolved 2026-08-12: owner
   `YohannHommet`, casing matches the GitHub handle).
-- `go 1.25` in `go.mod` (verified toolchain: `go1.25.0`). No `toolchain` directive; CI pins via
-  `actions/setup-go` reading `go.mod`. CGO disabled everywhere.
+- `go 1.25.7` in `go.mod` (pinned `goose` v3.27.3 requires ≥1.25.7; verified toolchain:
+  `go1.25.7`). No `toolchain` directive; CI pins via `actions/setup-go` reading `go.mod`. CGO
+  disabled everywhere.
 
 ```
 server/
@@ -1020,8 +1021,9 @@ stream`, `model` depends on nothing. `store` never imports `httpapi` or `query`.
 Tools (not imports): `sqlc` v1.31.1, `golangci-lint` v2.12.2, installed via `go install` at those
 exact tags from `Makefile` / CI.
 
-Rejected: any ORM; `gorilla/mux`; an OTel Collector container (DECISIONS.md); `sqlx`;
-`pgx/stdlib` (goose supports pgx v5 directly); a `uuid-ossp` extension (UUIDv5 computed in Go).
+Rejected: any ORM; `gorilla/mux`; an OTel Collector container (DECISIONS.md); `sqlx`; a
+`uuid-ossp` extension (UUIDv5 computed in Go). `goose.NewProvider` takes a `*sql.DB`, not a pgx
+pool, so it's bridged via `stdlib.OpenDBFromPool` rather than used with pgx v5 directly.
 
 ### 3.3 The storage seam
 
@@ -1231,8 +1233,11 @@ This table is complete and normative — P1-02 implements exactly these keys.
   Exit 0 only if the drain completed; 1 if events were dropped, so a compose restart loop is visible.
 
 Self-observability: `GET /healthz` (liveness, no DB), `GET /readyz` (DB ping + migrations current +
-queue not saturated), `GET /metrics` (Prometheus). slog with `request_id` on every line; ingest logs
-sampled 1/100 on success so the tool cannot DoS its own log file.
+queue not saturated), `GET /metrics` (Prometheus). In Phase 1, `/readyz` reports
+`"migrations":"current"` as an assertion (no live check against `goose_db_version`); `Maintenance`
+gains a status method in Phase 2 alongside the queue-saturation readiness condition. slog with
+`request_id` on every line; ingest logs sampled 1/100 on success so the tool cannot DoS its own log
+file.
 
 ---
 
@@ -1529,7 +1534,8 @@ func (h *Hub) Publish(evs []Envelope, sess []model.SessionSummary)
 
 ## 6. Frontend
 
-`web/`, Vue 3.5.41 + Vite 8.2.1 + TypeScript 7.0.2, pnpm. Built to `web/dist`, embedded into
+`web/`, Vue 3.5.41 + Vite 8.2.1 + TypeScript 6.0.3 (TS 7's native rewrite breaks `vue-tsc` and
+`@typescript-eslint` as of 2026-08; revisit later), pnpm. Built to `web/dist`, embedded into
 `argusd`. Dev proxy `/api`, `/v1`, `/ingest` → `localhost:8080`.
 
 ### 6.1 Stack decisions
@@ -1586,7 +1592,9 @@ criteria.
 components/
   ui/…                        shadcn-vue primitives (button, card, table, tabs, badge, dialog,
                               sheet, select, popover, tooltip, skeleton, toast, switch)
-  layout/AppShell.vue         sidebar (6 nav items) + topbar + ThemeToggle + connection indicator
+  layout/AppShell.vue         sidebar (5 nav items — the sixth §6.2 route, `/sessions/:id`, is
+                              reached from the session list, not the nav) + topbar + ThemeToggle +
+                              connection indicator
   layout/HealthStrip.vue      /api/v1/meta + stats frames: queue depth, lag, dropped, exporters seen
   session/SessionFilterBar.vue
   session/SessionTable.vue        + SessionRow.vue, StatusDot.vue, LiveDot.vue
@@ -1776,7 +1784,10 @@ services:
   postgres:
     image: postgres:18-alpine                   # uuidv7() requires 18+
     environment: [POSTGRES_DB=argus, POSTGRES_USER=argus, POSTGRES_PASSWORD=argus]
-    volumes: [argus-pgdata:/var/lib/postgresql/data]
+    volumes: [argus-pgdata:/var/lib/postgresql]  # postgres:18 moved PGDATA to
+                                                  # /var/lib/postgresql/18/docker and declares
+                                                  # VOLUME /var/lib/postgresql, so the mount must
+                                                  # cover the parent dir
     healthcheck: pg_isready -U argus            # interval 5s, retries 20
     # no host port published by default; docker-compose.dev.yml adds 5432 for psql
   argusd:
