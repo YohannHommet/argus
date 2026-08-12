@@ -961,9 +961,8 @@ that test's allow-list, bounded to their windows.
 
 ### 3.1 Module, versions, layout
 
-- Module path: `github.com/<owner>/argus/server`. **OQ-1 must be answered before P1-01 lands** —
-  changing a Go module path afterwards rewrites every import in the repo. The spec leaves
-  `<owner>` a placeholder rather than guessing.
+- Module path: `github.com/YohannHommet/argus/server` (OQ-1 resolved 2026-08-12: owner
+  `YohannHommet`, casing matches the GitHub handle).
 - `go 1.25` in `go.mod` (verified toolchain: `go1.25.0`). No `toolchain` directive; CI pins via
   `actions/setup-go` reading `go.mod`. CGO disabled everywhere.
 
@@ -1879,7 +1878,7 @@ Added by this spec, same reasoning:
 
 | # | Question | Recommended default | Status |
 |---|---|---|---|
-| OQ-1 | Exact GitHub owner slug for the module path and image name (`github.com/<owner>/argus`). | The owner's personal GitHub handle. | **BLOCKING P1-01** — one word; changing it later rewrites every import. The spec leaves a placeholder rather than guessing. |
+| OQ-1 | Exact GitHub owner slug for the module path and image name (`github.com/<owner>/argus`). | The owner's personal GitHub handle. | **RESOLVED 2026-08-12**: `YohannHommet` → module path `github.com/YohannHommet/argus/server`. |
 | OQ-2 | `project` is derived as `basename(cwd)`. Two checkouts with the same directory name collide; worktrees fragment. | Store both: `project` = basename (the group dimension), `cwd` = full path (tiebreaker, shown on hover). Accept collisions in v1; git-repo identity arrives with the v2 git-join. | open, non-blocking |
 | OQ-3 | Must a v1 dashboard be *correct* when only the metrics exporter is enabled (no log events)? | No. Log events are required; metrics-only projects get the banner and rollups tagged `source=metric`, nothing more. | open, non-blocking |
 | OQ-4 | Should the default deployment publish Postgres on the host port? | No; `docker-compose.dev.yml` overlay adds it. | resolved as recommended (§8.2) |

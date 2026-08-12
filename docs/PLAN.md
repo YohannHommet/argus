@@ -28,8 +28,8 @@ invariant, §1.7 the three idempotency rules, §4.1 API conventions, and §0's r
 vendor-supplied vocabulary is ever constrained** by a CHECK, a Postgres enum, a Go enum, or a
 TypeScript union. Any deviation is a report-back, not a judgement call.
 
-**Gate before Phase 1 starts**: OQ-1 (GitHub owner slug → Go module path) must be answered. It is
-one word and it is unfixable-cheaply later.
+**Gate before Phase 1 starts**: OQ-1 is resolved — owner `YohannHommet`, module path
+`github.com/YohannHommet/argus/server`, container images lowercase (`ghcr.io/yohannhommet/argus`).
 
 ---
 
@@ -1019,7 +1019,7 @@ scrolled up.
 2. `docs/` contains `SPEC.md`, `PLAN.md`, `DECISIONS.md`, `ARCHITECTURE.md`, `OPERATIONS.md`, the
    research docs, and the review.
 3. README has screenshots of the six views and states the differentiator in the first paragraph.
-4. `v0.1.0` tag → `release.yml` publishes `ghcr.io/<owner>/argus:0.1.0` for amd64+arm64 plus binary
+4. `v0.1.0` tag → `release.yml` publishes `ghcr.io/yohannhommet/argus:0.1.0` for amd64+arm64 plus binary
    artefacts; `docker run … version` prints `0.1.0`.
 5. `argusd sim --mode=load --rate=1000 --duration=120s` sustains ingest with p99 write latency and
    ingest lag recorded in `OPERATIONS.md`, and zero dropped events at that rate.
