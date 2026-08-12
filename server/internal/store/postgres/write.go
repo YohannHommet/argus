@@ -251,10 +251,9 @@ func correctSessionTurnCounts(ctx context.Context, tx pgx.Tx, aggs map[string]*s
 // by the deterministic UUIDv5 id described there. Its slot in the lock
 // order is right after events, before subagents.
 
-// upsertSubagents is the P2-08 seam: subagents projections (SPEC §1.6, §2.3)
-// built from subagent.start/subagent.stop events plus hook tool.* events
-// carrying agent_id. Its slot in the lock order is right after tool_calls,
-// before rollup_dirty. No-op until P2-08 lands.
-func upsertSubagents(_ context.Context, _ pgx.Tx, _ []model.Event) error {
-	return nil
-}
+// upsertSubagents is implemented in upsert_subagent.go (P2-08): subagents
+// projections (SPEC §1.6, §2.3) built from subagent.start/subagent.stop
+// events plus hook tool.* events carrying agent_id (the latter via a
+// post-upsert recompute against the already-settled tool_calls table, not
+// a fold here — see that file's package doc). Its slot in the lock order
+// is right after tool_calls, before rollup_dirty.

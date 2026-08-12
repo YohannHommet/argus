@@ -148,10 +148,8 @@ func (s *Store) ListToolCalls(_ context.Context, _ store.ToolCallFilter, _ store
 	return nil, "", store.ErrNotImplemented
 }
 
-// SubagentTree implements store.Reader; not yet implemented (P1-04 stub).
-func (s *Store) SubagentTree(_ context.Context, _ string) (model.SubagentTree, error) {
-	return model.SubagentTree{}, store.ErrNotImplemented
-}
+// SubagentTree implements store.Reader; implemented in subagent_tree.go
+// (P2-08).
 
 // AnalyticsSummary implements store.Reader; not yet implemented (P1-04 stub).
 func (s *Store) AnalyticsSummary(_ context.Context, _ store.AnalyticsFilter) (model.Summary, error) {
