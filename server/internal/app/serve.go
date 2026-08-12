@@ -36,6 +36,14 @@ func (a *App) Serve(ctx context.Context) error {
 		// readiness condition, P2-09).
 		Migrations: a.store,
 		Queue:      a.ingest,
+
+		// HookMounter wires P2-11's POST /ingest/hook onto the mount seam
+		// router.go already exposes; router.go itself is never touched.
+		HookMounter: a.hooks,
+
+		// OTLPMounter wires P2-10's POST /v1/{logs,metrics,traces} onto the
+		// other mount seam router.go already exposes.
+		OTLPMounter: a.otlp,
 	})
 
 	a.server = &http.Server{

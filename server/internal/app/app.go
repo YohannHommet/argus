@@ -16,6 +16,9 @@ import (
 	"github.com/YohannHommet/argus/server/internal/config"
 	"github.com/YohannHommet/argus/server/internal/httpapi"
 	"github.com/YohannHommet/argus/server/internal/ingest"
+	"github.com/YohannHommet/argus/server/internal/ingest/hooks"
+	"github.com/YohannHommet/argus/server/internal/ingest/normalize"
+	"github.com/YohannHommet/argus/server/internal/ingest/otlp"
 	"github.com/YohannHommet/argus/server/internal/store/postgres"
 )
 
@@ -30,6 +33,8 @@ type App struct {
 
 	partitions *PartitionJob    // started by Serve
 	ingest     *ingest.Pipeline // drained by Serve's shutdown sequence (drainIngest)
+	hooks      *hooks.Mounter   // P2-11: POST /ingest/hook, wired into httpapi.Deps.HookMounter by Serve
+	otlp       *otlp.Handler    // P2-10: POST /v1/{logs,metrics,traces}, wired into httpapi.Deps.OTLPMounter by Serve
 
 	server *http.Server // set by Serve
 }
@@ -75,6 +80,29 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger) (*App, er
 		RetryTransient: cfg.IngestRetryTransient,
 	}, ingest.WithLogger(logger))
 
+	// P2-11: the hooks webhook (SPEC §3.5). hookNormalizer is built here
+	// (not inside internal/ingest/hooks) because it needs
+	// ARGUS_RETENTION_RAW_DAYS/ARGUS_INGEST_HOOK_ALLOW_MESSAGE_DISPLAY —
+	// internal/ingest/hooks must not import internal/config (same
+	// config-free-at-the-leaf convention ing's construction above follows).
+	// ing satisfies hooks.Enqueuer structurally via EnqueueEvents; passing
+	// it here rather than *ingest.Pipeline directly would gain nothing
+	// since httpapi.RequireIngestToken already closes the httpapi seam.
+	hookNormalizer := normalize.NewHookNormalizer(
+		time.Now,
+		time.Duration(cfg.RetentionRawDays)*24*time.Hour,
+		cfg.IngestHookAllowMessageDisplay,
+	)
+	hookHandler := hooks.NewHandler(ing, hookNormalizer, cfg.IngestMaxBodyBytes, hooks.WithLogger(logger))
+	hookMounter := hooks.NewMounter(hookHandler, httpapi.RequireIngestToken(cfg.IngestToken))
+
+	// P2-10: the OTLP/HTTP receiver (SPEC §3.4). otlpNormalizer is built
+	// here for the same config-free-at-the-leaf reason as hookNormalizer
+	// above (internal/ingest/otlp must not import internal/config); ing
+	// satisfies otlp.Enqueuer structurally via EnqueueEvents/EnqueueMetrics.
+	otlpNormalizer := normalize.NewNormalizer(time.Now, time.Duration(cfg.RetentionRawDays)*24*time.Hour)
+	otlpHandler := otlp.New(ing, otlpNormalizer, cfg.IngestMaxBodyBytes, httpapi.RequireIngestToken(cfg.IngestToken), logger, nil)
+
 	return &App{
 		cfg:        cfg,
 		logger:     logger,
@@ -82,5 +110,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger) (*App, er
 		ready:      httpapi.NewReadyState(),
 		partitions: NewPartitionJob(st, logger),
 		ingest:     ing,
+		hooks:      hookMounter,
+		otlp:       otlpHandler,
 	}, nil
 }

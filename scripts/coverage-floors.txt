@@ -11,4 +11,10 @@
 github.com/YohannHommet/argus/server/internal/httpapi 66.0
 github.com/YohannHommet/argus/server/internal/store/postgres 83.0
 github.com/YohannHommet/argus/server/internal/ingest 87.0
+# The entry above is a prefix match and therefore conflates the ingest
+# subpackages; these guard each one so a regression in a low-coverage package
+# cannot hide behind a high-coverage sibling. normalize gets its own floor
+# raised to 90 by P2-13.
+github.com/YohannHommet/argus/server/internal/ingest/otlp 91.0
+github.com/YohannHommet/argus/server/internal/ingest/hooks 84.0
 github.com/YohannHommet/argus/server/internal/sim 85.0
