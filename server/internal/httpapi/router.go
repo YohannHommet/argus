@@ -31,6 +31,31 @@ type HealthChecker interface {
 	Health(ctx context.Context) error
 }
 
+// MigrationsChecker is the second narrow, consumer-owned port GET /readyz
+// needs (SPEC §3.8's "migrations current" condition, closing Phase-1
+// deviation D-5): postgres.Store.MigrationsCurrent satisfies it
+// structurally, so httpapi never imports internal/store/postgres just to
+// name this method. A nil MigrationsChecker (the P1-05 default, and any
+// test that doesn't care) makes readyzHandler report "current" without a
+// live check — the same nil-safe convention HealthChecker already
+// establishes.
+type MigrationsChecker interface {
+	MigrationsCurrent(ctx context.Context) (bool, error)
+}
+
+// QueueSaturationChecker is the third narrow port GET /readyz needs (SPEC
+// §3.8's "queue not saturated" condition): internal/ingest.Pipeline
+// satisfies it structurally via QueueSaturated(). httpapi cannot import
+// internal/ingest directly (depguard: ingest must never import httpapi, and
+// keeping the dependency one-directional through a structurally-satisfied
+// port avoids even a docs-only coupling) — internal/app wires the concrete
+// *ingest.Pipeline into this interface field. A nil checker (P1-05's
+// default, before any pipeline exists) never fails readiness on this
+// ground.
+type QueueSaturationChecker interface {
+	QueueSaturated() bool
+}
+
 // Mounter lets a not-yet-built package attach its own routes to the router
 // without router.go ever being edited again. P2-10 (OTLP receivers under
 // /v1/*) and P2-11 (the hooks webhook under /ingest/hook) each implement
@@ -50,6 +75,13 @@ type Deps struct {
 	Store  HealthChecker  // nil readyz skips the DB check (used by tests that don't care)
 	Logger *slog.Logger   // nil disables the access log
 	Ready  *ReadyState    // nil is treated as always-ready
+
+	// Migrations and Queue back GET /readyz's other two SPEC §3.8
+	// conditions. Both nil-safe (see their interface docs): P1-05's
+	// existing tests and any future test that only cares about the DB
+	// check keep working unchanged.
+	Migrations MigrationsChecker
+	Queue      QueueSaturationChecker
 
 	OTLPMounter Mounter // future P2-10 (POST /v1/logs, /v1/metrics, /v1/traces); nil = no-op
 	HookMounter Mounter // future P2-11 (POST /ingest/hook); nil = no-op
@@ -84,7 +116,7 @@ func New(d Deps) http.Handler {
 	}
 
 	r.Get("/healthz", healthzHandler)
-	r.Get("/readyz", readyzHandler(d.Store, d.Ready))
+	r.Get("/readyz", readyzHandler(d.Store, d.Migrations, d.Queue, d.Ready))
 	r.Handle("/metrics", promhttp.Handler())
 
 	// Ingest mount seam #1: future OTLP receivers (SPEC §3.4), top-level

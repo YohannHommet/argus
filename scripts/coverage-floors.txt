@@ -8,5 +8,6 @@
 # `internal/normalize` does not exist yet, so it has no entry here — add one
 # only once the package exists. Later tickets raise these numbers as they add
 # tests; they must never go down without a matching drop in real coverage.
-github.com/YohannHommet/argus/server/internal/httpapi 64.0
+github.com/YohannHommet/argus/server/internal/httpapi 66.0
 github.com/YohannHommet/argus/server/internal/store/postgres 83.0
+github.com/YohannHommet/argus/server/internal/ingest 87.0

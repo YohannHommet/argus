@@ -17,8 +17,8 @@ import (
 //  1. /readyz starts failing (ReadyState flips false).
 //  2. http.Server.Shutdown, bounded by ARGUS_SHUTDOWN_GRACE, so in-flight
 //     requests finish.
-//  3. Close/drain the ingest queue (the ordered seam for P2's pipeline;
-//     nothing exists to drain in Phase 1).
+//  3. Close/drain the ingest queue (internal/ingest.Pipeline.Close, SPEC
+//     §3.6/§3.8, wired in by P2-09).
 //  4. pool.Close().
 //
 // It returns nil only if every step completed cleanly; a non-nil error
@@ -30,6 +30,12 @@ func (a *App) Serve(ctx context.Context) error {
 		Store:  a.store,
 		Logger: a.logger,
 		Ready:  a.ready,
+		// Migrations/Queue satisfy httpapi's narrow ports structurally
+		// (postgres.Store.MigrationsCurrent, ingest.Pipeline.QueueSaturated)
+		// without httpapi importing either package (SPEC §3.8's third
+		// readiness condition, P2-09).
+		Migrations: a.store,
+		Queue:      a.ingest,
 	})
 
 	a.server = &http.Server{
@@ -90,9 +96,12 @@ func (a *App) shutdown() error {
 }
 
 // drainIngest is step (3) of the shutdown sequence: closing the ingest
-// queue and waiting for it to fully drain. No queue exists until P2's
-// internal/ingest pipeline lands; this seam exists now so that pipeline
-// only has to fill in a body, not change Serve's ordering.
-func (a *App) drainIngest(_ context.Context) error {
-	return nil
+// queue and waiting for it to fully drain, bounded by the same
+// ARGUS_SHUTDOWN_GRACE deadline as the HTTP shutdown (ctx is shutdownCtx,
+// shared with step (2)). A non-nil return means the deadline was hit before
+// every buffered batch was flushed — SPEC §3.8: "exit 0 only if the drain
+// completed; 1 if events were dropped" — which shutdown propagates as
+// Serve's own error.
+func (a *App) drainIngest(ctx context.Context) error {
+	return a.ingest.Close(ctx)
 }

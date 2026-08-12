@@ -15,6 +15,7 @@ import (
 
 	"github.com/YohannHommet/argus/server/internal/config"
 	"github.com/YohannHommet/argus/server/internal/httpapi"
+	"github.com/YohannHommet/argus/server/internal/ingest"
 	"github.com/YohannHommet/argus/server/internal/store/postgres"
 )
 
@@ -27,7 +28,8 @@ type App struct {
 	store  *postgres.Store
 	ready  *httpapi.ReadyState
 
-	partitions *PartitionJob // started by Serve
+	partitions *PartitionJob    // started by Serve
+	ingest     *ingest.Pipeline // drained by Serve's shutdown sequence (drainIngest)
 
 	server *http.Server // set by Serve
 }
@@ -64,11 +66,21 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger) (*App, er
 		return nil, fmt.Errorf("app: ensuring startup partitions: %w", err)
 	}
 
+	ing := ingest.New(st, ingest.PipelineConfig{
+		QueueCap:       cfg.IngestQueue,
+		Workers:        cfg.IngestWorkers,
+		BatchSize:      cfg.IngestBatchSize,
+		FlushInterval:  cfg.IngestFlush,
+		RetryConflict:  cfg.IngestRetryConflict,
+		RetryTransient: cfg.IngestRetryTransient,
+	}, ingest.WithLogger(logger))
+
 	return &App{
 		cfg:        cfg,
 		logger:     logger,
 		store:      st,
 		ready:      httpapi.NewReadyState(),
 		partitions: NewPartitionJob(st, logger),
+		ingest:     ing,
 	}, nil
 }
