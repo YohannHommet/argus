@@ -1,0 +1,126 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GOLANGCI_LINT_VERSION: v2.12.2
+
+jobs:
+  go-lint:
+    name: go-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: server/go.mod
+          cache: true
+          cache-dependency-path: server/go.sum
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
+          working-directory: server
+      - name: gofmt
+        working-directory: server
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "The following files are not gofmt-formatted:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+  go-test:
+    name: go-test
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: argus
+          POSTGRES_PASSWORD: argus
+          POSTGRES_DB: argus
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U argus"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      ARGUS_TEST_DATABASE_URL: postgres://argus:argus@localhost:5432/argus?sslmode=disable
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: server/go.mod
+          cache: true
+          cache-dependency-path: server/go.sum
+      - name: go test
+        working-directory: server
+        run: go test -race -covermode=atomic -coverprofile=cover.out ./...
+      - name: coverage floor
+        working-directory: server
+        run: ../scripts/coverage-floor.sh cover.out ../scripts/coverage-floors.txt
+
+  go-build:
+    name: go-build
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goarch: [amd64, arm64]
+    env:
+      CGO_ENABLED: "0"
+      GOOS: linux
+      GOARCH: ${{ matrix.goarch }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: server/go.mod
+          cache: true
+          cache-dependency-path: server/go.sum
+      - name: build argusd
+        working-directory: server
+        run: go build -o /dev/null ./cmd/argusd
+
+  web:
+    name: web
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/setup@v2
+        with:
+          version: 11
+          runtime: node@25
+          cache: true
+          cache-dependency-path: web/pnpm-lock.yaml
+          package-json-file: web/package.json
+          install: false
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm type-check
+      - run: pnpm unit --coverage
+      - run: pnpm build
+
+  compose:
+    name: compose
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: validate compose file
+        run: docker compose -f deploy/docker-compose.yml config -q
+      - name: build image
+        run: docker build -f server/Dockerfile .
+      - name: smoke test
+        run: bash scripts/smoke.sh

@@ -1,0 +1,38 @@
+<!doctype html>
+<!--
+  This is a PLACEHOLDER, not the Argus UI.
+
+  server/internal/httpapi/assets/dist is where the built web app
+  (`web/dist`, produced by `pnpm build`) is copied before compiling argusd —
+  see docs/SPEC.md §8.1 (the Dockerfile does this at image build time). This
+  file exists only so `go:embed` has something to embed in a clean checkout
+  with no prior web build: go:embed fails to compile if its pattern matches
+  no files.
+
+  If you are seeing this page from a running argusd, the real web app has
+  not been built and copied into place yet. Run:
+
+    cd web && pnpm install && pnpm build
+    cp -r web/dist/. server/internal/httpapi/assets/dist/
+
+  Do not commit a real build over this file outside of that documented flow
+  — the placeholder must stay in version control so `go build`/`go test`
+  work without a prior web build.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Argus — UI not built</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+  </head>
+  <body>
+    <h1>Argus UI not built</h1>
+    <p>
+      This is a placeholder page served by <code>argusd</code>. The web app
+      has not been built into
+      <code>server/internal/httpapi/assets/dist</code>.
+    </p>
+    <p>Run <code>pnpm build</code> in <code>web/</code> and copy
+      <code>web/dist</code> here to see the real UI.</p>
+  </body>
+</html>

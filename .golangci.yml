@@ -1,0 +1,97 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - revive
+    - ineffassign
+    - unused
+    - bodyclose
+    - contextcheck
+    - errorlint
+    - nilerr
+    - rowserrcheck
+    - sqlclosecheck
+    - copyloopvar
+    - gocritic
+    - misspell
+    - unconvert
+    - predeclared
+    - usestdlibvars
+    - perfsprint
+    - depguard
+    - gosec
+    - testifylint
+    - tparallel
+    - noctx
+    - exhaustive
+    - nolintlint
+  settings:
+    govet:
+      enable:
+        - shadow
+    errcheck:
+      # Deliberately explicit — never blanket-disabled (SPEC §8.4). Only
+      # entries actually exercised by this codebase are listed; add more
+      # here (never via disable-default-exclusions) as new cases arise.
+      exclude-functions:
+        - (io.ReadCloser).Close # cmd/argusd/main.go: best-effort close of an HTTP response body already handled via the returned error
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+    exhaustive:
+      # Scoped to Argus's own Kind taxonomy only — never a vendor vocabulary,
+      # which has no closed set (SPEC §8.4). The exhaustive linter's
+      # ignore-enum-types is a plain RE2 regexp with no negative-lookahead
+      # support, so an allow-list ("only Kind") cannot be expressed as a
+      # single pattern here. In practice model.Kind is the only enum-like
+      # type in this codebase; if a switch over a vendor/stdlib enum ever
+      # needs checking, add its type name to ignore-enum-types explicitly
+      # (deny it) rather than relying on a positive match, or silence a
+      # one-off switch with `//nolint:exhaustive // <reason>`.
+      check:
+        - switch
+    depguard:
+      rules:
+        # model depends on nothing (SPEC §3.1).
+        model:
+          list-mode: original
+          files:
+            - "**/internal/model/**"
+          deny:
+            - pkg: github.com/YohannHommet/argus/server/internal/
+              desc: "internal/model must not depend on any other Argus internal package (SPEC §3.1: model depends on nothing)"
+        # store never imports httpapi or query (SPEC §3.1).
+        store:
+          list-mode: original
+          files:
+            - "**/internal/store/**"
+          deny:
+            - pkg: github.com/YohannHommet/argus/server/internal/httpapi
+              desc: "internal/store must not depend on internal/httpapi (SPEC §3.1: dependency direction is strictly inward)"
+            - pkg: github.com/YohannHommet/argus/server/internal/query
+              desc: "internal/store must not depend on internal/query (SPEC §3.1: dependency direction is strictly inward)"
+        # ingest depends only on normalize, store and stream (SPEC §3.1).
+        ingest:
+          list-mode: original
+          files:
+            - "**/internal/ingest/**"
+          deny:
+            - pkg: github.com/YohannHommet/argus/server/internal/httpapi
+              desc: "internal/ingest must not depend on internal/httpapi (SPEC §3.1: dependency direction is strictly inward)"
+            - pkg: github.com/YohannHommet/argus/server/internal/query
+              desc: "internal/ingest must not depend on internal/query (SPEC §3.1: dependency direction is strictly inward)"
+
+  # Deliberately off (SPEC §8.4): wsl, nlreturn, lll, funlen, gochecknoglobals,
+  # varnamelen, exhaustruct.
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

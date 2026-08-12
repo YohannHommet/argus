@@ -1,0 +1,30 @@
+# Example docker-compose.override.yml.
+#
+# `docker compose` auto-loads a file named exactly `docker-compose.override.yml`
+# next to docker-compose.yml. Copy this example there (that filename is
+# gitignored) to customize a local stack without editing the committed
+# compose files:
+#
+#   cp deploy/docker-compose.override.example.yml deploy/docker-compose.override.yml
+#   docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.override.yml up -d
+services:
+  argusd:
+    environment:
+      ARGUS_INGEST_TOKEN: change-me-to-a-real-token
+      ARGUS_RETENTION_RAW_DAYS: "90"
+      ARGUS_RETENTION_SESSION_DAYS: "30"
+
+  # One-shot traffic simulator. SPEC §3.8 names the `sim` subcommand; it is
+  # still a stub in Phase 1 (`argusd sim` prints "not implemented yet" and
+  # exits 1) — this service previews the Phase-4 shape and is safe to leave
+  # in place: `docker compose up sim` will just exit 1 until then.
+  sim:
+    image: ghcr.io/yohannhommet/argus:latest
+    depends_on:
+      argusd:
+        condition: service_healthy
+    environment:
+      ARGUS_DATABASE_URL: postgres://argus:argus@postgres:5432/argus?sslmode=disable
+    entrypoint: ["/argusd"]
+    command: ["sim"]
+    restart: "no"
