@@ -92,9 +92,56 @@ type Maintenance interface {
 // rollup jobs) flesh them out; P1-04's job is only to make the interface
 // compile and name the right shapes.
 
-// SessionFilter narrows Reader.ListSessions. Full filter set arrives with
-// the sessions list feature.
-type SessionFilter struct{}
+// SessionSort is the closed set of GET /api/v1/sessions sort keys (SPEC
+// §4.3), each backed by one of the §2.1 `sessions_*` composite indexes with
+// `id DESC` as the keyset tiebreak. Desc-only: SPEC §4.3 offers no ascending
+// option. Closed because it names Argus's own query surface, not vendor
+// vocabulary (unlike the string filter fields on SessionFilter below).
+type SessionSort string
+
+// SessionSort constants (SPEC §4.3: "sort ∈ last_event_at|started_at|cost_usd|event_count").
+const (
+	SessionSortLastEventAt SessionSort = "last_event_at"
+	SessionSortStartedAt   SessionSort = "started_at"
+	SessionSortCostUSD     SessionSort = "cost_usd"
+	SessionSortEventCount  SessionSort = "event_count"
+)
+
+// SessionFilter narrows Reader.ListSessions (SPEC §4.3). Every slice field
+// is an OR-set within that field; non-empty fields AND together (SPEC
+// §4.1: "repeated params OR within a field, AND across fields"). An empty
+// slice/zero value means "no restriction" on that field.
+//
+//   - Project, Vendor filter the sessions row's own columns directly.
+//   - Model filters sessions.models (SPEC §2.1's text[] of every model used
+//     in the session) — "session used at least one of these models".
+//   - Status uses the stored sessions.status column verbatim (SPEC §1.7):
+//     Argus-computed state, not vendor vocabulary, despite sitting beside
+//     filters that are.
+//   - Tool, DecisionSource filter on sessions that have at least one
+//     tool_calls row matching (an EXISTS correlation), since neither is a
+//     column on sessions itself.
+//   - From/To bound sessions.last_event_at. SPEC §4.1 states only that the
+//     session list's default window is unbounded, not which timestamp
+//     column an explicit window applies to; last_event_at is the natural
+//     "session activity in this window" reading, and matches the endpoint's
+//     own default sort key — an assumption worth flagging, not a spec
+//     citation.
+//   - Q is a substring match on id/project/cwd (SPEC §4.3).
+//   - Sort selects the keyset sort key; the zero value means
+//     SessionSortLastEventAt (SPEC §4.3's documented default).
+type SessionFilter struct {
+	Project        []string
+	Vendor         []string
+	Model          []string
+	Status         []model.SessionStatus
+	Tool           []string
+	DecisionSource []string
+	From           *time.Time
+	To             *time.Time
+	Q              string
+	Sort           SessionSort
+}
 
 // EventFilter narrows Reader.ListEvents.
 type EventFilter struct{}

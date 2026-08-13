@@ -118,20 +118,8 @@ func (s *Store) Close() {
 
 // --- Reader -------------------------------------------------------------
 
-// ListSessions implements store.Reader; not yet implemented (P1-04 stub).
-func (s *Store) ListSessions(_ context.Context, _ store.SessionFilter, _ store.Page) ([]model.SessionSummary, store.Cursor, error) {
-	return nil, "", store.ErrNotImplemented
-}
-
-// GetSession implements store.Reader; not yet implemented (P1-04 stub).
-func (s *Store) GetSession(_ context.Context, _ string) (*model.SessionDetail, error) {
-	return nil, store.ErrNotImplemented
-}
-
-// ListTurns implements store.Reader; not yet implemented (P1-04 stub).
-func (s *Store) ListTurns(_ context.Context, _ string) ([]model.Turn, error) {
-	return nil, store.ErrNotImplemented
-}
+// ListSessions, GetSession, ListTurns implement store.Reader; implemented in
+// read_sessions.go (P3-02).
 
 // ListEvents implements store.Reader; not yet implemented (P1-04 stub).
 func (s *Store) ListEvents(_ context.Context, _ store.EventFilter, _ store.Page) ([]model.Event, store.Cursor, error) {
