@@ -11,11 +11,38 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/YohannHommet/argus/server/internal/config"
 	"github.com/YohannHommet/argus/server/internal/httpapi"
+	"github.com/YohannHommet/argus/server/internal/ingest"
+	"github.com/YohannHommet/argus/server/internal/ingest/hooks"
+	"github.com/YohannHommet/argus/server/internal/ingest/normalize"
+	"github.com/YohannHommet/argus/server/internal/ingest/otlp"
 	"github.com/YohannHommet/argus/server/internal/store/postgres"
 )
+
+// Option configures an optional aspect of New's construction. The zero
+// value (no options passed) is production behaviour in every case.
+type Option func(*options)
+
+type options struct {
+	registerer prometheus.Registerer
+}
+
+// WithRegisterer overrides the Prometheus registerer the ingest pipeline's
+// metrics register against (default: prometheus.DefaultRegisterer, via
+// ingest.NewMetrics's own nil-means-default convention). Production never
+// needs this; a test process that constructs more than one App (P2-13's
+// end-to-end test, which starts a second App with a deliberately tiny
+// ingest queue for its load-capacity check) does, since the default
+// registry is a package-level global and registering the same metric names
+// on it twice panics.
+func WithRegisterer(reg prometheus.Registerer) Option {
+	return func(o *options) { o.registerer = reg }
+}
 
 // App is a constructed, ready-to-serve Argus process: a live database pool
 // wrapped in the postgres Store, and the readiness flag Serve's shutdown
@@ -26,20 +53,44 @@ type App struct {
 	store  *postgres.Store
 	ready  *httpapi.ReadyState
 
+	partitions *PartitionJob    // started by Serve
+	ingest     *ingest.Pipeline // drained by Serve's shutdown sequence (drainIngest)
+	hooks      *hooks.Mounter   // P2-11: POST /ingest/hook, wired into httpapi.Deps.HookMounter by Serve
+	otlp       *otlp.Handler    // P2-10: POST /v1/{logs,metrics,traces}, wired into httpapi.Deps.OTLPMounter by Serve
+
 	server *http.Server // set by Serve
+
+	// listenAddr/addrReady let a caller that started Serve on an ephemeral
+	// port (cfg.HTTPAddr == "…:0", e.g. P2-13's end-to-end test) discover
+	// the OS-assigned real address instead of guessing a free port ahead of
+	// time and racing Serve's own bind — see Addr/Listening.
+	listenAddr string
+	addrReady  chan struct{}
 }
 
 // New connects the database pool, wraps it in the postgres Store, and runs
 // migrations when ARGUS_AUTO_MIGRATE is true (SPEC §3.7, §3.8) — all before
 // the HTTP listener exists, so a `serve` that fails to migrate never starts
-// accepting traffic. It does not start serving; call Serve for that.
-func New(ctx context.Context, cfg *config.Config, logger *slog.Logger) (*App, error) {
+// accepting traffic. It then ensures the current-through-two-months-ahead
+// partitions exist (SPEC §2.4's "startup fails loudly if the current
+// month's partition cannot be created") for the same reason: an ingest
+// request landing before the first hourly PartitionJob tick must never hit
+// a missing partition. It does not start serving; call Serve for that.
+func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, opts ...Option) (*App, error) {
+	var o options
+	for _, opt := range opts {
+		opt(&o)
+	}
+
 	pool, err := postgres.NewPool(ctx, cfg.DatabaseURL, cfg.DBMaxConns)
 	if err != nil {
 		return nil, fmt.Errorf("app: connecting to database: %w", err)
 	}
 
-	st := postgres.New(pool)
+	// WithRollupSessionRemarkMax threads ARGUS_ROLLUP_SESSION_REMARK_MAX
+	// (SPEC §2.4, §3.7) into the store without postgres importing
+	// internal/config (depguard, SPEC §3.1) — see pool.go's Option doc.
+	st := postgres.New(pool, postgres.WithRollupSessionRemarkMax(cfg.RollupSessionRemarkMax))
 
 	if cfg.AutoMigrate {
 		if err := st.Migrate(ctx); err != nil {
@@ -48,10 +99,73 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger) (*App, er
 		}
 	}
 
+	now := time.Now()
+	if err := st.EnsurePartitions(ctx, now, now.Add(partitionJobHorizon)); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("app: ensuring startup partitions: %w", err)
+	}
+
+	ingestOpts := []ingest.Option{ingest.WithLogger(logger)}
+	if o.registerer != nil {
+		ingestOpts = append(ingestOpts, ingest.WithRegisterer(o.registerer))
+	}
+	ing := ingest.New(st, ingest.PipelineConfig{
+		QueueCap:       cfg.IngestQueue,
+		Workers:        cfg.IngestWorkers,
+		BatchSize:      cfg.IngestBatchSize,
+		FlushInterval:  cfg.IngestFlush,
+		RetryConflict:  cfg.IngestRetryConflict,
+		RetryTransient: cfg.IngestRetryTransient,
+	}, ingestOpts...)
+
+	// P2-11: the hooks webhook (SPEC §3.5). hookNormalizer is built here
+	// (not inside internal/ingest/hooks) because it needs
+	// ARGUS_RETENTION_RAW_DAYS/ARGUS_INGEST_HOOK_ALLOW_MESSAGE_DISPLAY —
+	// internal/ingest/hooks must not import internal/config (same
+	// config-free-at-the-leaf convention ing's construction above follows).
+	// ing satisfies hooks.Enqueuer structurally via EnqueueEvents; passing
+	// it here rather than *ingest.Pipeline directly would gain nothing
+	// since httpapi.RequireIngestToken already closes the httpapi seam.
+	hookNormalizer := normalize.NewHookNormalizer(
+		time.Now,
+		time.Duration(cfg.RetentionRawDays)*24*time.Hour,
+		cfg.IngestHookAllowMessageDisplay,
+	)
+	hookHandlerOpts := []hooks.Option{hooks.WithLogger(logger)}
+	if o.registerer != nil {
+		hookHandlerOpts = append(hookHandlerOpts, hooks.WithRegisterer(o.registerer))
+	}
+	hookHandler := hooks.NewHandler(ing, hookNormalizer, cfg.IngestMaxBodyBytes, hookHandlerOpts...)
+	hookMounter := hooks.NewMounter(hookHandler, httpapi.RequireIngestToken(cfg.IngestToken))
+
+	// P2-10: the OTLP/HTTP receiver (SPEC §3.4). otlpNormalizer is built
+	// here for the same config-free-at-the-leaf reason as hookNormalizer
+	// above (internal/ingest/otlp must not import internal/config); ing
+	// satisfies otlp.Enqueuer structurally via EnqueueEvents/EnqueueMetrics.
+	otlpNormalizer := normalize.NewNormalizer(time.Now, time.Duration(cfg.RetentionRawDays)*24*time.Hour)
+	otlpHandler := otlp.New(ing, otlpNormalizer, cfg.IngestMaxBodyBytes, httpapi.RequireIngestToken(cfg.IngestToken), logger, o.registerer)
+
 	return &App{
-		cfg:    cfg,
-		logger: logger,
-		store:  st,
-		ready:  httpapi.NewReadyState(),
+		cfg:        cfg,
+		logger:     logger,
+		store:      st,
+		ready:      httpapi.NewReadyState(),
+		partitions: NewPartitionJob(st, logger),
+		ingest:     ing,
+		hooks:      hookMounter,
+		otlp:       otlpHandler,
+		addrReady:  make(chan struct{}),
 	}, nil
 }
+
+// Addr returns the address Serve actually bound to, resolving an
+// ephemeral ":0" port to the OS-assigned one. Only meaningful after
+// Listening() has been closed; before that it is "".
+func (a *App) Addr() string { return a.listenAddr }
+
+// Listening is closed the moment Serve has bound its listener (Addr is
+// valid from then on) or immediately if binding failed (Addr stays ""). A
+// caller that starts Serve in a goroutine with an ephemeral port waits on
+// this instead of guessing a free port ahead of time and racing Serve's own
+// bind.
+func (a *App) Listening() <-chan struct{} { return a.addrReady }

@@ -46,14 +46,17 @@ func healthzHandler(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// readyzHandler reports SPEC §3.8 readiness: draining state, then a live
-// store health check. "DB ping + migrations current + queue not saturated"
-// is the full contract; the ingest queue doesn't exist until P2, so only the
-// first two conditions apply here. A reachable database implies migrations
-// are current, since nothing in Phase 1 changes the schema outside the
-// ARGUS_AUTO_MIGRATE gate that runs before Serve ever starts accepting
-// requests.
-func readyzHandler(hc HealthChecker, rs *ReadyState) http.HandlerFunc {
+// readyzHandler reports SPEC §3.8's full readiness contract: draining
+// state, DB ping, migrations current, and queue not saturated (the last two
+// gained real checks in P2-09; Phase 1 asserted "migrations":"current"
+// without checking it, recorded as deviation D-5).
+//
+// mc and qc are both nil-safe (their interface docs explain why): a nil
+// MigrationsChecker reports "current" unconditionally, matching Phase 1's
+// existing test contract, and a nil QueueSaturationChecker never fails
+// readiness on that ground — both are the P1-05 default until internal/app
+// wires the real store and pipeline in.
+func readyzHandler(hc HealthChecker, mc MigrationsChecker, qc QueueSaturationChecker, rs *ReadyState) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !rs.Ready() {
 			writeProblem(w, r, http.StatusServiceUnavailable, "not-ready", "server is shutting down")
@@ -64,6 +67,21 @@ func readyzHandler(hc HealthChecker, rs *ReadyState) http.HandlerFunc {
 				writeProblem(w, r, http.StatusServiceUnavailable, "not-ready", "database health check failed: "+err.Error())
 				return
 			}
+		}
+		if mc != nil {
+			current, err := mc.MigrationsCurrent(r.Context())
+			if err != nil {
+				writeProblem(w, r, http.StatusServiceUnavailable, "not-ready", "migrations check failed: "+err.Error())
+				return
+			}
+			if !current {
+				writeProblem(w, r, http.StatusServiceUnavailable, "not-ready", "migrations pending")
+				return
+			}
+		}
+		if qc != nil && qc.QueueSaturated() {
+			writeProblem(w, r, http.StatusServiceUnavailable, "not-ready", "ingest queue saturated")
+			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "migrations": "current"})
 	}

@@ -1,0 +1,7 @@
+{
+  "session_id": "sess-0001",
+  "prompt_id": "prompt-0001",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Bash",
+  "tool_input": { "command": "ls -la" }
+}

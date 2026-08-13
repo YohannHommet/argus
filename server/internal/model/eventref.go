@@ -1,61 +1,58 @@
 package model
 
-import "time"
+import (
+	"encoding/base64"
+	"errors"
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+)
 
-// EventRef identifies one row of the (future) append-only events table by
-// its primary key, (ts, seq) — SPEC §3.3's GetEvent and EventsSince key off
-// it. Kept to the bare pair the Reader signatures need; the full events
-// schema and the Event struct's field set land in P2-01.
+// EventRef identifies one row of `events` by its primary key, (ts, seq)
+// (SPEC §1.2, §2.2). It is the opaque `event_ref` on every event payload and
+// the sole lookup key for GET /api/v1/events/{ref} — there is no index on
+// events.id, so id is never a lookup key (SPEC §1.2).
 type EventRef struct {
 	TS  time.Time
 	Seq int64
 }
 
-// Event is a placeholder for the eventual append-only, normalized event
-// record (SPEC §0, §3.1's model.Event). P2-01 owns its real shape,
-// including the Kind taxonomy; this stub exists only so Writer.WriteBatch
-// and the Reader event methods compile in P1-04.
-type Event struct {
-	Ref EventRef
+// eventRefEncoding is base64url with no padding: SPEC §1.2 says "base64url
+// of ts+seq"; padding characters ('=') would need escaping in a path
+// segment for no benefit.
+var eventRefEncoding = base64.RawURLEncoding
+
+// Encode renders r as the opaque `event_ref` string SPEC §1.2 and §4.1
+// describe: base64url of a "<ts-unix-nanos>:<seq>" payload. TS is
+// normalized to UTC so two EventRefs for the same instant in different
+// locations encode identically.
+func (r EventRef) Encode() string {
+	raw := strconv.FormatInt(r.TS.UTC().UnixNano(), 10) + ":" + strconv.FormatInt(r.Seq, 10)
+	return eventRefEncoding.EncodeToString([]byte(raw))
 }
 
-// ToolCall is a placeholder for Reader.ListToolCalls; full shape in a later
-// phase.
-type ToolCall struct {
-	ID string
+// DecodeEventRef parses a string produced by EventRef.Encode. Any tampering
+// — a flipped character breaking base64, or valid base64 that no longer
+// decodes to "<int>:<int>" — is rejected with an error rather than silently
+// producing a wrong (ts, seq) pair, per SPEC §4.1's "opaque, validated, 400
+// on tamper" rule for cursors, which the same convention applies to here.
+func DecodeEventRef(s string) (EventRef, error) {
+	raw, err := eventRefEncoding.DecodeString(s)
+	if err != nil {
+		return EventRef{}, fmt.Errorf("model: decode event_ref: %w", err)
+	}
+	tsPart, seqPart, ok := strings.Cut(string(raw), ":")
+	if !ok {
+		return EventRef{}, errors.New("model: decode event_ref: malformed payload")
+	}
+	nanos, err := strconv.ParseInt(tsPart, 10, 64)
+	if err != nil {
+		return EventRef{}, fmt.Errorf("model: decode event_ref: invalid ts: %w", err)
+	}
+	seq, err := strconv.ParseInt(seqPart, 10, 64)
+	if err != nil {
+		return EventRef{}, fmt.Errorf("model: decode event_ref: invalid seq: %w", err)
+	}
+	return EventRef{TS: time.Unix(0, nanos).UTC(), Seq: seq}, nil
 }
-
-// SubagentTree is a placeholder for Reader.SubagentTree; full shape in a
-// later phase.
-type SubagentTree struct{}
-
-// Summary is a placeholder for Reader.AnalyticsSummary; full shape in a
-// later phase.
-type Summary struct{}
-
-// Series is a placeholder for Reader.AnalyticsSeries; full shape in a later
-// phase.
-type Series struct{}
-
-// Breakdown is a placeholder for Reader.AnalyticsBreakdown; full shape in a
-// later phase.
-type Breakdown struct{}
-
-// DecisionMatrix is a placeholder for Reader.AnalyticsDecisions; full shape
-// in a later phase.
-type DecisionMatrix struct{}
-
-// Facets is a placeholder for Reader.Facets; full shape in a later phase.
-type Facets struct{}
-
-// DataQuality is a placeholder for Reader.DataQuality; full shape in a
-// later phase.
-type DataQuality struct{}
-
-// UnknownKindGroup is a placeholder for Reader.UnknownKinds; full shape in
-// a later phase.
-type UnknownKindGroup struct{}
-
-// HookLatency is a placeholder for Reader.HookLatency; full shape in a
-// later phase.
-type HookLatency struct{}

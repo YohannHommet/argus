@@ -42,16 +42,39 @@ while IFS= read -r line || [[ -n "${line}" ]]; do
 		exit 1
 	fi
 
-	# Sum statement counts for every profiled block whose file belongs to
-	# this package (cover.out lines are prefixed with the full module
-	# import path, so an exact "<pkg>/" match can't collide with a
-	# same-prefix sibling package, e.g. .../store vs .../store/postgres).
-	read -r total covered <<<"$(awk -v pkg="${pkg}/" '
-		$1 ~ "^" pkg {
-			n = $2
-			cnt = $3
-			total += n
-			if (cnt > 0) covered += n
+	# Sum statement counts for the blocks belonging to EXACTLY this package —
+	# never its subpackages. A cover.out line is
+	# "<importpath>/<file>.go:<from>,<to> <numstmt> <count>", so the package
+	# is everything before the final "/", compared for equality.
+	#
+	# This used to be a prefix match, which made a floor environment-dependent
+	# and produced a CI-only failure that could not be reproduced locally: the
+	# entry for .../internal/store/postgres also swallowed its child package
+	# .../internal/store/postgres/gen (sqlc-generated, no test files). Whether
+	# a testless package contributes zero-coverage statements to the profile
+	# varies between environments, so the *denominator* moved: 1068/1272 = 84.0%
+	# locally versus 1068/1372 = 77.8% in CI, from an identical test run.
+	#
+	# Exact matching also removes a real blind spot the prefix form had: a
+	# regression in a low-coverage subpackage could hide behind a
+	# high-coverage sibling, because both were averaged into one number. Every
+	# package that should be gated now needs its own explicit entry, which is
+	# the honest form of the check. Generated code (.../postgres/gen) is
+	# deliberately ungated, matching how .golangci.yml treats it — it is not
+	# hand-written, and it is exercised through its callers.
+	read -r total covered <<<"$(awk -v pkg="${pkg}" '
+		{
+			colon = index($1, ":")
+			if (colon == 0) next
+			file = substr($1, 1, colon - 1)
+			slash = 0
+			for (i = length(file); i > 0; i--) {
+				if (substr(file, i, 1) == "/") { slash = i; break }
+			}
+			if (slash == 0) next
+			if (substr(file, 1, slash - 1) != pkg) next
+			total += $2
+			if ($3 > 0) covered += $2
 		}
 		END { printf "%d %d", total+0, covered+0 }
 	' "${cover_file}")"

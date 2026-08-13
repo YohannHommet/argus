@@ -87,6 +87,22 @@ linters:
               desc: "internal/ingest must not depend on internal/httpapi (SPEC §3.1: dependency direction is strictly inward)"
             - pkg: github.com/YohannHommet/argus/server/internal/query
               desc: "internal/ingest must not depend on internal/query (SPEC §3.1: dependency direction is strictly inward)"
+        # sim speaks the real wire protocols to a real server; it never
+        # touches the database or the read/write API surfaces directly
+        # (SPEC §7: "It never touches the database, never imports store" —
+        # that constraint is what makes it a genuine end-to-end exercise of
+        # the ingestion path, ticket P2-12).
+        sim:
+          list-mode: original
+          files:
+            - "**/internal/sim/**"
+          deny:
+            - pkg: github.com/YohannHommet/argus/server/internal/store
+              desc: "internal/sim must not depend on internal/store (SPEC §7: sim never touches the database)"
+            - pkg: github.com/YohannHommet/argus/server/internal/httpapi
+              desc: "internal/sim must not depend on internal/httpapi (SPEC §7: sim only speaks the wire protocol, never the server's own handler code)"
+            - pkg: github.com/YohannHommet/argus/server/internal/query
+              desc: "internal/sim must not depend on internal/query (SPEC §7: sim never touches the database)"
 
   # Deliberately off (SPEC §8.4): wsl, nlreturn, lll, funlen, gochecknoglobals,
   # varnamelen, exhaustruct.

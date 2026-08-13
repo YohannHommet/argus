@@ -1,0 +1,8 @@
+{
+  "session_id": "sess-0001",
+  "hook_event_name": "SessionStart",
+  "cwd": "/home/dev/project",
+  "permission_mode": "default",
+  "source": "startup",
+  "transcript_path": "/home/dev/.claude/transcripts/sess-0001.jsonl"
+}

@@ -4,9 +4,28 @@
 # One entry per line; blank lines and lines starting with '#' are ignored.
 #
 # Floors are set to CURRENT MEASURED REALITY (P1-06), not to the eventual
-# SPEC §8.3 targets (normalize 90%, store/postgres 70%, httpapi 75%).
-# `internal/normalize` does not exist yet, so it has no entry here — add one
-# only once the package exists. Later tickets raise these numbers as they add
-# tests; they must never go down without a matching drop in real coverage.
-github.com/YohannHommet/argus/server/internal/httpapi 64.0
-github.com/YohannHommet/argus/server/internal/store/postgres 50.0
+# SPEC §8.3 targets (store/postgres 70%, httpapi 75%) — normalize's own SPEC
+# §8.3 target (90%) was reached and is now enforced below (P2-13).
+# Later tickets raise these numbers as they add tests; they must never go
+# down without a matching drop in real coverage.
+github.com/YohannHommet/argus/server/internal/httpapi 66.0
+github.com/YohannHommet/argus/server/internal/store/postgres 83.0
+# Each entry gates EXACTLY that package, never its subpackages (see
+# coverage-floor.sh), so every package that should be gated needs its own
+# line. internal/ingest below is the pipeline package alone: its previous 87.0
+# was an artifact of the old prefix match averaging normalize's 96% into it,
+# so 73.0 is the first floor reflecting the pipeline's own coverage rather
+# than its siblings'. No test was removed to get there, and a pipeline
+# regression is now catchable where before it could hide behind normalize.
+#
+# internal/store/postgres/gen is deliberately ungated: sqlc-generated code
+# with no test files, exercised through its callers, excluded from the quality
+# gates the same way .golangci.yml excludes it. Counting it made the postgres
+# floor environment-dependent — 84.0% locally vs 77.8% in CI from an identical
+# test run — because whether a testless package contributes zero-coverage
+# statements to the profile varies by environment.
+github.com/YohannHommet/argus/server/internal/ingest 73.0
+github.com/YohannHommet/argus/server/internal/ingest/otlp 91.0
+github.com/YohannHommet/argus/server/internal/ingest/hooks 84.0
+github.com/YohannHommet/argus/server/internal/ingest/normalize 90.0
+github.com/YohannHommet/argus/server/internal/sim 85.0

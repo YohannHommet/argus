@@ -27,13 +27,22 @@ type Store interface {
 	Close()
 }
 
-// Writer is what ingest needs. One method: batches are the unit of work.
+// Writer is what ingest needs. Batches are the unit of work.
 type Writer interface {
 	// WriteBatch gates on ingest_dedup, inserts events, and updates all projections plus
 	// rollup_dirty in ONE transaction, honouring the lock-ordering invariant (§1.6). Returns
 	// per-event outcomes so ingest can count dedup suppressions and fan out to stream only the
 	// events that were actually persisted.
 	WriteBatch(ctx context.Context, b []model.Event) (BatchResult, error)
+
+	// WriteMetrics is a P2-06 deviation, recorded here rather than silently added: SPEC §3.3's
+	// Writer only lists WriteBatch, but §1.8/§2.3 require OTLP metric data points to land in
+	// metric_samples, and P2-04 hands them to the store as []model.MetricSample (never
+	// model.Event — there is no Kind for a metric, SPEC §1.4). WriteMetrics gates on the same
+	// ingest_dedup ledger (the "metric:" key form), inserts into metric_samples, and marks
+	// rollup_dirty with source='metric', all in one transaction, in the same relative lock
+	// order as WriteBatch (dedup -> metric_samples -> rollup_dirty).
+	WriteMetrics(ctx context.Context, samples []model.MetricSample) (BatchResult, error)
 }
 
 // Reader is what internal/query needs to serve the HTTP API.
@@ -63,6 +72,13 @@ type Reader interface {
 // implements all of it, but only Migrate has a real body in P1-04.
 type Maintenance interface {
 	Migrate(ctx context.Context) error
+	// MigrationsCurrent reports whether every migration goose knows about
+	// (embedded in the running binary) has been applied to this database —
+	// true iff none are pending. It backs GET /readyz's "migrations":
+	// "current" condition (SPEC §3.8; Phase-1 deviation D-5 recorded that
+	// /readyz previously asserted this without checking). Wired into
+	// httpapi by P2-09, not here.
+	MigrationsCurrent(ctx context.Context) (bool, error)
 	EnsurePartitions(ctx context.Context, from, to time.Time) error
 	RunRollups(ctx context.Context, maxBuckets int) (RollupStats, error)
 	SweepAbandoned(ctx context.Context, idle time.Duration) (int64, error)
@@ -105,12 +121,23 @@ type Page struct {
 // wire codec; store only passes it through.
 type Cursor string
 
-// BatchResult reports Writer.WriteBatch's per-event outcomes so ingest can
-// count dedup suppressions and fan out only persisted events to the stream
-// hub.
+// BatchResult reports Writer.WriteBatch/WriteMetrics per-batch outcomes so
+// ingest can count dedup suppressions, count and log too-old rejections
+// separately (SPEC §1.7 rule 3: argus_ingest_too_old_total), and fan out
+// only persisted events to the stream hub.
+//
+// Rejected is currently always equal to TooOld: too_old (no partition to
+// land in) is the only rejection reason WriteBatch/WriteMetrics classify in
+// P2-06. It is kept as its own field, distinct from TooOld, because a future
+// rejection reason (e.g. a malformed row caught defensively) would add to
+// Rejected without being a TooOld — callers that only care about "how many
+// events did not make it in" should read Rejected, callers that need the
+// SPEC §1.7 metric specifically should read TooOld.
 type BatchResult struct {
 	Written   int
 	Deduped   int
+	TooOld    int
+	Rejected  int
 	EventRefs []model.EventRef
 }
 

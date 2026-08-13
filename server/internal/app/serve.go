@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"time"
 
@@ -17,8 +18,8 @@ import (
 //  1. /readyz starts failing (ReadyState flips false).
 //  2. http.Server.Shutdown, bounded by ARGUS_SHUTDOWN_GRACE, so in-flight
 //     requests finish.
-//  3. Close/drain the ingest queue (the ordered seam for P2's pipeline;
-//     nothing exists to drain in Phase 1).
+//  3. Close/drain the ingest queue (internal/ingest.Pipeline.Close, SPEC
+//     §3.6/§3.8, wired in by P2-09).
 //  4. pool.Close().
 //
 // It returns nil only if every step completed cleanly; a non-nil error
@@ -30,22 +31,62 @@ func (a *App) Serve(ctx context.Context) error {
 		Store:  a.store,
 		Logger: a.logger,
 		Ready:  a.ready,
+		// Migrations/Queue satisfy httpapi's narrow ports structurally
+		// (postgres.Store.MigrationsCurrent, ingest.Pipeline.QueueSaturated)
+		// without httpapi importing either package (SPEC §3.8's third
+		// readiness condition, P2-09).
+		Migrations: a.store,
+		Queue:      a.ingest,
+
+		// HookMounter wires P2-11's POST /ingest/hook onto the mount seam
+		// router.go already exposes; router.go itself is never touched.
+		HookMounter: a.hooks,
+
+		// OTLPMounter wires P2-10's POST /v1/{logs,metrics,traces} onto the
+		// other mount seam router.go already exposes.
+		OTLPMounter: a.otlp,
 	})
 
+	// The listener is bound synchronously, before Addr()/Listening() has any
+	// meaning to a caller, and before the accept loop's own goroutine
+	// starts — net.Listen is fast and this keeps "Serve has bound its
+	// listener" an unambiguous, race-free signal rather than something a
+	// caller has to poll for. Binding this way (rather than
+	// http.Server.ListenAndServe, which opens its own listener internally
+	// with no way to read back the resolved address) is what lets a caller
+	// pass HTTPAddr="127.0.0.1:0" and discover the OS-assigned port via
+	// Addr() instead of guessing a free one ahead of time and racing this
+	// bind (P2-13's end-to-end test needs exactly that: an ephemeral port,
+	// never a hardcoded one).
+	var lc net.ListenConfig
+	ln, err := lc.Listen(ctx, "tcp", a.cfg.HTTPAddr)
+	if err != nil {
+		close(a.addrReady)
+		return fmt.Errorf("app: listen on %s: %w", a.cfg.HTTPAddr, err)
+	}
+	a.listenAddr = ln.Addr().String()
+	close(a.addrReady)
+
 	a.server = &http.Server{
-		Addr:              a.cfg.HTTPAddr,
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
 	serveErr := make(chan error, 1)
 	go func() {
-		if err := a.server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := a.server.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serveErr <- err
 			return
 		}
 		serveErr <- nil
 	}()
+
+	// The partition-manager job (SPEC §2.4) watches the same ctx as the
+	// server: it stops ticking as soon as ctx is cancelled and needs no
+	// entry in the shutdown() sequence below — a tick in flight when the
+	// pool closes just logs one error, never corrupts state, since
+	// EnsurePartitions is idempotent.
+	go a.partitions.Run(ctx)
 
 	select {
 	case err := <-serveErr:
@@ -83,9 +124,12 @@ func (a *App) shutdown() error {
 }
 
 // drainIngest is step (3) of the shutdown sequence: closing the ingest
-// queue and waiting for it to fully drain. No queue exists until P2's
-// internal/ingest pipeline lands; this seam exists now so that pipeline
-// only has to fill in a body, not change Serve's ordering.
-func (a *App) drainIngest(_ context.Context) error {
-	return nil
+// queue and waiting for it to fully drain, bounded by the same
+// ARGUS_SHUTDOWN_GRACE deadline as the HTTP shutdown (ctx is shutdownCtx,
+// shared with step (2)). A non-nil return means the deadline was hit before
+// every buffered batch was flushed — SPEC §3.8: "exit 0 only if the drain
+// completed; 1 if events were dropped" — which shutdown propagates as
+// Serve's own error.
+func (a *App) drainIngest(ctx context.Context) error {
+	return a.ingest.Close(ctx)
 }

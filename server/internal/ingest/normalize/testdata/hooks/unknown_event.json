@@ -1,0 +1,5 @@
+{
+  "session_id": "sess-0001",
+  "hook_event_name": "SomethingFutureVersionAdds",
+  "foo": "bar"
+}

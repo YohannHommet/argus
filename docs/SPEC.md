@@ -1217,6 +1217,19 @@ This table is complete and normative — P1-02 implements exactly these keys.
 | `ARGUS_CORS_ORIGINS` | empty | needed only for `pnpm dev` on :5173 |
 | `ARGUS_UI_ENABLED` | `true` | serve the embedded SPA |
 
+**Reserved namespace: `ARGUS_TEST_*`.** No config key may begin with
+`ARGUS_TEST_`, and the unknown-variable validator deliberately ignores that
+whole prefix. It belongs to the test and CI harness, which must pass a database
+URL that is emphatically *not* the server's own `ARGUS_DATABASE_URL`:
+`ARGUS_TEST_DATABASE_URL` points at a throwaway Postgres whose schema each
+integration test creates and drops (§8.4). Strictness is retained for every
+other `ARGUS_*` variable, because that is what catches an
+`ARGUS_HTTTP_ADDR`-class typo — but without a reserved namespace the harness's
+own variable is itself reported as a typo, which is exactly how the Phase-2
+end-to-end test failed in CI while passing on a developer machine where the
+variable happened not to be exported. A reserved prefix rather than an
+allow-list of one name, so the next harness variable cannot reintroduce it.
+
 ### 3.8 Subcommands and lifecycle
 
 `argusd <serve|migrate|sim|retention|rebuild-projections|prices|config|version|healthcheck>`. Flat

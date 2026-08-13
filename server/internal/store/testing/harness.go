@@ -44,6 +44,33 @@ func NewPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	ctx := context.Background()
 
+	scopedDSN := NewDSN(t)
+	pool, err := storepg.NewPool(ctx, scopedDSN, 5)
+	if err != nil {
+		t.Fatalf("store/testing: opening pool for %s: %v", scopedDSN, err)
+	}
+	t.Cleanup(pool.Close)
+
+	if err := storepg.New(pool).Migrate(ctx); err != nil {
+		t.Fatalf("store/testing: migrating: %v", err)
+	}
+
+	return pool
+}
+
+// NewDSN provisions a freshly created, empty (unmigrated) Postgres schema
+// exactly like NewPool does, but returns its scoped connection string
+// instead of an already-open, already-migrated pool. It exists for callers
+// that need to construct their own store — internal/app.New opens its own
+// pgxpool.Pool from a DSN and runs its own Migrate/EnsurePartitions calls,
+// so a P2-13 end-to-end test that starts the real App needs the schema to
+// point *it* at, not a pool this package already opened and migrated
+// itself. Two calls, even from parallel tests, get non-colliding schemas
+// (same guarantee as NewPool, same cleanup-on-test-end behaviour).
+func NewDSN(t *testing.T) string {
+	t.Helper()
+	ctx := context.Background()
+
 	base := baseDSN(t)
 	schema := nextSchemaName()
 
@@ -67,18 +94,7 @@ func NewPool(t *testing.T) *pgxpool.Pool {
 		_, _ = dropper.Exec(dropCtx, "DROP SCHEMA "+schema+" CASCADE")
 	})
 
-	scopedDSN := withSearchPath(base, schema)
-	pool, err := storepg.NewPool(ctx, scopedDSN, 5)
-	if err != nil {
-		t.Fatalf("store/testing: opening pool for schema %s: %v", schema, err)
-	}
-	t.Cleanup(pool.Close)
-
-	if err := storepg.New(pool).Migrate(ctx); err != nil {
-		t.Fatalf("store/testing: migrating schema %s: %v", schema, err)
-	}
-
-	return pool
+	return withSearchPath(base, schema)
 }
 
 // nextSchemaName generates a Postgres-identifier-safe, process-unique

@@ -168,6 +168,86 @@ func TestLoadUnknownEnvWarning(t *testing.T) {
 	require.Contains(t, warnings[0], "ARGUS_HTTTP_ADDR")
 }
 
+// TestLoadReservedTestEnvPrefixIgnored pins the CI regression that broke the
+// end-to-end test: ci.yml exports ARGUS_TEST_DATABASE_URL for the integration
+// harness, and strict unknown-ARGUS_*-variable validation flagged it as a
+// typo. The whole ARGUS_TEST_ namespace is reserved for the harness, so any
+// future harness variable is ignored too — while everything outside it stays
+// strict, because that strictness is what catches a real typo.
+func TestLoadReservedTestEnvPrefixIgnored(t *testing.T) {
+	tests := []struct {
+		name         string
+		env          map[string]string
+		wantWarnings []string
+	}{
+		{
+			name: "the exact variable CI exports is ignored",
+			env: map[string]string{
+				"ARGUS_DATABASE_URL":      "postgres://localhost/argus",
+				"ARGUS_TEST_DATABASE_URL": "postgres://localhost:55433/argus",
+			},
+			wantWarnings: nil,
+		},
+		{
+			name: "any other reserved-prefix variable is ignored too",
+			env: map[string]string{
+				"ARGUS_DATABASE_URL":          "postgres://localhost/argus",
+				"ARGUS_TEST_SOMETHING_FUTURE": "1",
+				"ARGUS_TEST_DATABASE_URL":     "postgres://localhost:55433/argus",
+			},
+			wantWarnings: nil,
+		},
+		{
+			name: "a genuinely unknown variable is still reported",
+			env: map[string]string{
+				"ARGUS_DATABASE_URL": "postgres://localhost/argus",
+				"ARGUS_BOGUS":        "nope",
+			},
+			wantWarnings: []string{"ARGUS_BOGUS"},
+		},
+		{
+			name: "reserved prefix does not mask a real typo alongside it",
+			env: map[string]string{
+				"ARGUS_DATABASE_URL":      "postgres://localhost/argus",
+				"ARGUS_TEST_DATABASE_URL": "postgres://localhost:55433/argus",
+				"ARGUS_HTTTP_ADDR":        ":9999",
+			},
+			wantWarnings: []string{"ARGUS_HTTTP_ADDR"},
+		},
+		{
+			name: "a bare ARGUS_TEST_ prefix with no suffix is still reserved",
+			env: map[string]string{
+				"ARGUS_DATABASE_URL": "postgres://localhost/argus",
+				"ARGUS_TEST_":        "1",
+			},
+			wantWarnings: nil,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, warnings, err := load("", environOf(tc.env))
+			require.NoError(t, err)
+			require.Len(t, warnings, len(tc.wantWarnings))
+			for i, want := range tc.wantWarnings {
+				require.Contains(t, warnings[i], want)
+			}
+		})
+	}
+}
+
+// TestNoConfigKeyUsesReservedPrefix enforces the other half of the contract:
+// the reserved namespace is only safe to skip if no real config key can ever
+// live inside it. Reflection over the schema means a future field added under
+// ARGUS_TEST_ fails here rather than being silently unreadable from the
+// environment.
+func TestNoConfigKeyUsesReservedPrefix(t *testing.T) {
+	for _, s := range schema() {
+		require.False(t, strings.HasPrefix(s.env, ReservedEnvPrefix),
+			"config key %s must not use the harness-reserved %s prefix — unknownEnvWarnings skips that namespace, so such a key would be silently unvalidated", s.env, ReservedEnvPrefix)
+	}
+}
+
 func TestPrintRedactsSecrets(t *testing.T) {
 	cfg, _, err := load("", environOf(map[string]string{ //nolint:gosec // test fixture credentials, not real secrets
 		"ARGUS_DATABASE_URL": "postgres://user:pass@localhost/argus",

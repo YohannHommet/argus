@@ -91,4 +91,52 @@ else
   fi
 fi
 
+# --- P2-13: run the demo sim inside the stack and assert row counts --------
+#
+# `argusd` (not a separate argus-sim image) has the `sim` subcommand (SPEC
+# lead note 7: "two binaries, one implementation"), so `docker compose exec`
+# into the already-running argusd container and target its own loopback —
+# no extra image, no host networking, and it exercises the exact same wire
+# path a real Claude Code process would use. Row counts are read the same
+# way, via `docker compose exec postgres psql`, since this script has no
+# other route into the compose network's Postgres (no port is published by
+# default, deploy/docker-compose.yml's whole point).
+sim_sessions=5
+
+log "running the demo sim inside the argusd container (--sessions=${sim_sessions})"
+docker compose -f "$compose_file" exec -T argusd /argusd sim \
+  --mode=demo \
+  --sessions="$sim_sessions" \
+  --flush-immediately \
+  --tool-use-id-in-hooks=true \
+  --target=http://localhost:8080
+
+psql_query() {
+  docker compose -f "$compose_file" exec -T postgres psql -U argus -d argus -tAc "$1"
+}
+
+log "polling for the sim's rows to land (ingest is async, ARGUS_INGEST_FLUSH)"
+deadline=$((SECONDS + 30))
+event_count=0
+until [ "$SECONDS" -ge "$deadline" ]; do
+  event_count="$(psql_query 'SELECT count(*) FROM events' | tr -d '[:space:]')"
+  if [ -n "$event_count" ] && [ "$event_count" -gt 0 ] 2>/dev/null; then
+    break
+  fi
+  sleep 1
+done
+
+if [ -z "$event_count" ] || [ "$event_count" -le 0 ] 2>/dev/null; then
+  log "FAIL: expected events to be > 0 after the demo sim, got '${event_count:-<empty>}'"
+  exit 1
+fi
+log "events: $event_count"
+
+session_count="$(psql_query 'SELECT count(*) FROM sessions' | tr -d '[:space:]')"
+if [ -z "$session_count" ] || [ "$session_count" -le 0 ] 2>/dev/null; then
+  log "FAIL: expected sessions to be > 0 after the demo sim, got '${session_count:-<empty>}'"
+  exit 1
+fi
+log "sessions: $session_count"
+
 log "PASS"
