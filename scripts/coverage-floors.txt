@@ -10,10 +10,21 @@
 # down without a matching drop in real coverage.
 github.com/YohannHommet/argus/server/internal/httpapi 66.0
 github.com/YohannHommet/argus/server/internal/store/postgres 83.0
-github.com/YohannHommet/argus/server/internal/ingest 87.0
-# The entry above is a prefix match and therefore conflates the ingest
-# subpackages; these guard each one so a regression in a low-coverage package
-# cannot hide behind a high-coverage sibling.
+# Each entry gates EXACTLY that package, never its subpackages (see
+# coverage-floor.sh), so every package that should be gated needs its own
+# line. internal/ingest below is the pipeline package alone: its previous 87.0
+# was an artifact of the old prefix match averaging normalize's 96% into it,
+# so 73.0 is the first floor reflecting the pipeline's own coverage rather
+# than its siblings'. No test was removed to get there, and a pipeline
+# regression is now catchable where before it could hide behind normalize.
+#
+# internal/store/postgres/gen is deliberately ungated: sqlc-generated code
+# with no test files, exercised through its callers, excluded from the quality
+# gates the same way .golangci.yml excludes it. Counting it made the postgres
+# floor environment-dependent — 84.0% locally vs 77.8% in CI from an identical
+# test run — because whether a testless package contributes zero-coverage
+# statements to the profile varies by environment.
+github.com/YohannHommet/argus/server/internal/ingest 73.0
 github.com/YohannHommet/argus/server/internal/ingest/otlp 91.0
 github.com/YohannHommet/argus/server/internal/ingest/hooks 84.0
 github.com/YohannHommet/argus/server/internal/ingest/normalize 90.0
