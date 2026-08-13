@@ -1,0 +1,2400 @@
+openapi: 3.1.0
+
+info:
+  title: Argus API
+  version: "1.0.0"
+  description: >-
+    Argus's read API (docs/SPEC.md §4): agent-telemetry sessions, timelines,
+    events, tool calls, subagent trees, and rollup-backed analytics, plus the
+    ops endpoints and the ingest surface (OTLP + the hooks webhook). This
+    file is hand-authored and reviewed like code (§4.4): it is the contract
+    handlers must satisfy, not a byproduct of them.
+
+    Every vendor-supplied field (project, model, vendor, decision_source,
+    query_source, tool_source, permission_mode, start_type, terminal_type,
+    and friends) is typed `string` with no `enum`, on purpose (SPEC §0,
+    §4.4): Argus ingests values it has never seen and must never reject or
+    mistype them. Only Argus's own four closed taxonomies — `kind`,
+    `source`, `correlation`, `status` (SPEC §0) — and Argus-invented request
+    parameters (sort keys, dimensions, buckets) are enumerated.
+
+servers:
+  - url: /
+    description: Argus serves the ops, read, and ingest surfaces from one origin.
+
+tags:
+  - name: ops
+    description: Liveness/readiness/metrics (SPEC §3.8).
+  - name: sessions
+    description: Session list, detail, timeline, turns, tool calls, subagents, stream.
+  - name: events
+    description: Cross-session event search and single-event lookup.
+  - name: tool-calls
+    description: Cross-session tool-call list — the decision-provenance drill-down.
+  - name: analytics
+    description: Rollup-backed fleet KPIs (SPEC §2.4, §4.3).
+  - name: quality
+    description: Data-quality introspection (unmapped event names, hook latency).
+  - name: meta
+    description: Version, retention, vendors seen, data-quality summary, filter facets.
+  - name: stream
+    description: Server-Sent Events (SPEC §5).
+  - name: ingest
+    description: OTLP receivers and the hooks webhook (SPEC §3.4, §3.5).
+
+paths:
+  /healthz:
+    get:
+      operationId: healthz
+      tags: [ops]
+      summary: Liveness probe
+      description: No DB, no readiness check (SPEC §3.8) — always cheap and correct.
+      responses:
+        "200":
+          description: The process is alive.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OKStatus"
+              examples:
+                ok:
+                  value: { status: "ok" }
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+
+  /readyz:
+    get:
+      operationId: readyz
+      tags: [ops]
+      summary: Readiness probe
+      description: >-
+        DB ping + migrations current + queue not saturated (SPEC §3.8).
+        Fails during the graceful-shutdown drain sequence.
+      responses:
+        "200":
+          description: Ready to serve traffic.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadyStatus"
+              examples:
+                ready:
+                  value: { status: "ok", migrations: "current" }
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "503":
+          description: Not ready (draining, DB unreachable, migrations pending, or queue saturated).
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+              examples:
+                notReady:
+                  value:
+                    type: "urn:argus:error:not-ready"
+                    title: "Service Unavailable"
+                    status: 503
+                    detail: "database health check failed: dial tcp: connection refused"
+                    instance: "/readyz"
+
+  /metrics:
+    get:
+      operationId: metrics
+      tags: [ops]
+      summary: Prometheus metrics
+      responses:
+        "200":
+          description: Prometheus text exposition format.
+          content:
+            text/plain:
+              schema:
+                type: string
+              examples:
+                sample:
+                  value: |
+                    # HELP argus_ingest_events_total Total events ingested
+                    # TYPE argus_ingest_events_total counter
+                    argus_ingest_events_total 48213
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+
+  /api/v1/meta:
+    get:
+      operationId: getMeta
+      tags: [meta]
+      summary: Version, retention, vendors seen, data-quality summary
+      responses:
+        "200":
+          description: Server metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Meta"
+              examples:
+                default:
+                  value:
+                    version: "1.4.0"
+                    commit: "a1b2c3d"
+                    retention_days: 90
+                    feature_flags: { estimated_cost: true }
+                    vendors: ["claude_code", "codex"]
+                    logs_exporter_seen: true
+                    metrics_exporter_seen: true
+                    hooks_seen: true
+                    tool_details_seen: false
+                    estimated_cost_present: false
+                    data_quality:
+                      logs_exporter_seen: true
+                      metrics_exporter_seen: true
+                      hooks_seen: true
+                      tool_details_seen: false
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+
+  /api/v1/facets:
+    get:
+      operationId: getFacets
+      tags: [meta]
+      summary: Filter option lists for the session/event/tool-call UIs
+      responses:
+        "200":
+          description: Distinct raw values seen so far, per filterable dimension.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Facets"
+              examples:
+                default:
+                  value:
+                    projects: ["argus", "platform"]
+                    models: ["claude-opus-5", "claude-sonnet-4-5"]
+                    vendors: ["claude_code", "codex"]
+                    tools: ["Edit", "Read", "Bash"]
+                    decision_sources: ["config", "hook", "user_permanent", "user_temporary", "user_reject", "user_abort"]
+                    query_sources: ["", "sdk", "generate_session_title"]
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+
+  /api/v1/sessions:
+    get:
+      operationId: listSessions
+      tags: [sessions]
+      summary: List sessions
+      parameters:
+        - $ref: "#/components/parameters/Project"
+        - $ref: "#/components/parameters/Vendor"
+        - $ref: "#/components/parameters/Model"
+        - name: status
+          in: query
+          description: Repeated params OR (SPEC §4.1).
+          schema:
+            type: array
+            items:
+              $ref: "#/components/schemas/SessionStatus"
+          style: form
+          explode: true
+        - $ref: "#/components/parameters/Tool"
+        - $ref: "#/components/parameters/DecisionSource"
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - name: q
+          in: query
+          description: Substring match on id/project/cwd.
+          schema:
+            type: string
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [last_event_at, started_at, cost_usd, event_count]
+            default: last_event_at
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: A page of sessions.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionsListResponse"
+              examples:
+                default:
+                  value:
+                    data:
+                      - id: "3f7a3b1e-0000-0000-0000-000000000001"
+                        vendor: "claude_code"
+                        project: "argus"
+                        cwd: "/home/y/Labs/argus"
+                        status: "active"
+                        start_type: "fresh"
+                        started_at: "2026-08-11T09:02:11.412Z"
+                        ended_at: null
+                        last_event_at: "2026-08-11T09:31:44.900Z"
+                        duration_ms: 1773488
+                        turn_count: 12
+                        event_count: 480
+                        tool_call_count: 96
+                        tool_reject_count: 3
+                        subagent_count: 2
+                        error_count: 1
+                        tokens: { input: 41233, output: 18944, cache_read: 1204331, cache_creation: 88210 }
+                        cost:
+                          usd: 4.2711
+                          reported_usd: 4.2711
+                          estimated_usd: 0
+                          estimated_share: 0
+                          by_query_source: { "": 3.9011, "sdk": 0.35, "generate_session_title": 0.02 }
+                          dominant_query_source: ""
+                          other_query_source_usd: 0.37
+                        models: ["claude-opus-5", "claude-sonnet-4-5"]
+                        partial: false
+                        app_version: "2.1.220"
+                        entrypoint: "cli"
+                        terminal_type: "wsl-Ubuntu"
+                    page: { next_cursor: "eyJrIjoi4oCm", has_more: true }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+
+  /api/v1/sessions/{id}:
+    get:
+      operationId: getSession
+      tags: [sessions]
+      summary: Session detail with aggregates
+      parameters:
+        - $ref: "#/components/parameters/SessionID"
+        - $ref: "#/components/parameters/IfNoneMatch"
+      responses:
+        "200":
+          description: The session, plus permission history, top tools, and decision summary.
+          headers:
+            ETag:
+              description: Hash of the underlying max(ts, seq) + filter (SPEC §4.1).
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionDetail"
+              examples:
+                default:
+                  value:
+                    id: "3f7a3b1e-0000-0000-0000-000000000001"
+                    vendor: "claude_code"
+                    project: "argus"
+                    cwd: "/home/y/Labs/argus"
+                    status: "active"
+                    start_type: "fresh"
+                    started_at: "2026-08-11T09:02:11.412Z"
+                    ended_at: null
+                    last_event_at: "2026-08-11T09:31:44.900Z"
+                    duration_ms: 1773488
+                    turn_count: 12
+                    event_count: 480
+                    tool_call_count: 96
+                    tool_reject_count: 3
+                    subagent_count: 2
+                    error_count: 1
+                    tokens: { input: 41233, output: 18944, cache_read: 1204331, cache_creation: 88210 }
+                    cost:
+                      usd: 4.2711
+                      reported_usd: 4.2711
+                      estimated_usd: 0
+                      estimated_share: 0
+                      by_query_source: { "": 3.9011, "sdk": 0.35 }
+                      dominant_query_source: ""
+                      other_query_source_usd: 0.35
+                    models: ["claude-opus-5"]
+                    partial: false
+                    app_version: "2.1.220"
+                    entrypoint: "cli"
+                    terminal_type: "wsl-Ubuntu"
+                    permission_mode_history:
+                      - ts: "2026-08-11T09:05:00.000Z"
+                        from: "default"
+                        to: "acceptEdits"
+                        trigger: "user"
+                    top_tools:
+                      - { tool_name: "Edit", calls: 40, rejects: 2, p50_ms: 120 }
+                    decision_summary:
+                      accept: 90
+                      reject: 6
+                      by_source: { config: 60, hook: 10, user_permanent: 10, user_temporary: 5, user_reject: 4, user_abort: 1 }
+                      exact_share: 1.0
+                    sources_seen: ["otel_log", "hook"]
+                    raw_events_expired: false
+                    hook_latency: { p50_ms: 9, p95_ms: 41, by_hook_event: { PostToolUse: 9 } }
+                    first_seen_at: "2026-08-11T09:02:10.000Z"
+                    user: "yohann"
+                    organization_id: "org_1"
+        "304":
+          description: Not modified — the client's If-None-Match matches the current ETag.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+
+  /api/v1/sessions/{id}/timeline:
+    get:
+      operationId: getSessionTimeline
+      tags: [sessions]
+      summary: Raw events of one session, keyset-paginated
+      parameters:
+        - $ref: "#/components/parameters/SessionID"
+        - $ref: "#/components/parameters/Kinds"
+        - $ref: "#/components/parameters/PromptID"
+        - $ref: "#/components/parameters/AgentID"
+        - $ref: "#/components/parameters/Order"
+        - name: collapse
+          in: query
+          schema:
+            type: boolean
+            default: false
+        - $ref: "#/components/parameters/Fields"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: A page of timeline events, ordered by (ts, vendor_seq, seq).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TimelineListResponse"
+              examples:
+                default:
+                  value:
+                    data:
+                      - event_ref: "MTc2ODk2NzMyNDIyMTAwMDAwMDo5MTgyMzM"
+                        seq: 918233
+                        id: "0192abcd-0000-0000-0000-000000000001"
+                        ts: "2026-08-11T09:12:04.221Z"
+                        session_id: "3f7a3b1e-0000-0000-0000-000000000001"
+                        prompt_id: "p_88f1"
+                        kind: "tool.decision"
+                        event_name: "tool_decision"
+                        source: "otel_log"
+                        vendor: "claude_code"
+                        tool_name: "Edit"
+                        tool_use_id: "toolu_01A"
+                        decision: "reject"
+                        decision_source: "user_reject"
+                        tool_source: "builtin"
+                        query_source: null
+                        model: null
+                        tokens: null
+                        cost: null
+                        duration_ms: null
+                        success: null
+                        error_type: null
+                        agent_id: null
+                        agent_type: null
+                        permission_mode: "default"
+                        file_path: "server/internal/store/postgres/store.go"
+                        clock_skewed: false
+                    page: { next_cursor: null, has_more: false }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+
+  /api/v1/sessions/{id}/turns:
+    get:
+      operationId: listSessionTurns
+      tags: [sessions]
+      summary: Turn list with per-turn aggregates
+      parameters:
+        - $ref: "#/components/parameters/SessionID"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: A page of turns.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TurnsListResponse"
+              examples:
+                default:
+                  value:
+                    data:
+                      - session_id: "3f7a3b1e-0000-0000-0000-000000000001"
+                        prompt_id: "p_88f1"
+                        turn_index: 3
+                        started_at: "2026-08-11T09:11:00.000Z"
+                        ended_at: "2026-08-11T09:12:30.000Z"
+                        first_seen_at: "2026-08-11T09:11:00.100Z"
+                        last_event_at: "2026-08-11T09:12:30.000Z"
+                        duration_ms: 90000
+                        status: "complete"
+                        api_request_count: 2
+                        tool_call_count: 5
+                        tool_reject_count: 1
+                        error_count: 0
+                        input_tokens: 4123
+                        output_tokens: 1894
+                        cache_read_tokens: 12000
+                        cache_creation_tokens: 800
+                        cost_usd: 0.42
+                        cost_estimated_usd: 0
+                        models: ["claude-opus-5"]
+                    page: { next_cursor: null, has_more: false }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+
+  /api/v1/sessions/{id}/tool-calls:
+    get:
+      operationId: listSessionToolCalls
+      tags: [sessions]
+      summary: Tool calls of one session
+      parameters:
+        - $ref: "#/components/parameters/SessionID"
+        - $ref: "#/components/parameters/Tool"
+        - $ref: "#/components/parameters/DecisionSource"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: A page of tool calls.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ToolCallsListResponse"
+              examples:
+                default:
+                  $ref: "#/components/examples/ToolCallsListExample"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+
+  /api/v1/sessions/{id}/subagents:
+    get:
+      operationId: getSessionSubagents
+      tags: [sessions]
+      summary: Subagent tree with cost attribution
+      parameters:
+        - $ref: "#/components/parameters/SessionID"
+      responses:
+        "200":
+          description: The assembled subagent tree(s), depth-capped at 16.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubagentTree"
+              examples:
+                default:
+                  value:
+                    data:
+                      - agent_id: "root"
+                        parent_agent_id: null
+                        agent_type: "main"
+                        depth: 0
+                        status: "running"
+                        started_at: "2026-08-11T09:02:11.412Z"
+                        ended_at: null
+                        tool_call_count: 40
+                        cost_usd: null
+                        children:
+                          - agent_id: "ag_7"
+                            parent_agent_id: "root"
+                            agent_type: "Explore"
+                            depth: 1
+                            status: "complete"
+                            started_at: "2026-08-11T09:05:00.000Z"
+                            ended_at: "2026-08-11T09:08:00.000Z"
+                            spawn_tool_use_id: "toolu_9f"
+                            tool_call_count: 12
+                            cost_usd: null
+                            children: []
+                    cost_attribution:
+                      by_query_source: { "": 3.9011, "sdk": 0.35 }
+                      dominant_query_source: ""
+                      other_query_source_usd: 0.35
+                      per_node_available: false
+                      note: "Claude Code does not emit per-agent cost; api_request carries query_source only."
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+
+  /api/v1/sessions/{id}/stream:
+    get:
+      operationId: streamSession
+      tags: [stream]
+      summary: SSE stream of one session's events and projection updates
+      parameters:
+        - $ref: "#/components/parameters/SessionID"
+        - $ref: "#/components/parameters/LastEventIDHeader"
+        - $ref: "#/components/parameters/After"
+      responses:
+        "200":
+          description: >-
+            text/event-stream of StreamEvent frames (SPEC §5.1): event,
+            session, stats, lag, reset, shutdown, plus `: heartbeat`
+            comments. Frame type is carried by the SSE `event:` line, not a
+            field in the JSON body.
+          content:
+            text/event-stream:
+              schema:
+                $ref: "#/components/schemas/StreamEvent"
+              examples:
+                event:
+                  summary: "event: event"
+                  value:
+                    event_ref: "MTc2ODk2NzMyNDIyMTAwMDAwMDo5MTgyMzQ"
+                    seq: 918234
+                    id: "0192abcd-0000-0000-0000-000000000002"
+                    ts: "2026-08-11T09:12:05.221Z"
+                    session_id: "3f7a3b1e-0000-0000-0000-000000000001"
+                    prompt_id: "p_88f1"
+                    kind: "tool.result"
+                    event_name: "tool_result"
+                    source: "otel_log"
+                    vendor: "claude_code"
+                    tool_name: "Edit"
+                    tool_use_id: "toolu_01A"
+                    decision: null
+                    decision_source: null
+                    tool_source: "builtin"
+                    query_source: null
+                    model: null
+                    tokens: null
+                    cost: null
+                    duration_ms: 180
+                    success: true
+                    error_type: null
+                    agent_id: null
+                    agent_type: null
+                    permission_mode: "default"
+                    file_path: "server/internal/store/postgres/store.go"
+                    clock_skewed: false
+                session:
+                  summary: "event: session"
+                  value:
+                    id: "3f7a3b1e-0000-0000-0000-000000000001"
+                    status: "active"
+                    turn_count: 12
+                    cost: { usd: 4.27, reported_usd: 4.27, estimated_usd: 0, estimated_share: 0, by_query_source: {}, dominant_query_source: "", other_query_source_usd: 0 }
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+
+  /api/v1/events:
+    get:
+      operationId: listEvents
+      tags: [events]
+      summary: Cross-session event search
+      parameters:
+        - $ref: "#/components/parameters/Kinds"
+        - $ref: "#/components/parameters/Tool"
+        - $ref: "#/components/parameters/DecisionSource"
+        - $ref: "#/components/parameters/PromptID"
+        - $ref: "#/components/parameters/AgentID"
+        - $ref: "#/components/parameters/Project"
+        - $ref: "#/components/parameters/Vendor"
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/Order"
+        - $ref: "#/components/parameters/Fields"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: A page of events across sessions.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TimelineListResponse"
+              examples:
+                default:
+                  value:
+                    data:
+                      - event_ref: "MTc2ODk2NzMyNDIyMTAwMDAwMDo5MTgyMzM"
+                        seq: 918233
+                        id: "0192abcd-0000-0000-0000-000000000001"
+                        ts: "2026-08-11T09:12:04.221Z"
+                        session_id: "3f7a3b1e-0000-0000-0000-000000000001"
+                        prompt_id: "p_88f1"
+                        kind: "tool.decision"
+                        event_name: "tool_decision"
+                        source: "otel_log"
+                        vendor: "claude_code"
+                        tool_name: "Edit"
+                        tool_use_id: "toolu_01A"
+                        decision: "reject"
+                        decision_source: "user_reject"
+                        tool_source: "builtin"
+                        query_source: null
+                        model: null
+                        tokens: null
+                        cost: null
+                        duration_ms: null
+                        success: null
+                        error_type: null
+                        agent_id: null
+                        agent_type: null
+                        permission_mode: "default"
+                        file_path: "server/internal/store/postgres/store.go"
+                        clock_skewed: false
+                    page: { next_cursor: null, has_more: false }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+
+  /api/v1/events/{ref}:
+    get:
+      operationId: getEvent
+      tags: [events]
+      summary: One event with full attrs (the detail drawer)
+      parameters:
+        - name: ref
+          in: path
+          required: true
+          description: Opaque event_ref (base64url of ts+seq, SPEC §4.1). Not a lookup by id.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The event, with attrs.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventDetail"
+              examples:
+                default:
+                  value:
+                    event_ref: "MTc2ODk2NzMyNDIyMTAwMDAwMDo5MTgyMzM"
+                    seq: 918233
+                    id: "0192abcd-0000-0000-0000-000000000001"
+                    ts: "2026-08-11T09:12:04.221Z"
+                    session_id: "3f7a3b1e-0000-0000-0000-000000000001"
+                    prompt_id: "p_88f1"
+                    kind: "tool.decision"
+                    event_name: "tool_decision"
+                    source: "otel_log"
+                    vendor: "claude_code"
+                    tool_name: "Edit"
+                    tool_use_id: "toolu_01A"
+                    decision: "reject"
+                    decision_source: "user_reject"
+                    tool_source: "builtin"
+                    query_source: null
+                    model: null
+                    tokens: null
+                    cost: null
+                    duration_ms: null
+                    success: null
+                    error_type: null
+                    agent_id: null
+                    agent_type: null
+                    permission_mode: "default"
+                    file_path: "server/internal/store/postgres/store.go"
+                    clock_skewed: false
+                    attrs: { "tool_decision.tool_use_id": "toolu_01A", "tool_decision.decision": "reject" }
+        "400":
+          description: Malformed event_ref.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+              examples:
+                invalidEventRef:
+                  value:
+                    type: "urn:argus:error:invalid-event-ref"
+                    title: "Bad Request"
+                    status: 400
+                    detail: "event_ref is not valid base64url of ts:seq"
+                    instance: "/api/v1/events/not-a-ref"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+
+  /api/v1/tool-calls:
+    get:
+      operationId: listToolCalls
+      tags: [tool-calls]
+      summary: Cross-session tool-call list — the decision-provenance drill-down
+      parameters:
+        - $ref: "#/components/parameters/Project"
+        - $ref: "#/components/parameters/Tool"
+        - $ref: "#/components/parameters/DecisionSource"
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: A page of tool calls across sessions.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ToolCallsListResponse"
+              examples:
+                default:
+                  $ref: "#/components/examples/ToolCallsListExample"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+
+  /api/v1/analytics/summary:
+    get:
+      operationId: getAnalyticsSummary
+      tags: [analytics]
+      summary: Scalar KPIs for a window
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/Project"
+        - $ref: "#/components/parameters/Model"
+        - $ref: "#/components/parameters/Vendor"
+        - $ref: "#/components/parameters/AnalyticsSource"
+      responses:
+        "200":
+          description: Fleet-level KPIs for the window.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Summary"
+              examples:
+                default:
+                  value:
+                    window: { from: "2026-08-04T00:00:00Z", to: "2026-08-11T00:00:00Z", bucket: "hour" }
+                    sessions: 34
+                    turns: 291
+                    api_requests: 1044
+                    api_errors: 7
+                    tool_calls: 2210
+                    tool_rejects: 91
+                    reject_rate: 0.0412
+                    tokens: { input: 1200000, output: 340000, cache_read: 81000000, cache_creation: 990000 }
+                    cost: { usd: 71.44, reported_usd: 70.02, estimated_usd: 1.42, estimated_share: 0.0199 }
+                    loc: { added: 8123, removed: 2044 }
+                    active_seconds: 41220
+                    source: "event"
+                    metrics_only_projects: ["legacy-app"]
+                    not_attributable: []
+                modelFiltered:
+                  summary: "?model=claude-sonnet-4-5 — non-model-attributable counters are null"
+                  value:
+                    window: { from: "2026-08-04T00:00:00Z", to: "2026-08-11T00:00:00Z", bucket: "hour" }
+                    sessions: null
+                    turns: null
+                    api_requests: 512
+                    api_errors: 3
+                    tool_calls: null
+                    tool_rejects: null
+                    reject_rate: null
+                    tokens: { input: 600000, output: 170000, cache_read: 40000000, cache_creation: 500000 }
+                    cost: { usd: 35.2, reported_usd: 35.2, estimated_usd: 0, estimated_share: 0 }
+                    loc: null
+                    active_seconds: null
+                    source: "event"
+                    metrics_only_projects: []
+                    not_attributable: ["sessions", "turns", "tool_calls", "tool_rejects", "reject_rate", "loc", "active_seconds"]
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+
+  /api/v1/analytics/timeseries:
+    get:
+      operationId: getAnalyticsTimeseries
+      tags: [analytics]
+      summary: Bucketed series, dense and zero-filled
+      parameters:
+        - name: metric
+          in: query
+          required: true
+          schema:
+            $ref: "#/components/schemas/TimeseriesMetric"
+        - name: bucket
+          in: query
+          schema:
+            type: string
+            enum: [hour, day]
+          description: Defaults to hour for windows <= 7 days, day beyond.
+        - name: group_by
+          in: query
+          schema:
+            type: string
+            enum: [project, model, vendor, none]
+            default: none
+        - name: limit_series
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 8
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/Project"
+        - $ref: "#/components/parameters/Model"
+        - $ref: "#/components/parameters/Vendor"
+        - $ref: "#/components/parameters/AnalyticsSource"
+      responses:
+        "200":
+          description: Dense, zero-filled bucketed series.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Series"
+              examples:
+                default:
+                  value:
+                    bucket: "hour"
+                    buckets: ["2026-08-11T08:00:00Z", "2026-08-11T09:00:00Z"]
+                    series:
+                      - key: "argus"
+                        values: [1.2, 0]
+                    other: { values: [0.4, 0.1] }
+        "400":
+          description: Invalid metric/bucket, or a non-attributable metric under a model filter.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+              examples:
+                notAttributable:
+                  value:
+                    type: "urn:argus:error:not-attributable"
+                    title: "Bad Request"
+                    status: 400
+                    detail: "metric=sessions is not attributable under a model filter"
+                    instance: "/api/v1/analytics/timeseries"
+                invalidMetric:
+                  value:
+                    type: "urn:argus:error:invalid-parameter"
+                    title: "Bad Request"
+                    status: 400
+                    detail: "metric must be one of cost, tokens, sessions, turns, api_requests, api_errors, tool_calls, tool_rejects, loc"
+                    instance: "/api/v1/analytics/timeseries"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+
+  /api/v1/analytics/breakdown:
+    get:
+      operationId: getAnalyticsBreakdown
+      tags: [analytics]
+      summary: Top-N by dimension
+      parameters:
+        - name: dimension
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [model, project, tool, decision_source, query_source, error_type]
+            description: >-
+              The Argus-invented selector naming which raw dimension to
+              break down by — not the vendor value itself, which stays an
+              unconstrained string in the response rows.
+        - name: metric
+          in: query
+          schema:
+            type: string
+            enum: [cost, calls, tokens]
+            default: calls
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 20
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/Project"
+        - $ref: "#/components/parameters/Model"
+        - $ref: "#/components/parameters/Vendor"
+        - $ref: "#/components/parameters/AnalyticsSource"
+      responses:
+        "200":
+          description: Top-N rows by the requested dimension.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Breakdown"
+              examples:
+                default:
+                  value:
+                    dimension: "tool"
+                    rows:
+                      - { key: "Edit", value: 812, share: 0.37 }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+
+  /api/v1/analytics/decisions:
+    get:
+      operationId: getAnalyticsDecisions
+      tags: [analytics]
+      summary: Accept/reject x decision_source matrix
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/Project"
+      responses:
+        "200":
+          description: The decision-provenance matrix.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DecisionMatrix"
+              examples:
+                default:
+                  value:
+                    rows:
+                      - tool_name: "Edit"
+                        accept: 300
+                        reject: 41
+                        by_source: { config: 210, hook: 12, user_permanent: 40, user_temporary: 38, user_reject: 37, user_abort: 4 }
+                        exact_share: 1.0
+                        p50_wait_ms: 1900
+                        p95_wait_ms: 22400
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+
+  /api/v1/quality/unknown-kinds:
+    get:
+      operationId: getQualityUnknownKinds
+      tags: [quality]
+      summary: Grouped unmapped event_names, one raw sample each
+      parameters:
+        - name: since
+          in: query
+          schema:
+            type: string
+            default: "-24h"
+            description: RFC 3339 or relative shorthand (e.g. -24h, -7d).
+      responses:
+        "200":
+          description: Unmapped event_name groups within the window.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QualityUnknownKindsResponse"
+              examples:
+                default:
+                  value:
+                    rows:
+                      - event_name: "some_new_event"
+                        source: "otel_log"
+                        count: 41
+                        first_seen: "2026-08-10T10:00:00Z"
+                        last_seen: "2026-08-11T09:00:00Z"
+                        sample: { "raw.attr": "value" }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+
+  /api/v1/quality/hook-latency:
+    get:
+      operationId: getQualityHookLatency
+      tags: [quality]
+      summary: hook.execution_end percentiles by hook_event
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+      responses:
+        "200":
+          description: Hook latency percentiles per hook_event.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QualityHookLatencyResponse"
+              examples:
+                default:
+                  value:
+                    rows:
+                      - { hook_event: "PostToolUse", executions: 412, p50_ms: 9, p95_ms: 41, p99_ms: 120, errors: 0, cancelled: 0 }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+
+  /api/v1/stream:
+    get:
+      operationId: streamAll
+      tags: [stream]
+      summary: SSE firehose across all sessions
+      parameters:
+        - $ref: "#/components/parameters/Kinds"
+        - $ref: "#/components/parameters/Project"
+        - $ref: "#/components/parameters/Vendor"
+        - $ref: "#/components/parameters/LastEventIDHeader"
+        - $ref: "#/components/parameters/After"
+      responses:
+        "200":
+          description: >-
+            text/event-stream of StreamEvent frames (SPEC §5.1), filtered by
+            kinds/project/vendor, plus session projection and stats frames.
+          content:
+            text/event-stream:
+              schema:
+                $ref: "#/components/schemas/StreamEvent"
+              examples:
+                stats:
+                  summary: "event: stats"
+                  value:
+                    events_per_sec: 42.1
+                    active_sessions: 3
+                    queue_depth: 0
+                    ingest_lag_ms: 180
+                    dropped_total: 0
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+
+  /v1/logs:
+    post:
+      operationId: ingestLogs
+      tags: [ingest]
+      summary: OTLP logs export
+      description: >-
+        Standard OTLP/HTTP log export
+        (https://opentelemetry.io/docs/specs/otlp/#otlphttp). Body is the
+        opaque OTLP ExportLogsServiceRequest, protobuf or JSON-encoded per
+        Content-Type — described here as opaque object/binary rather than
+        modeled field-by-field, since OTLP's own spec is the source of truth
+        for that wire format.
+      requestBody:
+        required: true
+        content:
+          application/x-protobuf:
+            schema:
+              type: string
+              contentEncoding: binary
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+            examples:
+              otlpLogs:
+                value: { resourceLogs: [] }
+      responses:
+        "200":
+          description: Accepted (OTLP ExportLogsServiceResponse; empty JSON object on success).
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+              examples:
+                default:
+                  value: {}
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+
+  /v1/metrics:
+    post:
+      operationId: ingestMetrics
+      tags: [ingest]
+      summary: OTLP metrics export
+      description: >-
+        Standard OTLP/HTTP metrics export; body is the opaque OTLP
+        ExportMetricsServiceRequest (see /v1/logs's description).
+      requestBody:
+        required: true
+        content:
+          application/x-protobuf:
+            schema:
+              type: string
+              contentEncoding: binary
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+            examples:
+              otlpMetrics:
+                value: { resourceMetrics: [] }
+      responses:
+        "200":
+          description: Accepted (OTLP ExportMetricsServiceResponse; empty JSON object on success).
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+              examples:
+                default:
+                  value: {}
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+
+  /v1/traces:
+    post:
+      operationId: ingestTraces
+      tags: [ingest]
+      summary: OTLP traces export (accepted, not stored)
+      description: >-
+        Standard OTLP/HTTP traces export; body is the opaque OTLP
+        ExportTraceServiceRequest (see /v1/logs's description). Argus has no
+        trace model (SPEC §1) — accepted and discarded so a fully-configured
+        OTel exporter never errors.
+      requestBody:
+        required: true
+        content:
+          application/x-protobuf:
+            schema:
+              type: string
+              contentEncoding: binary
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+            examples:
+              otlpTraces:
+                value: { resourceSpans: [] }
+      responses:
+        "200":
+          description: Accepted (OTLP ExportTraceServiceResponse; empty JSON object).
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+              examples:
+                default:
+                  value: {}
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+
+  /ingest/hook:
+    post:
+      operationId: ingestHook
+      tags: [ingest]
+      summary: Claude Code / vendor hooks webhook
+      description: >-
+        One raw hook payload per call (SPEC §1.1, §3.5). Shape varies by
+        hook_event and vendor, so the body is documented as an opaque object
+        rather than one fixed schema.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+            examples:
+              postToolUse:
+                value:
+                  hook_event_name: "PostToolUse"
+                  session_id: "3f7a3b1e-0000-0000-0000-000000000001"
+                  tool_name: "Edit"
+      responses:
+        "202":
+          description: Accepted for asynchronous ingestion.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IngestAck"
+              examples:
+                default:
+                  value: { status: "accepted" }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+
+components:
+  parameters:
+    SessionID:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    Limit:
+      name: limit
+      in: query
+      description: Default 50, max 500 (SPEC §4.1).
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 500
+        default: 50
+    Cursor:
+      name: cursor
+      in: query
+      description: Opaque keyset cursor from a previous page's page.next_cursor.
+      schema:
+        type: string
+    From:
+      name: from
+      in: query
+      description: RFC 3339 timestamp or relative shorthand (-24h, -7d). SPEC §4.1.
+      schema:
+        type: string
+    To:
+      name: to
+      in: query
+      description: RFC 3339 timestamp or relative shorthand (-24h, -7d). SPEC §4.1.
+      schema:
+        type: string
+    Project:
+      name: project
+      in: query
+      description: Repeated params OR within the field (SPEC §4.1).
+      schema:
+        type: array
+        items:
+          type: string
+      style: form
+      explode: true
+    Model:
+      name: model
+      in: query
+      description: Repeated params OR within the field (SPEC §4.1).
+      schema:
+        type: array
+        items:
+          type: string
+      style: form
+      explode: true
+    Vendor:
+      name: vendor
+      in: query
+      description: Repeated params OR within the field (SPEC §4.1).
+      schema:
+        type: array
+        items:
+          type: string
+      style: form
+      explode: true
+    Tool:
+      name: tool
+      in: query
+      description: Repeated params OR within the field (SPEC §4.1).
+      schema:
+        type: array
+        items:
+          type: string
+      style: form
+      explode: true
+    DecisionSource:
+      name: decision_source
+      in: query
+      description: Repeated params OR within the field (SPEC §4.1).
+      schema:
+        type: array
+        items:
+          type: string
+      style: form
+      explode: true
+    Kinds:
+      name: kinds
+      in: query
+      description: Repeated params OR within the field (SPEC §4.1). Argus's own closed Kind taxonomy.
+      schema:
+        type: array
+        items:
+          $ref: "#/components/schemas/Kind"
+      style: form
+      explode: true
+    PromptID:
+      name: prompt_id
+      in: query
+      schema:
+        type: string
+    AgentID:
+      name: agent_id
+      in: query
+      schema:
+        type: string
+    Order:
+      name: order
+      in: query
+      schema:
+        type: string
+        enum: [asc, desc]
+        default: asc
+    Fields:
+      name: fields
+      in: query
+      description: slim (default, no attrs) or full.
+      schema:
+        type: string
+        enum: [slim, full]
+        default: slim
+    After:
+      name: after
+      in: query
+      description: Alternative to the Last-Event-ID header for SSE reconnect (SPEC §5.2).
+      schema:
+        type: string
+    LastEventIDHeader:
+      name: Last-Event-ID
+      in: header
+      description: SSE reconnect position, an opaque event_ref (SPEC §5.2).
+      schema:
+        type: string
+    IfNoneMatch:
+      name: If-None-Match
+      in: header
+      description: ETag from a previous response; a match returns 304 with an empty body.
+      schema:
+        type: string
+    AnalyticsSource:
+      name: source
+      in: query
+      description: >-
+        Which source table to aggregate from. Argus-invented toggle, not
+        vendor vocabulary: source='event' and source='metric' rows are never
+        summed together (SPEC §2.4).
+      schema:
+        type: string
+        enum: [event, metric]
+        default: event
+
+  responses:
+    BadRequest:
+      description: Malformed or out-of-range request parameter.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+          examples:
+            invalidCursor:
+              value:
+                type: "urn:argus:error:invalid-cursor"
+                title: "Bad Request"
+                status: 400
+                detail: "cursor failed signature check"
+                instance: "/api/v1/sessions"
+            invalidParameter:
+              value:
+                type: "urn:argus:error:invalid-parameter"
+                title: "Bad Request"
+                status: 400
+                detail: "from: not a valid RFC 3339 timestamp or relative shorthand: \"garbage\""
+                instance: "/api/v1/sessions"
+    Unauthorized:
+      description: Missing or invalid bearer token (ARGUS_API_TOKEN configured).
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+          examples:
+            default:
+              value:
+                type: "urn:argus:error:unauthorized"
+                title: "Unauthorized"
+                status: 401
+                detail: "missing or invalid bearer token"
+                instance: "/api/v1/sessions"
+    NotFound:
+      description: No such resource.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+          examples:
+            default:
+              value:
+                type: "urn:argus:error:not-found"
+                title: "Not Found"
+                status: 404
+                detail: "no such resource"
+                instance: "/api/v1/sessions/does-not-exist"
+    MethodNotAllowed:
+      description: Method not allowed on this resource.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+          examples:
+            default:
+              value:
+                type: "urn:argus:error:method-not-allowed"
+                title: "Method Not Allowed"
+                status: 405
+                detail: "method not allowed on this resource"
+                instance: "/api/v1/sessions"
+
+  examples:
+    ToolCallsListExample:
+      value:
+        data:
+          - id: "5b1f7a2e-0000-0000-0000-000000000001"
+            session_id: "3f7a3b1e-0000-0000-0000-000000000001"
+            prompt_id: "p_88f1"
+            tool_use_id: "toolu_01A"
+            tool_name: "Edit"
+            tool_source: "builtin"
+            agent_id: null
+            decision: "reject"
+            decision_source: "user_reject"
+            permission_mode: "default"
+            started_at: "2026-08-11T09:12:04.000Z"
+            decided_at: "2026-08-11T09:12:04.200Z"
+            ended_at: "2026-08-11T09:12:04.200Z"
+            duration_ms: 200
+            wait_ms: 200
+            success: false
+            error_type: null
+            file_path: "server/internal/store/postgres/store.go"
+            input_size_bytes: 412
+            result_size_bytes: null
+            correlation: "exact"
+            event_count: 2
+        page: { next_cursor: null, has_more: false }
+
+  schemas:
+    OKStatus:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          description: Argus-computed liveness state, not vendor vocabulary.
+          enum: [ok]
+
+    ReadyStatus:
+      type: object
+      required: [status, migrations]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        migrations:
+          type: string
+          enum: [current]
+
+    Problem:
+      type: object
+      description: >-
+        RFC 9457 problem+json (SPEC §4.1). type is a stable
+        urn:argus:error:<slug> from Argus's own error catalog (see
+        server/internal/httpapi/problem.go); left as a plain string rather
+        than enumerated here so a future URN never needs a spec-only
+        migration to become valid.
+      required: [type, title, status]
+      properties:
+        type:
+          type: string
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        instance:
+          type: string
+        errors:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+
+    PageInfo:
+      type: object
+      required: [next_cursor, has_more]
+      properties:
+        next_cursor:
+          type: [string, "null"]
+        has_more:
+          type: boolean
+
+    IngestAck:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [accepted]
+
+    Kind:
+      type: string
+      description: Argus's own closed event taxonomy (SPEC §1.4) — one of the four closed vocabularies SPEC §0 permits.
+      enum:
+        - session.start
+        - session.end
+        - turn.start
+        - turn.end
+        - turn.prompt_expanded
+        - llm.request
+        - llm.error
+        - llm.refusal
+        - llm.request_body
+        - llm.response_body
+        - assistant.message
+        - tool.pre
+        - tool.decision
+        - tool.permission_request
+        - tool.result
+        - tool.batch
+        - subagent.start
+        - subagent.stop
+        - task.created
+        - task.completed
+        - permission.mode_changed
+        - hook.registered
+        - hook.execution_start
+        - hook.execution_end
+        - fs.file_changed
+        - workspace.cwd_changed
+        - workspace.directory_added
+        - workspace.config_changed
+        - workspace.instructions_loaded
+        - workspace.worktree_created
+        - workspace.worktree_removed
+        - context.compact_start
+        - context.compact_end
+        - mcp.connection
+        - mcp.elicitation
+        - mcp.elicitation_result
+        - agent.auth
+        - agent.setup
+        - agent.plugin
+        - agent.internal_error
+        - agent.notification
+        - agent.idle
+        - unknown
+
+    EventSource:
+      type: string
+      description: Provenance pipeline (SPEC §1.3) — Argus-closed, one of the four permitted taxonomies.
+      enum: [otel_log, otel_metric, hook, sim]
+
+    AnalyticsSourceValue:
+      type: string
+      description: >-
+        The echoed ?source= toggle on analytics responses (SPEC §4.3):
+        which source table was aggregated. Distinct from EventSource
+        (per-event provenance) — an Argus-invented request/response
+        concept, not a vendor value.
+      enum: [event, metric]
+
+    Correlation:
+      type: string
+      description: Tool-call correlation confidence (SPEC §1.6) — Argus-closed.
+      enum: [exact, otel_only, hook_only, heuristic]
+
+    SessionStatus:
+      type: string
+      description: Argus-computed session lifecycle state (SPEC §1.7) — closed, unlike vendor vocabulary.
+      enum: [active, ended, abandoned, unknown]
+
+    TurnStatus:
+      type: string
+      description: Argus-computed turn lifecycle state (SPEC §2.1) — closed.
+      enum: [open, complete, failed]
+
+    SubagentStatus:
+      type: string
+      description: Argus-computed subagent lifecycle state (SPEC §2.3) — closed.
+      enum: [running, complete, failed, unknown]
+
+    TimeseriesMetric:
+      type: string
+      enum: [cost, tokens, sessions, turns, api_requests, api_errors, tool_calls, tool_rejects, loc]
+
+    TokenUsage:
+      type: object
+      required: [input, output, cache_read, cache_creation]
+      properties:
+        input: { type: integer, format: int64 }
+        output: { type: integer, format: int64 }
+        cache_read: { type: integer, format: int64 }
+        cache_creation: { type: integer, format: int64 }
+
+    SessionCost:
+      type: object
+      description: >-
+        by_query_source keys are raw agent-supplied query_source values,
+        passed through verbatim (SPEC §1.9) — never mapped onto a
+        main/subagent semantic.
+      required: [usd, reported_usd, estimated_usd, estimated_share, by_query_source, dominant_query_source, other_query_source_usd]
+      properties:
+        usd: { type: number }
+        reported_usd: { type: number }
+        estimated_usd: { type: number }
+        estimated_share: { type: number }
+        by_query_source:
+          type: object
+          additionalProperties:
+            type: number
+        dominant_query_source:
+          type: string
+        other_query_source_usd:
+          type: number
+
+    SessionSummary:
+      type: object
+      required:
+        [id, vendor, project, cwd, status, start_type, started_at, ended_at, last_event_at, duration_ms,
+          turn_count, event_count, tool_call_count, tool_reject_count, subagent_count, error_count,
+          tokens, cost, models, partial, app_version, entrypoint, terminal_type]
+      properties:
+        id: { type: string }
+        vendor:
+          type: string
+          description: Agent-agnostic core text (claude_code, codex, gemini_cli, unknown); deliberately unconstrained.
+        project: { type: string }
+        cwd: { type: string }
+        status:
+          $ref: "#/components/schemas/SessionStatus"
+        start_type:
+          type: string
+          description: Vendor-supplied session start reason; unconstrained (SPEC §0).
+        started_at:
+          type: [string, "null"]
+          format: date-time
+          description: NULL until session.start is seen (SPEC §1.7).
+        ended_at:
+          type: [string, "null"]
+          format: date-time
+        last_event_at:
+          type: string
+          format: date-time
+        duration_ms:
+          type: [integer, "null"]
+          format: int64
+        turn_count: { type: integer }
+        event_count: { type: integer, format: int64 }
+        tool_call_count: { type: integer }
+        tool_reject_count: { type: integer }
+        subagent_count: { type: integer }
+        error_count: { type: integer }
+        tokens:
+          $ref: "#/components/schemas/TokenUsage"
+        cost:
+          $ref: "#/components/schemas/SessionCost"
+        models:
+          type: array
+          items:
+            type: string
+        partial:
+          type: boolean
+          description: True when no session.start was ever seen (stub-on-reference, SPEC §1.7).
+        app_version:
+          type: string
+        entrypoint:
+          type: string
+        terminal_type:
+          type: string
+          description: Vendor-supplied, free-form; a live capture found "wsl-Ubuntu" outside any documented enum.
+
+    SessionsListResponse:
+      type: object
+      required: [data, page]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/SessionSummary"
+        page:
+          $ref: "#/components/schemas/PageInfo"
+
+    PermissionModeChange:
+      type: object
+      required: [ts, from, to, trigger]
+      properties:
+        ts: { type: string, format: date-time }
+        from:
+          type: string
+          description: Vendor-supplied permission_mode value; unconstrained.
+        to:
+          type: string
+          description: Vendor-supplied permission_mode value; unconstrained.
+        trigger:
+          type: string
+
+    ToolUsageSummary:
+      type: object
+      required: [tool_name, calls, rejects, p50_ms]
+      properties:
+        tool_name: { type: string }
+        calls: { type: integer }
+        rejects: { type: integer }
+        p50_ms:
+          type: [integer, "null"]
+
+    SessionDecisionSummary:
+      type: object
+      required: [accept, reject, by_source, exact_share]
+      properties:
+        accept: { type: integer }
+        reject: { type: integer }
+        by_source:
+          type: object
+          description: Keys are raw decision_source values, unconstrained (SPEC §1.9).
+          additionalProperties:
+            type: integer
+        exact_share: { type: number }
+
+    SessionHookLatency:
+      type: object
+      required: [p50_ms, p95_ms, by_hook_event]
+      properties:
+        p50_ms: { type: integer, format: int64 }
+        p95_ms: { type: integer, format: int64 }
+        by_hook_event:
+          type: object
+          additionalProperties:
+            type: integer
+            format: int64
+
+    SessionDetail:
+      allOf:
+        - $ref: "#/components/schemas/SessionSummary"
+        - type: object
+          required:
+            [permission_mode_history, top_tools, decision_summary, sources_seen,
+              raw_events_expired, hook_latency, first_seen_at, user, organization_id]
+          properties:
+            permission_mode_history:
+              type: array
+              items:
+                $ref: "#/components/schemas/PermissionModeChange"
+            top_tools:
+              type: array
+              items:
+                $ref: "#/components/schemas/ToolUsageSummary"
+            decision_summary:
+              $ref: "#/components/schemas/SessionDecisionSummary"
+            sources_seen:
+              type: array
+              items:
+                $ref: "#/components/schemas/EventSource"
+            raw_events_expired:
+              type: boolean
+            hook_latency:
+              oneOf:
+                - $ref: "#/components/schemas/SessionHookLatency"
+                - type: "null"
+            first_seen_at:
+              type: string
+              format: date-time
+            user:
+              type: string
+            organization_id:
+              type: string
+
+    TimelineEvent:
+      type: object
+      description: The timeline/event-search row shape (SPEC §4.3). fields=slim (default) omits attrs.
+      required:
+        [event_ref, seq, id, ts, session_id, prompt_id, kind, event_name, source, vendor,
+          tool_name, tool_use_id, decision, decision_source, tool_source, query_source, model,
+          tokens, cost, duration_ms, success, error_type, agent_id, agent_type, permission_mode,
+          file_path, clock_skewed]
+      properties:
+        event_ref: { type: string }
+        seq: { type: integer, format: int64 }
+        id: { type: string }
+        ts: { type: string, format: date-time }
+        session_id: { type: string }
+        prompt_id: { type: [string, "null"] }
+        kind:
+          $ref: "#/components/schemas/Kind"
+        event_name:
+          type: string
+          description: Unprefixed vendor raw event name (SPEC §1.5.1); provenance, not a Kind.
+        source:
+          $ref: "#/components/schemas/EventSource"
+        vendor:
+          type: string
+        tool_name: { type: [string, "null"] }
+        tool_use_id: { type: [string, "null"] }
+        decision:
+          type: [string, "null"]
+          description: Vendor-supplied; unconstrained (SPEC §0, §1.9).
+        decision_source:
+          type: [string, "null"]
+          description: Vendor-supplied; unconstrained (SPEC §0, §1.9).
+        tool_source:
+          type: [string, "null"]
+          description: Vendor-supplied; unconstrained (SPEC §0, §1.9).
+        query_source:
+          type: [string, "null"]
+          description: Vendor-supplied; unconstrained (SPEC §0, §1.9).
+        model:
+          type: [string, "null"]
+        tokens:
+          oneOf:
+            - $ref: "#/components/schemas/TokenUsage"
+            - type: "null"
+        cost:
+          oneOf:
+            - type: number
+            - type: "null"
+        duration_ms:
+          type: [integer, "null"]
+        success:
+          type: [boolean, "null"]
+        error_type:
+          type: [string, "null"]
+        agent_id:
+          type: [string, "null"]
+          description: Hook payloads only, never on OTel log events (SPEC §1.9).
+        agent_type:
+          type: [string, "null"]
+        permission_mode:
+          type: [string, "null"]
+          description: Vendor-supplied; unconstrained (SPEC §0, §1.9).
+        file_path:
+          type: [string, "null"]
+        clock_skewed:
+          type: boolean
+
+    EventDetail:
+      allOf:
+        - $ref: "#/components/schemas/TimelineEvent"
+        - type: object
+          required: [attrs]
+          properties:
+            attrs:
+              type: object
+              description: Full flattened source payload, including the promoted fields above (SPEC §1.3).
+              additionalProperties: true
+
+    TimelineListResponse:
+      type: object
+      required: [data, page]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/TimelineEvent"
+        page:
+          $ref: "#/components/schemas/PageInfo"
+
+    Turn:
+      type: object
+      required:
+        [session_id, prompt_id, turn_index, started_at, ended_at, first_seen_at, last_event_at,
+          duration_ms, status, api_request_count, tool_call_count, tool_reject_count, error_count,
+          input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, cost_usd,
+          cost_estimated_usd, models]
+      properties:
+        session_id: { type: string }
+        prompt_id: { type: string }
+        turn_index: { type: [integer, "null"] }
+        started_at: { type: [string, "null"], format: date-time }
+        ended_at: { type: [string, "null"], format: date-time }
+        first_seen_at: { type: string, format: date-time }
+        last_event_at: { type: string, format: date-time }
+        duration_ms: { type: [integer, "null"] }
+        status:
+          $ref: "#/components/schemas/TurnStatus"
+        api_request_count: { type: integer }
+        tool_call_count: { type: integer }
+        tool_reject_count: { type: integer }
+        error_count: { type: integer }
+        input_tokens: { type: integer, format: int64 }
+        output_tokens: { type: integer, format: int64 }
+        cache_read_tokens: { type: integer, format: int64 }
+        cache_creation_tokens: { type: integer, format: int64 }
+        cost_usd: { type: number }
+        cost_estimated_usd: { type: number }
+        models:
+          type: array
+          items:
+            type: string
+
+    TurnsListResponse:
+      type: object
+      required: [data, page]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Turn"
+        page:
+          $ref: "#/components/schemas/PageInfo"
+
+    ToolCall:
+      type: object
+      description: >-
+        Cross-session/session-scoped tool-call row (SPEC §2.3, §4.2). No
+        worked JSON example is given in SPEC §4.3 for this endpoint; field
+        names mirror internal/model.ToolCall's Go fields snake_cased for
+        consistency with every other wire shape in this file.
+      required:
+        [id, session_id, prompt_id, tool_use_id, tool_name, tool_source, agent_id, decision,
+          decision_source, permission_mode, started_at, decided_at, ended_at, duration_ms, wait_ms,
+          success, error_type, file_path, input_size_bytes, result_size_bytes, correlation, event_count]
+      properties:
+        id: { type: string }
+        session_id: { type: string }
+        prompt_id: { type: [string, "null"] }
+        tool_use_id: { type: [string, "null"] }
+        tool_name: { type: string }
+        tool_source:
+          type: [string, "null"]
+          description: Vendor-supplied; unconstrained (SPEC §0, §1.9).
+        agent_id:
+          type: [string, "null"]
+          description: Hook-sourced only (SPEC §1.9).
+        decision:
+          type: [string, "null"]
+          description: Vendor-supplied; unconstrained (SPEC §0, §1.9).
+        decision_source:
+          type: [string, "null"]
+          description: Vendor-supplied; unconstrained (SPEC §0, §1.9).
+        permission_mode:
+          type: [string, "null"]
+          description: Vendor-supplied; unconstrained (SPEC §0, §1.9).
+        started_at: { type: string, format: date-time }
+        decided_at: { type: [string, "null"], format: date-time }
+        ended_at: { type: [string, "null"], format: date-time }
+        duration_ms: { type: [integer, "null"] }
+        wait_ms:
+          type: [integer, "null"]
+          description: decided_at - started_at, the human/permission latency (SPEC §2.3).
+        success: { type: [boolean, "null"] }
+        error_type: { type: [string, "null"] }
+        file_path: { type: [string, "null"] }
+        input_size_bytes: { type: [integer, "null"] }
+        result_size_bytes: { type: [integer, "null"] }
+        correlation:
+          $ref: "#/components/schemas/Correlation"
+        event_count: { type: integer }
+
+    ToolCallsListResponse:
+      type: object
+      required: [data, page]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/ToolCall"
+        page:
+          $ref: "#/components/schemas/PageInfo"
+
+    SubagentNode:
+      type: object
+      description: >-
+        cost_usd is always null in v1 (SPEC §1.9); tool_call_count is null
+        when the session has no hook coverage, never 0.
+      required:
+        [agent_id, parent_agent_id, agent_type, depth, status, started_at, ended_at,
+          tool_call_count, cost_usd, children]
+      properties:
+        agent_id: { type: string }
+        parent_agent_id: { type: [string, "null"] }
+        agent_type:
+          type: string
+          description: Vendor-supplied; unconstrained (SPEC §0).
+        depth: { type: integer }
+        status:
+          $ref: "#/components/schemas/SubagentStatus"
+        started_at: { type: [string, "null"], format: date-time }
+        ended_at: { type: [string, "null"], format: date-time }
+        spawn_tool_use_id: { type: string }
+        tool_call_count: { type: [integer, "null"] }
+        cost_usd: { type: [number, "null"] }
+        children:
+          type: array
+          items:
+            $ref: "#/components/schemas/SubagentNode"
+
+    SubagentCostAttribution:
+      type: object
+      required: [by_query_source, dominant_query_source, other_query_source_usd, per_node_available, note]
+      properties:
+        by_query_source:
+          type: object
+          additionalProperties:
+            type: number
+        dominant_query_source:
+          type: string
+        other_query_source_usd:
+          type: number
+        per_node_available:
+          type: boolean
+          description: Always false in v1 (SPEC §1.9).
+        note:
+          type: string
+
+    SubagentTree:
+      type: object
+      required: [data, cost_attribution]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/SubagentNode"
+        cost_attribution:
+          $ref: "#/components/schemas/SubagentCostAttribution"
+
+    Window:
+      type: object
+      required: [from, to, bucket]
+      properties:
+        from: { type: string, format: date-time }
+        to: { type: string, format: date-time }
+        bucket:
+          type: string
+          enum: [hour, day]
+
+    Cost:
+      type: object
+      description: Fleet-level cost shape — no by_query_source split (SPEC §4.3; that split lives only on the session).
+      required: [usd, reported_usd, estimated_usd, estimated_share]
+      properties:
+        usd: { type: number }
+        reported_usd: { type: number }
+        estimated_usd: { type: number }
+        estimated_share: { type: number }
+
+    LOC:
+      type: object
+      required: [added, removed]
+      properties:
+        added: { type: integer, format: int64 }
+        removed: { type: integer, format: int64 }
+
+    Summary:
+      type: object
+      description: >-
+        Every counter not attributable under a ?model= filter is null, never
+        0 (SPEC §4.1 "Null vs zero", §4.3 "Model-filtered requests");
+        not_attributable lists which ones.
+      required:
+        [window, sessions, turns, api_requests, api_errors, tool_calls, tool_rejects, reject_rate,
+          tokens, cost, loc, active_seconds, source, metrics_only_projects, not_attributable]
+      properties:
+        window:
+          $ref: "#/components/schemas/Window"
+        sessions: { type: [integer, "null"], format: int64 }
+        turns: { type: [integer, "null"], format: int64 }
+        api_requests: { type: integer, format: int64 }
+        api_errors: { type: integer, format: int64 }
+        tool_calls: { type: [integer, "null"] }
+        tool_rejects: { type: [integer, "null"] }
+        reject_rate: { type: [number, "null"] }
+        tokens:
+          $ref: "#/components/schemas/TokenUsage"
+        cost:
+          $ref: "#/components/schemas/Cost"
+        loc:
+          oneOf:
+            - $ref: "#/components/schemas/LOC"
+            - type: "null"
+        active_seconds: { type: [integer, "null"], format: int64 }
+        source:
+          $ref: "#/components/schemas/AnalyticsSourceValue"
+        metrics_only_projects:
+          type: array
+          items:
+            type: string
+        not_attributable:
+          type: array
+          items:
+            type: string
+
+    SeriesPoint:
+      type: object
+      required: [key, values]
+      properties:
+        key: { type: string }
+        values:
+          type: array
+          items:
+            type: number
+
+    SeriesOther:
+      type: object
+      required: [values]
+      properties:
+        values:
+          type: array
+          items:
+            type: number
+
+    Series:
+      type: object
+      required: [bucket, buckets, series]
+      properties:
+        bucket:
+          type: string
+          enum: [hour, day]
+        buckets:
+          type: array
+          items:
+            type: string
+            format: date-time
+        series:
+          type: array
+          items:
+            $ref: "#/components/schemas/SeriesPoint"
+        other:
+          $ref: "#/components/schemas/SeriesOther"
+
+    BreakdownRow:
+      type: object
+      required: [key, value, share]
+      properties:
+        key:
+          type: string
+          description: Raw dimension value (tool/model name, or an unconstrained vocabulary like decision_source/query_source).
+        value: { type: number }
+        share: { type: number }
+
+    Breakdown:
+      type: object
+      required: [dimension, rows]
+      properties:
+        dimension:
+          type: string
+        rows:
+          type: array
+          items:
+            $ref: "#/components/schemas/BreakdownRow"
+
+    DecisionMatrixRow:
+      type: object
+      required: [tool_name, accept, reject, by_source, exact_share, p50_wait_ms, p95_wait_ms]
+      properties:
+        tool_name: { type: string }
+        accept: { type: integer, format: int64 }
+        reject: { type: integer, format: int64 }
+        by_source:
+          type: object
+          description: Keys are raw decision_source values, unconstrained (SPEC §1.9).
+          additionalProperties:
+            type: integer
+            format: int64
+        exact_share: { type: number }
+        p50_wait_ms: { type: [integer, "null"], format: int64 }
+        p95_wait_ms: { type: [integer, "null"], format: int64 }
+
+    DecisionMatrix:
+      type: object
+      required: [rows]
+      properties:
+        rows:
+          type: array
+          items:
+            $ref: "#/components/schemas/DecisionMatrixRow"
+
+    Facets:
+      type: object
+      required: [projects, models, vendors, tools, decision_sources, query_sources]
+      properties:
+        projects: { type: array, items: { type: string } }
+        models: { type: array, items: { type: string } }
+        vendors: { type: array, items: { type: string } }
+        tools: { type: array, items: { type: string } }
+        decision_sources: { type: array, items: { type: string } }
+        query_sources: { type: array, items: { type: string } }
+
+    DataQuality:
+      type: object
+      required: [logs_exporter_seen, metrics_exporter_seen, hooks_seen, tool_details_seen]
+      properties:
+        logs_exporter_seen: { type: boolean }
+        metrics_exporter_seen: { type: boolean }
+        hooks_seen: { type: boolean }
+        tool_details_seen: { type: boolean }
+
+    Meta:
+      type: object
+      description: >-
+        SPEC §4.3 full shape. The live handler (server/internal/httpapi/meta.go)
+        currently returns only {version, commit, retention_days} — P3-08
+        extends it to this full contract.
+      required:
+        [version, commit, retention_days, feature_flags, vendors, logs_exporter_seen,
+          metrics_exporter_seen, hooks_seen, tool_details_seen, estimated_cost_present, data_quality]
+      properties:
+        version: { type: string }
+        commit: { type: string }
+        retention_days: { type: integer }
+        feature_flags:
+          type: object
+          additionalProperties:
+            type: boolean
+        vendors:
+          type: array
+          items:
+            type: string
+        logs_exporter_seen: { type: boolean }
+        metrics_exporter_seen: { type: boolean }
+        hooks_seen: { type: boolean }
+        tool_details_seen: { type: boolean }
+        estimated_cost_present: { type: boolean }
+        data_quality:
+          $ref: "#/components/schemas/DataQuality"
+
+    UnknownKindGroup:
+      type: object
+      required: [event_name, source, count, first_seen, last_seen, sample]
+      properties:
+        event_name: { type: string }
+        source:
+          $ref: "#/components/schemas/EventSource"
+        count: { type: integer, format: int64 }
+        first_seen: { type: string, format: date-time }
+        last_seen: { type: string, format: date-time }
+        sample:
+          type: object
+          additionalProperties: true
+
+    QualityUnknownKindsResponse:
+      type: object
+      required: [rows]
+      properties:
+        rows:
+          type: array
+          items:
+            $ref: "#/components/schemas/UnknownKindGroup"
+
+    HookLatencyRow:
+      type: object
+      required: [hook_event, executions, p50_ms, p95_ms, p99_ms, errors, cancelled]
+      properties:
+        hook_event: { type: string }
+        executions: { type: integer, format: int64 }
+        p50_ms: { type: integer, format: int64 }
+        p95_ms: { type: integer, format: int64 }
+        p99_ms: { type: integer, format: int64 }
+        errors: { type: integer, format: int64 }
+        cancelled: { type: integer, format: int64 }
+
+    QualityHookLatencyResponse:
+      type: object
+      required: [rows]
+      properties:
+        rows:
+          type: array
+          items:
+            $ref: "#/components/schemas/HookLatencyRow"
+
+    StreamEventFrame:
+      allOf:
+        - $ref: "#/components/schemas/TimelineEvent"
+      description: "event: event — a persisted event, slim shape (SPEC §5.1). Carries `id:` (the event_ref) on the SSE frame."
+
+    StreamSessionFrame:
+      type: object
+      description: "event: session — debounced (500ms/session) projection snapshot (SPEC §5.1). No `id:` line."
+      required: [id, status, turn_count, cost]
+      properties:
+        id: { type: string }
+        status:
+          $ref: "#/components/schemas/SessionStatus"
+        turn_count: { type: integer }
+        cost:
+          $ref: "#/components/schemas/SessionCost"
+
+    StreamStatsFrame:
+      type: object
+      description: "event: stats — pipeline health, every 2s (SPEC §5.1). No `id:` line."
+      required: [events_per_sec, active_sessions, queue_depth, ingest_lag_ms, dropped_total]
+      properties:
+        events_per_sec: { type: number }
+        active_sessions: { type: integer }
+        queue_depth: { type: integer }
+        ingest_lag_ms: { type: integer }
+        dropped_total: { type: integer }
+
+    StreamLagFrame:
+      type: object
+      description: "event: lag — a subscriber's buffer overflowed (SPEC §5.1). No `id:` line."
+      required: [dropped]
+      properties:
+        dropped: { type: integer }
+
+    StreamResetFrame:
+      type: object
+      description: "event: reset — the requested replay position predates the window (SPEC §5.1, §5.2). No `id:` line."
+      required: [reason, from]
+      properties:
+        reason:
+          type: string
+          enum: [replay_window_exceeded]
+        from: { type: string, format: date-time }
+
+    StreamShutdownFrame:
+      type: object
+      description: "event: shutdown — sent once on graceful shutdown so the browser reconnects instead of erroring (SPEC §5.1). No payload fields; body is an empty JSON object."
+      properties: {}
+      additionalProperties: false
+
+    StreamEvent:
+      description: >-
+        The union of SSE frame payload shapes (SPEC §5.1). The frame *type*
+        is carried by the SSE `event:` line, not a discriminator field in
+        the JSON body — a client picks the right member by the frame's
+        event name.
+      oneOf:
+        - $ref: "#/components/schemas/StreamEventFrame"
+        - $ref: "#/components/schemas/StreamSessionFrame"
+        - $ref: "#/components/schemas/StreamStatsFrame"
+        - $ref: "#/components/schemas/StreamLagFrame"
+        - $ref: "#/components/schemas/StreamResetFrame"
+        - $ref: "#/components/schemas/StreamShutdownFrame"
