@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/require"
 
+	"github.com/YohannHommet/argus/server/internal/model"
 	"github.com/YohannHommet/argus/server/internal/store/postgres"
 	storetesting "github.com/YohannHommet/argus/server/internal/store/testing"
 )
@@ -86,6 +87,74 @@ func TestEnsurePartitions_IsIdempotent(t *testing.T) {
 
 	got := indexNamesExcludingPKey(ctx, t, pool, "events_2026_06")
 	require.Len(t, got, len(wantEventsPartitionIndexSuffixes)+1, "a second EnsurePartitions call must not duplicate indexes")
+}
+
+// backwardJobHorizon mirrors internal/app.partitionJobHorizon (~2 months
+// ahead) so this test computes the same [from, to] range PartitionJob now
+// passes to EnsurePartitions (internal/app/jobs.go's tick, P3-12): the
+// value can't be imported (internal/app is not importable from
+// internal/store/postgres — and shouldn't be, per the depguard boundary in
+// SPEC §3.1), so it is duplicated here as a literal.
+const backwardJobHorizonForTest = 2 * 30 * 24 * time.Hour
+
+// TestEnsurePartitions_BackwardCreation_BackfillCrossingMonthBoundary is the
+// P3-12 AC: on a freshly migrated database with no partitions pre-created,
+// calling EnsurePartitions with the same [now-retention, now+horizon] range
+// PartitionJob's tick now passes must create partitions back to the
+// retention floor, so a 14-day backfill whose events cross a month boundary
+// ingests with zero too_old drops through the real WriteBatch path — while
+// an event older than the retention horizon (backward creation does not
+// widen retention, only closes the in-window backfill gap) still comes back
+// too_old.
+func TestEnsurePartitions_BackwardCreation_BackfillCrossingMonthBoundary(t *testing.T) {
+	pool := storetesting.NewPool(t)
+	ctx := context.Background()
+	store := postgres.New(pool)
+
+	// Fixed "now" that deliberately straddles a month boundary 14 days back
+	// (2026-03-03 minus 14d = 2026-02-17), so the backfill below exercises
+	// both February and March partitions.
+	now := time.Date(2026, time.March, 3, 10, 0, 0, 0, time.UTC)
+	retention := 14 * 24 * time.Hour
+	from := now.Add(-retention)
+	to := now.Add(backwardJobHorizonForTest)
+
+	require.NoError(t, store.EnsurePartitions(ctx, from, to),
+		"EnsurePartitions must create every monthly partition from the retention floor through the forward horizon")
+
+	// 15 events, one per day, from 14 days back through now: every one of
+	// them is inside the retention window, so none should be too_old.
+	sessionID := "session-backfill"
+	events := make([]model.Event, 0, 15)
+	for i := 0; i <= 14; i++ {
+		ts := now.Add(-time.Duration(i) * 24 * time.Hour)
+		events = append(events, mkEvent(t, sessionID, model.KindLLMRequest, model.SourceOTelLog, ts))
+	}
+
+	result, err := store.WriteBatch(ctx, events)
+	require.NoError(t, err)
+	require.Equal(t, 15, result.Written, "every in-retention event across the month boundary must be written, not misclassified too_old")
+	require.Equal(t, 0, result.TooOld, "backward partition creation must eliminate too_old drops for an in-retention backfill")
+	require.Equal(t, 0, result.Deduped)
+
+	var count int
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM events WHERE session_id = $1`, sessionID).Scan(&count))
+	require.Equal(t, 15, count, "all 15 backfilled events must actually land in the events table")
+
+	// An event older than the retention horizon must still be rejected
+	// too_old: backward creation only closes the in-window gap, it does not
+	// widen what counts as too_old (SPEC §1.7 rule 3). EnsurePartitions
+	// floors `from` to the start of its month (2026-02-01), so a ts merely
+	// one day before `from` (2026-02-16) would still land inside that
+	// already-created February partition — the event must instead predate
+	// the whole floor month to land outside every partition created above.
+	floorMonth := time.Date(from.Year(), from.Month(), 1, 0, 0, 0, 0, time.UTC)
+	beyondRetention := floorMonth.Add(-24 * time.Hour)
+	tooOldEvent := mkEvent(t, sessionID, model.KindLLMRequest, model.SourceOTelLog, beyondRetention)
+	tooOldResult, err := store.WriteBatch(ctx, []model.Event{tooOldEvent})
+	require.NoError(t, err)
+	require.Equal(t, 0, tooOldResult.Written)
+	require.Equal(t, 1, tooOldResult.TooOld, "an event older than the retention horizon must still be classified too_old")
 }
 
 // TestEvents_OnConflictAgainstParentSucceeds is the direct regression test

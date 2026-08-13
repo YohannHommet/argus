@@ -534,12 +534,29 @@ func runChaosOrphans(t *testing.T, _ *App, pool *pgxpool.Pool, baseURL string) {
 
 // runChaosClockSkew drives a --chaos-clock-skew run and asserts both
 // halves of its AC: at least one event is flagged clock_skewed, and its
-// single opt-in beyond-partition-horizon event is rejected with
+// single opt-in in-retention-but-unpartitioned event is rejected with
 // argus_ingest_too_old_total incremented (chaos.go's buildChaosTooOldEvent
 // doc comment explains why a month-boundary-crossing timestamp, not one
-// that trips the §1.2 clamp, is the reachable mechanism).
+// that trips the §1.2 clamp, is the only mechanism that can reach SPEC §1.7
+// rule 3 at all).
+//
+// The missing partition is injected here rather than relied upon. Before
+// P3-12 the partition manager never created partitions behind the current
+// month, so the chaos event's month was simply absent. P3-12 (SPEC §2.4
+// "Backward creation") now creates every month back to the retention
+// horizon, precisely so an in-retention backfill is never misclassified —
+// which leaves rule 3 reachable only when a partition is genuinely absent:
+// the partition manager being behind, or an operator having dropped one.
+// Dropping it here reproduces exactly that state, so the assertion below
+// still exercises the real sim -> OTLP -> normalize -> WriteBatch -> counter
+// path end to end, instead of being deleted along with the condition that
+// used to trigger it. Safe against the hourly PartitionJob recreating it:
+// that job ticks once at startup (long done by the time this sub-run
+// starts) and then only every hour.
 func runChaosClockSkew(t *testing.T, a *App, pool *pgxpool.Pool, baseURL string) {
 	t.Helper()
+
+	dropChaosTooOldPartition(t, pool)
 
 	_, _, tooOldBefore := readIngestMetrics(a)
 
@@ -563,7 +580,34 @@ func runChaosClockSkew(t *testing.T, a *App, pool *pgxpool.Pool, baseURL string)
 	require.Eventually(t, func() bool {
 		_, _, tooOldNow := readIngestMetrics(a)
 		return tooOldNow > tooOldBefore
-	}, e2eDrainTimeout, 100*time.Millisecond, "expected argus_ingest_too_old_total to grow: the opt-in beyond-partition-horizon event has no partition to land in")
+	}, e2eDrainTimeout, 100*time.Millisecond, "expected argus_ingest_too_old_total to grow: the opt-in in-retention event's month has no partition to land in")
+}
+
+// dropChaosTooOldPartition removes the `events` partition covering the month
+// sim/chaos.go's buildChaosTooOldEvent timestamps its opt-in event into
+// (chaosTooOldMonthsBack = 2 calendar months before now), so that event has
+// nowhere to land and is classified too_old (SPEC §1.7 rule 3). See
+// runChaosClockSkew's doc comment for why the fault is injected rather than
+// assumed. The month is derived the same way partitions.go names partitions
+// (events_YYYY_MM) and the same way the generator computes the timestamp
+// (time.AddDate on "now"), so the two cannot silently drift apart; the drop
+// is asserted to have removed a partition that really existed, which is what
+// catches a drift if they ever do.
+func dropChaosTooOldPartition(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+
+	const chaosTooOldMonthsBack = 2 // mirrors internal/sim's unexported constant
+	month := time.Now().UTC().AddDate(0, -chaosTooOldMonthsBack, 0)
+	name := fmt.Sprintf("events_%04d_%02d", month.Year(), int(month.Month()))
+
+	var existed bool
+	require.NoError(t, pool.QueryRow(context.Background(),
+		`SELECT to_regclass($1) IS NOT NULL`, name).Scan(&existed))
+	require.True(t, existed,
+		"%s should have been created by P3-12's backward partition creation; if it no longer is, this test's fault injection (and sim's chaosTooOldMonthsBack) needs revisiting rather than the assertion being dropped", name)
+
+	_, err := pool.Exec(context.Background(), `DROP TABLE `+name)
+	require.NoError(t, err)
 }
 
 // runChaosUnknown drives a --chaos-unknown run and asserts kind='unknown'

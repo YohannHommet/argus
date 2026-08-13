@@ -71,11 +71,14 @@ type App struct {
 // New connects the database pool, wraps it in the postgres Store, and runs
 // migrations when ARGUS_AUTO_MIGRATE is true (SPEC §3.7, §3.8) — all before
 // the HTTP listener exists, so a `serve` that fails to migrate never starts
-// accepting traffic. It then ensures the current-through-two-months-ahead
-// partitions exist (SPEC §2.4's "startup fails loudly if the current
-// month's partition cannot be created") for the same reason: an ingest
-// request landing before the first hourly PartitionJob tick must never hit
-// a missing partition. It does not start serving; call Serve for that.
+// accepting traffic. It then ensures the retention-horizon-through-two-
+// months-ahead partitions exist (SPEC §2.4's "startup fails loudly if the
+// current month's partition cannot be created", plus the P3-12 backward
+// reach to ARGUS_RETENTION_RAW_DAYS) for the same reason: an ingest request
+// landing before the first hourly PartitionJob tick — whether newly
+// arrived or an in-retention backfill crossing a month boundary — must
+// never hit a missing partition. It does not start serving; call Serve for
+// that.
 func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, opts ...Option) (*App, error) {
 	var o options
 	for _, opt := range opts {
@@ -100,7 +103,8 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, opts ...O
 	}
 
 	now := time.Now()
-	if err := st.EnsurePartitions(ctx, now, now.Add(partitionJobHorizon)); err != nil {
+	retention := time.Duration(cfg.RetentionRawDays) * 24 * time.Hour
+	if err := st.EnsurePartitions(ctx, now.Add(-retention), now.Add(partitionJobHorizon)); err != nil {
 		pool.Close()
 		return nil, fmt.Errorf("app: ensuring startup partitions: %w", err)
 	}
@@ -150,7 +154,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, opts ...O
 		logger:     logger,
 		store:      st,
 		ready:      httpapi.NewReadyState(),
-		partitions: NewPartitionJob(st, logger),
+		partitions: NewPartitionJob(st, logger, cfg.RetentionRawDays),
 		ingest:     ing,
 		hooks:      hookMounter,
 		otlp:       otlpHandler,
