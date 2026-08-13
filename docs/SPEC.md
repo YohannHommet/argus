@@ -806,6 +806,13 @@ decision event; approximate and labelled as such. `NULL` renders `—`, never `0
 
 ### 2.4 Rollups, prices, jobs
 
+**`rollup_dirty` deviation, accepted 2026-08-13.** The table below is shown inside
+`004_rollups.sql` for exposition, but it is actually created by **`003_projections.sql`**, not
+`004`: P2-06 needed `rollup_dirty` to exist so `WriteBatch`'s single transaction could mark it
+alongside `events`/projections, and `004` (P3-04) does not exist yet at that point in the build
+order. `004_rollups.sql` (P3-04) creates `rollup_hourly`, `rollup_daily`, `model_prices`, and
+`job_state` only, and **must not re-create `rollup_dirty`**.
+
 ```sql
 -- 004_rollups.sql
 
@@ -844,11 +851,13 @@ CREATE TABLE rollup_daily (LIKE rollup_hourly INCLUDING ALL);  -- bucket = date_
 
 -- Buckets needing recomputation. Written INSIDE the ingest transaction, which is what makes the
 -- rollups immune to pre-commit sequence allocation (see below).
-CREATE TABLE rollup_dirty (
-    bucket timestamptz NOT NULL,
-    source text NOT NULL,            -- 'event' | 'metric'
-    PRIMARY KEY (bucket, source)
-);
+-- NOTE: already created by 003_projections.sql (see deviation note above) — shown here only for
+-- context; 004_rollups.sql must NOT execute this CREATE TABLE again.
+-- CREATE TABLE rollup_dirty (
+--     bucket timestamptz NOT NULL,
+--     source text NOT NULL,            -- 'event' | 'metric'
+--     PRIMARY KEY (bucket, source)
+-- );
 
 CREATE TABLE model_prices (
     model                  text NOT NULL,
@@ -918,6 +927,15 @@ resolved at event date. Never summed into one column at the storage layer; the A
 (`CREATE TABLE IF NOT EXISTS … PARTITION OF …` plus the 6-index set for `events` / 2-index set for
 `metric_samples`). No `DEFAULT` partition. Startup fails loudly if the current month's partition
 cannot be created.
+
+**Backward creation, decided 2026-08-13; implemented in Phase 3 (P3-12).** The job also ensures
+partitions exist backward from the current month to the retention horizon
+(`ARGUS_RETENTION_RAW_DAYS`), not just forward to current+2: an in-retention backfill (e.g. a
+14-day replay crossing a month boundary) must never hit a missing partition and be misclassified
+`too_old`. `too_old` (§1.7 rule 3) remains reserved for data genuinely older than the retention
+horizon. As of this deviation's acceptance, `EnsurePartitions` only creates forward from `from` to
+`to`; the caller in `internal/app/jobs.go` passes `(now, now+2mo)` and does not yet reach backward
+— P3-12 changes the caller (not `EnsurePartitions`'s signature) to also pass the retention floor.
 
 **Retention job.** Daily at `ARGUS_RETENTION_HOUR` (default 04:00 local):
 - drops `events` / `metric_samples` partitions whose upper bound ≤ `now() −
@@ -1025,6 +1043,18 @@ Rejected: any ORM; `gorilla/mux`; an OTel Collector container (DECISIONS.md); `s
 `uuid-ossp` extension (UUIDv5 computed in Go). `goose.NewProvider` takes a `*sql.DB`, not a pgx
 pool, so it's bridged via `stdlib.OpenDBFromPool` rather than used with pgx v5 directly.
 
+**OTLP envelope decoding deviation, accepted 2026-08-13.** `go.opentelemetry.io/proto/otlp` above
+supplies the data-model types (`logs/v1`, `metrics/v1`, `trace/v1`) but deliberately **not** the
+`collector/.../v1` `Export*ServiceRequest` wrapper types: that subpackage's generated code pulls in
+`github.com/grpc-ecosystem/grpc-gateway/v2` and `google.golang.org/grpc`, neither otherwise a
+dependency of this module, purely to avoid vendoring a gRPC stack for a JSON/protobuf-over-HTTP
+receiver. `internal/ingest/otlp/codec.go` hand-decodes the envelope's one repeated top-level field
+(`resource_logs`/`resource_metrics`/`resource_spans`) in both wire formats, using only the
+data-model subpackages already imported above, and hands the results to
+`normalize.FromOTLPLogs`/`FromOTLPMetrics` exactly as the generated wrapper's getter would. Proven
+byte-identical to the generated types via `TestHandleLogs_ProtobufAndJSONAgree` and related tests
+in `internal/ingest/otlp/handler_test.go`.
+
 ### 3.3 The storage seam
 
 ```go
@@ -1038,13 +1068,21 @@ type Store interface {
     Close()
 }
 
-// Writer is what ingest needs. One method: batches are the unit of work.
+// Writer is what ingest needs. Batches are the unit of work.
 type Writer interface {
     // WriteBatch gates on ingest_dedup, inserts events, and updates all projections plus
     // rollup_dirty in ONE transaction, honouring the lock-ordering invariant (§1.6). Returns
     // per-event outcomes so ingest can count dedup suppressions and fan out to stream only the
     // events that were actually persisted.
     WriteBatch(ctx context.Context, b []model.Event) (BatchResult, error)
+
+    // WriteMetrics is a P2-06 deviation, accepted 2026-08-13: this section originally listed
+    // only WriteBatch, but §1.8/§2.3 require OTel metric data points to land in metric_samples,
+    // and they arrive as []model.MetricSample, never model.Event (no Kind exists for a metric,
+    // §1.4). WriteMetrics gates on the same ingest_dedup ledger (the "metric:" key form), inserts
+    // into metric_samples, and marks rollup_dirty with source='metric', in the same relative
+    // lock order as WriteBatch (dedup -> metric_samples -> rollup_dirty).
+    WriteMetrics(ctx context.Context, samples []model.MetricSample) (BatchResult, error)
 }
 
 type Reader interface {
@@ -1160,6 +1198,13 @@ handler → normalize (in the request goroutine; cheap, pure, testable)
     `ARGUS_INGEST_RETRY_TRANSIENT` attempts (default 3) at 100 ms / 400 ms / 1.6 s.
   - constraint/programming (`23…`, `42…`) → **do not retry**; log the batch's first event id at
     ERROR and drop, incrementing `argus_ingest_write_failed_total{class="permanent"}`.
+  - **data exception (`22…`, e.g. `22P02` invalid text representation, `22003` numeric value out
+    of range, `22001` string data right truncation) → do not retry**, same handling as
+    constraint/programming above. Accepted 2026-08-13: this class was originally unlisted here and
+    fell through to the transient default, burning the full `ARGUS_INGEST_RETRY_TRANSIENT` budget
+    on a malformed value that fails identically on every attempt, and worse, counting it under
+    `class="transient"` — misdirecting an operator toward a flaky database instead of a bad
+    payload.
   The lock-ordering invariant makes `40P01` rare; the retry budget exists because "rare" is not
   "never", and a flat 3× policy would drop data on a routine deadlock.
 - No disk spool in v1: a second storage system with its own failure modes, and Postgres being down

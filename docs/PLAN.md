@@ -531,6 +531,7 @@ the TS client generated.
 | P3-09 | Fake store + OpenAPI conformance harness | P3-01, P3-07, P3-08 |
 | P3-10 | Retention, dedup pruning, `rebuild-projections`, `EXPLAIN` guard | P3-05 |
 | P3-11 | TS client generation + CI drift check | P3-01 |
+| P3-12 | Backward partition creation to retention horizon | P2-05 |
 
 Parallel: `P3-01` and `[P] P3-02, P3-03, P3-04` first; then `P3-05` → `P3-06`; `P3-07` (after
 02/03); then `[P] P3-08, P3-10, P3-11` → `P3-09` last (it validates everything).
@@ -586,8 +587,10 @@ the right event with `attrs` and its `EXPLAIN` shows an **Index Scan on the PK o
 partition pruning.
 
 **P3-04 — Migration `004`, prices, estimation**
-Scope: `004_rollups.sql` per SPEC §2.4 (**incl. `rollup_dirty`; no `query_source` dimension**);
-`db/prices/model_prices.json` + an idempotent `argusd prices import`; `pricing.Estimate(model,
+Scope: `004_rollups.sql` per SPEC §2.4 (**`rollup_hourly`, `rollup_daily`, `model_prices`,
+`job_state`; no `query_source` dimension; `rollup_dirty` already exists from `003_projections.sql`
+(P2-06) — 004 must NOT re-create it**); `db/prices/model_prices.json` + an idempotent `argusd
+prices import`; `pricing.Estimate(model,
 tokens, at)` with exact-match-then-longest-prefix lookup and an `ErrNoPrice` path that leaves cost
 **NULL, never zero** (a silent zero is a lie).
 Files: `server/db/migrations/004_rollups.sql`, `server/db/prices/model_prices.json`,
@@ -711,6 +714,24 @@ fetch) asserts a problem+json 400 becomes an `ApiError` with `type`/`title`/`det
 returns typed data, and an aborted request rejects with an abort error; `pnpm type-check` catches a
 deliberately wrong field access (verify, revert); a type-level test asserts `query_source` is `string`
 and **not** a union, so an unseen value compiles.
+
+**P3-12 — Backward partition creation to retention horizon**
+Accepted deviation (2026-08-13, SPEC §2.4): the partition manager job must also ensure partitions
+exist backward from the current month to the retention horizon, not only forward to current+2, so
+an in-retention backfill never hits a missing partition and is misclassified `too_old`.
+Scope: `EnsurePartitions` (`server/internal/store/postgres/partitions.go`) already accepts an
+arbitrary `[from, to]` range and needs no signature change; change the caller in
+`server/internal/app/jobs.go` (and its `app.go` startup call) to pass `from =
+now - ARGUS_RETENTION_RAW_DAYS` instead of `from = now`, so the hourly tick also backfills any
+partition between the retention floor and the current month that does not yet exist.
+Files: `server/internal/app/jobs.go`, `server/internal/app/app.go`,
+`server/internal/store/postgres/partitions_test.go`.
+AC: a 14-day backfill whose events cross a month boundary ingests with **zero** `too_old` drops
+against a freshly migrated database (no partitions pre-created for that older month); an event
+older than the retention horizon is still rejected `too_old` (backward creation does not widen the
+retention window, only the in-window backfill gap); running the job twice over the same range is a
+no-op (`CREATE TABLE IF NOT EXISTS` idempotency, already covered by existing `EnsurePartitions`
+tests).
 
 ---
 
