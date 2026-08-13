@@ -8,11 +8,13 @@
     "build": "vite build",
     "unit": "cross-env NODE_OPTIONS=--no-experimental-webstorage vitest run",
     "type-check": "vue-tsc --noEmit",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "gen:api": "openapi-typescript ../server/api/openapi.yaml -o src/api/schema.d.ts"
   },
   "dependencies": {
     "@lucide/vue": "1.31.0",
     "@vueuse/core": "14.4.0",
+    "openapi-fetch": "0.17.0",
     "pinia": "4.0.2",
     "reka-ui": "2.10.3",
     "shadcn-vue": "2.8.2",
@@ -34,6 +36,7 @@
     "eslint-plugin-vue": "10.10.0",
     "globals": "17.10.0",
     "jsdom": "27.0.0",
+    "openapi-typescript": "7.13.0",
     "tailwind-merge": "3.3.1",
     "tailwindcss": "4.3.3",
     "typescript": "6.0.3",
