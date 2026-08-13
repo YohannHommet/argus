@@ -37,11 +37,11 @@ Commands:
 
 // notImplemented is the message printed by stub subcommands. Each names the
 // ticket/phase that will wire it up, per P1-02's brief. "sim" is wired
-// (ticket P2-12, runSim below) and no longer listed here.
+// (ticket P2-12, runSim below) and "prices" (ticket P3-04, runPrices below)
+// are no longer listed here.
 var notImplemented = map[string]string{
 	"retention":           "not implemented yet (arrives in Phase 2: retention job)",
 	"rebuild-projections": "not implemented yet (arrives in Phase 2: rollups/projections)",
-	"prices":              "not implemented yet (arrives in Phase 3: model price table)",
 }
 
 func main() {
@@ -69,7 +69,9 @@ func run(args []string) int {
 		return runServe(rest)
 	case "sim":
 		return sim.RunCLI(rest, os.Stdout, os.Stderr)
-	case "retention", "rebuild-projections", "prices":
+	case "prices":
+		return runPrices(rest)
+	case "retention", "rebuild-projections":
 		return runStub(cmd, rest)
 	default:
 		fmt.Fprintf(os.Stderr, "argusd: unknown command %q\n\n", cmd)
@@ -183,6 +185,54 @@ func runMigrate(args []string) int {
 		fmt.Fprintf(os.Stderr, "argusd: migrate: unknown action %q (want up or status)\n", action)
 		return 2
 	}
+}
+
+// runPrices implements `argusd prices import` (SPEC §3.8, P3-04): reads
+// the embedded/seeded server/db/prices/*.json price table and upserts it
+// into model_prices, printing an inserted/updated/unchanged summary.
+// ImportPrices is idempotent (ON CONFLICT (model, effective_from) DO
+// UPDATE, guarded so a byte-identical re-import touches no rows), which is
+// what lets a re-run of this command be a safe, repeatable operation
+// rather than a one-shot seed.
+func runPrices(args []string) int {
+	fs := flag.NewFlagSet("prices", flag.ContinueOnError)
+	configPath := fs.String("config", "", "path to an optional YAML config file")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+
+	action := "import"
+	if rest := fs.Args(); len(rest) > 0 {
+		action = rest[0]
+	}
+	if action != "import" {
+		fmt.Fprintf(os.Stderr, "argusd: prices: unknown action %q (want import)\n", action)
+		return 2
+	}
+
+	cfg, _, err := config.Load(*configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "argusd: %v\n", err)
+		return 1
+	}
+
+	ctx := context.Background()
+	pool, err := postgres.NewPool(ctx, cfg.DatabaseURL, cfg.DBMaxConns)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "argusd: prices: %v\n", err)
+		return 1
+	}
+	defer pool.Close()
+
+	summary, err := postgres.New(pool).ImportPrices(ctx)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "argusd: prices: import: %v\n", err)
+		return 1
+	}
+
+	fmt.Printf("argusd: prices import: %d inserted, %d updated, %d unchanged\n",
+		summary.Inserted, summary.Updated, summary.Unchanged)
+	return 0
 }
 
 // runServe implements `argusd serve` (SPEC §3.8): load config, build the

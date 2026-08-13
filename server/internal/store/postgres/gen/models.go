@@ -53,6 +53,14 @@ type IngestDedup struct {
 	FirstSeenAt pgtype.Timestamptz
 }
 
+type JobState struct {
+	Job         string
+	LastRunAt   pgtype.Timestamptz
+	LastError   pgtype.Text
+	Watermark   pgtype.Int8
+	WatermarkTs pgtype.Timestamptz
+}
+
 type MetricSample struct {
 	Ts          pgtype.Timestamptz
 	IngestedAt  pgtype.Timestamptz
@@ -73,9 +81,76 @@ type MetricSeriesState struct {
 	LastValue  float64
 }
 
+type ModelPrice struct {
+	Model             string
+	EffectiveFrom     pgtype.Date
+	Currency          string
+	InputPerMtok      pgtype.Numeric
+	OutputPerMtok     pgtype.Numeric
+	CacheReadPerMtok  pgtype.Numeric
+	CacheWritePerMtok pgtype.Numeric
+	Source            string
+}
+
+type RollupDaily struct {
+	Bucket              pgtype.Timestamptz
+	Project             string
+	Vendor              string
+	Model               string
+	Source              string
+	SessionsStarted     int32
+	Turns               int32
+	ApiRequests         int32
+	ApiErrors           int32
+	ToolCalls           int32
+	ToolRejects         int32
+	InputTokens         int64
+	OutputTokens        int64
+	CacheReadTokens     int64
+	CacheCreationTokens int64
+	CostReportedUsd     pgtype.Numeric
+	CostEstimatedUsd    pgtype.Numeric
+	LocAdded            int64
+	LocRemoved          int64
+	ActiveSeconds       int64
+	Commits             int32
+	PullRequests        int32
+	EditDecisionsAccept int32
+	EditDecisionsReject int32
+	ComputedAt          pgtype.Timestamptz
+}
+
 type RollupDirty struct {
 	Bucket pgtype.Timestamptz
 	Source string
+}
+
+type RollupHourly struct {
+	Bucket              pgtype.Timestamptz
+	Project             string
+	Vendor              string
+	Model               string
+	Source              string
+	SessionsStarted     int32
+	Turns               int32
+	ApiRequests         int32
+	ApiErrors           int32
+	ToolCalls           int32
+	ToolRejects         int32
+	InputTokens         int64
+	OutputTokens        int64
+	CacheReadTokens     int64
+	CacheCreationTokens int64
+	CostReportedUsd     pgtype.Numeric
+	CostEstimatedUsd    pgtype.Numeric
+	LocAdded            int64
+	LocRemoved          int64
+	ActiveSeconds       int64
+	Commits             int32
+	PullRequests        int32
+	EditDecisionsAccept int32
+	EditDecisionsReject int32
+	ComputedAt          pgtype.Timestamptz
 }
 
 type Session struct {
