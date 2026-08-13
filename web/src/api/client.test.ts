@@ -19,6 +19,22 @@ function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
   })
 }
 
+// openapi-fetch always calls the injected `fetch` with a fully-built
+// `Request`, but the DOM/undici `typeof fetch` signature it must satisfy is
+// broader (`RequestInfo | URL`). requestFetch keeps the mocks honest about
+// that gap instead of narrowing the parameter and relying on a cast: the
+// assertion fires loudly if openapi-fetch ever starts passing a bare URL.
+function requestFetch(
+  handler: (request: Request) => Promise<Response>,
+): (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> {
+  return (input) => {
+    if (!(input instanceof Request)) {
+      throw new TypeError(`expected openapi-fetch to call fetch with a Request, got ${typeof input}`)
+    }
+    return handler(input)
+  }
+}
+
 function problemResponse(problem: Record<string, unknown>, status: number): Response {
   return new Response(JSON.stringify(problem), {
     status,
@@ -73,12 +89,14 @@ describe('unwrap()', () => {
   it('rejects with the underlying abort error, not an ApiError, when the request is aborted', async () => {
     const controller = new AbortController()
     const fetchMock = vi.fn(
-      (request: Request) =>
-        new Promise<Response>((_resolve, reject) => {
-          request.signal.addEventListener('abort', () => {
-            reject(new DOMException('The operation was aborted.', 'AbortError'))
-          })
-        }),
+      requestFetch(
+        (request) =>
+          new Promise<Response>((_resolve, reject) => {
+            request.signal.addEventListener('abort', () => {
+              reject(new DOMException('The operation was aborted.', 'AbortError'))
+            })
+          }),
+      ),
     )
     const client = createApiClient({ fetch: fetchMock, baseUrl: TEST_BASE_URL })
 
@@ -93,10 +111,12 @@ describe('unwrap()', () => {
 
   it('attaches the configured bearer token, never a hardcoded one', async () => {
     let seenAuthHeader: string | null = null
-    const fetchMock = vi.fn(async (request: Request) => {
-      seenAuthHeader = request.headers.get('Authorization')
-      return jsonResponse({ data: [], page: { next_cursor: null, has_more: false } })
-    })
+    const fetchMock = vi.fn(
+      requestFetch(async (request) => {
+        seenAuthHeader = request.headers.get('Authorization')
+        return jsonResponse({ data: [], page: { next_cursor: null, has_more: false } })
+      }),
+    )
     const client = createApiClient({ fetch: fetchMock, token: 'injected-token', baseUrl: TEST_BASE_URL })
 
     await unwrap(client.GET('/api/v1/sessions', {}))
