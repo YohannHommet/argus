@@ -129,6 +129,16 @@ func (b *clauseBuilder) existsAny(table, outerRef, correlateColumn, column strin
 	)
 }
 
+// equals renders `column = $n` for a single-value equality filter (SPEC
+// openapi.yaml's PromptID/AgentID parameters: plain strings, not repeated —
+// unlike anyOf's "OR within a field" arrays), or "" if value is empty.
+func (b *clauseBuilder) equals(column, value string) string {
+	if value == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s = %s", column, b.placeholder(value))
+}
+
 // escapeLikePattern escapes the three characters that are meaningful to
 // Postgres's default LIKE/ILIKE escape convention (backslash-escaped `%`
 // and `_`), so a q= value containing them is matched literally rather than
@@ -171,5 +181,46 @@ func sessionWhereClause(b *clauseBuilder, f store.SessionFilter) string {
 		b.existsAny("tool_calls", "s.id", "session_id", "decision_source", f.DecisionSource),
 		b.timeRange("last_event_at", f.From, f.To),
 		b.ilikeAny([]string{"s.id", "project", "cwd"}, f.Q),
+	)
+}
+
+// eventWhereClause renders store.EventFilter (SPEC §4.3's getSessionTimeline
+// and listEvents shapes; store.go's own doc comment on field semantics)
+// into a WHERE-clause body (no "WHERE" keyword — read_events.go prefixes
+// it, and appends the keyset predicate as one more AND-ed clause from the
+// same builder) plus its positional args, in $n order. The events table is
+// aliased "e" (read_events.go's FROM clause). Returns "" if f has no active
+// filters at all.
+func eventWhereClause(b *clauseBuilder, f store.EventFilter) string {
+	kindValues := make([]string, len(f.Kinds))
+	for i, k := range f.Kinds {
+		kindValues[i] = string(k)
+	}
+
+	return whereAll(
+		b.equals("e.session_id", f.SessionID),
+		b.anyOf("e.kind", kindValues),
+		b.equals("e.prompt_id", f.PromptID),
+		b.equals("e.agent_id", f.AgentID),
+		b.anyOf("e.tool_name", f.Tool),
+		b.anyOf("e.decision_source", f.DecisionSource),
+		b.anyOf("e.vendor", f.Vendor),
+		b.existsAny("sessions", "e.session_id", "id", "project", f.Project),
+		b.timeRange("e.ts", f.From, f.To),
+	)
+}
+
+// toolCallWhereClause renders store.ToolCallFilter (SPEC §4.2's
+// listSessionToolCalls/listToolCalls shapes; store.go's own doc comment on
+// field semantics) into a WHERE-clause body, matching eventWhereClause's
+// contract. The tool_calls table is aliased "tc" (read_toolcalls.go's FROM
+// clause).
+func toolCallWhereClause(b *clauseBuilder, f store.ToolCallFilter) string {
+	return whereAll(
+		b.equals("tc.session_id", f.SessionID),
+		b.anyOf("tc.tool_name", f.Tool),
+		b.anyOf("tc.decision_source", f.DecisionSource),
+		b.existsAny("sessions", "tc.session_id", "id", "project", f.Project),
+		b.timeRange("tc.started_at", f.From, f.To),
 	)
 }

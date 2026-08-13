@@ -121,20 +121,11 @@ func (s *Store) Close() {
 // ListSessions, GetSession, ListTurns implement store.Reader; implemented in
 // read_sessions.go (P3-02).
 
-// ListEvents implements store.Reader; not yet implemented (P1-04 stub).
-func (s *Store) ListEvents(_ context.Context, _ store.EventFilter, _ store.Page) ([]model.Event, store.Cursor, error) {
-	return nil, "", store.ErrNotImplemented
-}
+// ListEvents, GetEvent implement store.Reader; implemented in read_events.go
+// (P3-03).
 
-// GetEvent implements store.Reader; not yet implemented (P1-04 stub).
-func (s *Store) GetEvent(_ context.Context, _ model.EventRef) (*model.Event, error) {
-	return nil, store.ErrNotImplemented
-}
-
-// ListToolCalls implements store.Reader; not yet implemented (P1-04 stub).
-func (s *Store) ListToolCalls(_ context.Context, _ store.ToolCallFilter, _ store.Page) ([]model.ToolCall, store.Cursor, error) {
-	return nil, "", store.ErrNotImplemented
-}
+// ListToolCalls implements store.Reader; implemented in read_toolcalls.go
+// (P3-03).
 
 // SubagentTree implements store.Reader; implemented in subagent_tree.go
 // (P2-08).

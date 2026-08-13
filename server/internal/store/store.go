@@ -143,11 +143,96 @@ type SessionFilter struct {
 	Sort           SessionSort
 }
 
-// EventFilter narrows Reader.ListEvents.
-type EventFilter struct{}
+// SortOrder is the asc/desc toggle SPEC §4.3 exposes on `GET
+// /api/v1/sessions/{id}/timeline` and `GET /api/v1/events` (`order=asc|desc`,
+// default asc). Closed because it names Argus's own query surface, not
+// vendor vocabulary — the same reasoning as SessionSort.
+type SortOrder string
 
-// ToolCallFilter narrows Reader.ListToolCalls.
-type ToolCallFilter struct{}
+// SortOrder constants (SPEC §4.3: "order=asc|desc").
+const (
+	OrderAsc  SortOrder = "asc"
+	OrderDesc SortOrder = "desc"
+)
+
+// Fields is the slim/full toggle SPEC §4.1/§4.3 exposes on event reads
+// (`fields=slim|full`, default slim): whether the response — and, per the
+// ticket note, the underlying query itself — includes `attrs`. Closed for
+// the same reason as SortOrder: it is Argus's own wire concept, not vendor
+// vocabulary.
+type Fields string
+
+// Fields constants (SPEC §4.1: "fields=slim (the timeline default) omits
+// attrs").
+const (
+	FieldsSlim Fields = "slim"
+	FieldsFull Fields = "full"
+)
+
+// EventFilter narrows Reader.ListEvents (SPEC §4.3's getSessionTimeline and
+// listEvents shapes, which share one store-level method). Every slice field
+// is an OR-set within that field; non-empty fields AND together (SPEC
+// §4.1). An empty slice/zero value means "no restriction" on that field.
+//
+//   - SessionID scopes to one session's timeline (`GET
+//     /api/v1/sessions/{id}/timeline`) when non-empty; "" is the
+//     cross-session search (`GET /api/v1/events`).
+//   - Kinds, Tool, DecisionSource, Vendor filter the events row's own
+//     columns directly (kind, tool_name, decision_source, vendor).
+//   - PromptID, AgentID are single-value equality filters (SPEC
+//     openapi.yaml's PromptID/AgentID parameters are plain strings, not
+//     repeated) — "" means no restriction.
+//   - Project has no column on events; it filters sessions that have this
+//     project, via an EXISTS correlation on session_id (SPEC §4.2's
+//     cross-session `/events` exposes a `project` param, but SPEC's §2.2
+//     `events` table has no project column of its own).
+//   - From/To bound `ts` (SPEC §4.1's default time-param semantics).
+//   - Order selects (ts, vendor_seq NULLS LAST, seq) ascending or its exact
+//     reverse (SPEC §1.2, §4.3); the zero value means OrderAsc.
+//   - Fields selects whether `attrs` is read out of the database at all
+//     (SPEC §4.1: fields=slim omits attrs; the point is not transferring
+//     it, not just hiding it on the wire); the zero value means
+//     FieldsSlim.
+type EventFilter struct {
+	SessionID      string
+	Kinds          []model.Kind
+	PromptID       string
+	AgentID        string
+	Tool           []string
+	DecisionSource []string
+	Project        []string
+	Vendor         []string
+	From           *time.Time
+	To             *time.Time
+	Order          SortOrder
+	Fields         Fields
+}
+
+// ToolCallFilter narrows Reader.ListToolCalls (SPEC §4.2's
+// listSessionToolCalls and listToolCalls shapes, which share one
+// store-level method — the latter is, per SPEC §4.2, "the decision-
+// provenance drill-down" the analytics decision matrix links into). Every
+// slice field is an OR-set within that field; non-empty fields AND
+// together (SPEC §4.1).
+//
+//   - SessionID scopes to one session's tool calls (`GET
+//     /api/v1/sessions/{id}/tool-calls`) when non-empty; "" is the
+//     cross-session drill-down (`GET /api/v1/tool-calls`).
+//   - Tool, DecisionSource filter tool_calls' own columns (tool_name,
+//     decision_source).
+//   - Project has no column on tool_calls; it filters sessions that have
+//     this project, via an EXISTS correlation on session_id, matching
+//     EventFilter.Project's reasoning.
+//   - From/To bound `started_at` (SPEC §2.3's `tool_calls (session_id,
+//     started_at)` / `(tool_name, started_at DESC)` indexes).
+type ToolCallFilter struct {
+	SessionID      string
+	Project        []string
+	Tool           []string
+	DecisionSource []string
+	From           *time.Time
+	To             *time.Time
+}
 
 // AnalyticsFilter narrows the Reader.Analytics* methods and HookLatency.
 type AnalyticsFilter struct{}
