@@ -255,9 +255,28 @@ func parseLevelName(level string) (string, error) {
 	}
 }
 
+// ReservedEnvPrefix is reserved for the test and CI harness and is
+// deliberately NOT part of the SPEC §3.7 config surface: no config key may
+// begin with it, and unknownEnvWarnings ignores every variable that does.
+//
+// It exists because the integration harness and CI must pass a database URL
+// that is emphatically *not* the server's own ARGUS_DATABASE_URL —
+// ARGUS_TEST_DATABASE_URL points at a throwaway Postgres whose schema each
+// test drops. Without a reserved namespace, strict unknown-variable
+// validation (which is a feature: it catches ARGUS_HTTTP_ADDR-class typos)
+// flags the harness's own variable as a typo, which is what broke the
+// end-to-end test in CI while passing locally, where the variable happened
+// not to be exported.
+//
+// A prefix, not an allow-list of one name: the next harness variable must not
+// reintroduce the same failure, and a reserved namespace is a contract the
+// harness can rely on rather than a patch for a single symptom.
+const ReservedEnvPrefix = "ARGUS_TEST_"
+
 // unknownEnvWarnings scans the process environment for ARGUS_-prefixed
 // variables that do not match any known config key, so a typo (e.g.
-// ARGUS_HTTTP_ADDR) is surfaced instead of silently ignored.
+// ARGUS_HTTTP_ADDR) is surfaced instead of silently ignored. Variables under
+// ReservedEnvPrefix are skipped; everything else stays strict.
 func unknownEnvWarnings(specs []fieldSpec, environ func() []string) []string {
 	known := make(map[string]bool, len(specs))
 	for _, s := range specs {
@@ -268,6 +287,9 @@ func unknownEnvWarnings(specs []fieldSpec, environ func() []string) []string {
 	for _, kv := range environ() {
 		name, _, ok := strings.Cut(kv, "=")
 		if !ok || !strings.HasPrefix(name, "ARGUS_") {
+			continue
+		}
+		if strings.HasPrefix(name, ReservedEnvPrefix) {
 			continue
 		}
 		if !known[name] {
