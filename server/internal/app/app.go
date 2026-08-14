@@ -104,6 +104,35 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, opts ...O
 		}
 	}
 
+	// Seed model_prices from the price table embedded in this binary
+	// (db/prices/*.json), immediately after migrations and for the same
+	// reason: without it the table is empty on every fresh deployment, and an
+	// empty table means pricing.Estimate can never resolve a price, so
+	// cost_estimated_usd and estimated_share are silently 0 forever — the
+	// exact silent zero SPEC §4.1 exists to forbid, on the one number the UI
+	// uses to flag that a cost is estimated rather than reported.
+	//
+	// `argusd prices import` (SPEC §3.8) stays as the operator-facing way to
+	// re-import or update, but it cannot be the only way: nothing in
+	// docker-compose or the quickstart runs it, and a `docker compose up`
+	// deployment reported estimated_usd = 0 with a populated events table
+	// until this call existed. The import is idempotent (ON CONFLICT with an
+	// IS DISTINCT FROM guard, so a re-run touches no rows) and only writes
+	// the repo-sourced rows, leaving operator-supplied ones alone.
+	//
+	// Not gated behind a new config key: SPEC §3.7's table is normative and
+	// complete, and adding an unlisted ARGUS_* key would be the larger
+	// deviation. A failure here is fatal for the same reason a failed
+	// migration is — starting up with prices missing produces wrong numbers
+	// rather than an obvious error.
+	priceSummary, priceErr := st.ImportPrices(ctx)
+	if priceErr != nil {
+		pool.Close()
+		return nil, fmt.Errorf("app: importing the embedded model price table: %w", priceErr)
+	}
+	logger.Info("model prices imported",
+		"inserted", priceSummary.Inserted, "updated", priceSummary.Updated, "unchanged", priceSummary.Unchanged)
+
 	now := time.Now()
 	retention := time.Duration(cfg.RetentionRawDays) * 24 * time.Hour
 	if err := st.EnsurePartitions(ctx, now.Add(-retention), now.Add(partitionJobHorizon)); err != nil {
