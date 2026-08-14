@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 )
 
@@ -36,8 +37,10 @@ import (
 // 404 is the exact symptom of an unmounted group, so that is what it rules
 // out — for a session id that does exist, 404 would otherwise be ambiguous.
 func TestServe_ReadAPIRoutesAreMounted(t *testing.T) {
-	a, baseURL, pool := newE2EApp(t)
-	defer func() { _ = pool }()
+	// Its own registry: this is the second App the package's e2e binary
+	// constructs, and the ingest/rollup collectors would otherwise be
+	// registered on the default registerer twice, which panics.
+	a, baseURL, pool := newE2EApp(t, WithRegisterer(prometheus.NewRegistry()))
 
 	// A session row so the session-scoped routes have a real id to address:
 	// otherwise a legitimate "no such session" 404 is indistinguishable from

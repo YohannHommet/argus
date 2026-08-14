@@ -200,7 +200,13 @@ func TestE2E_Phase2ExitCriteria(t *testing.T) {
 // URL argus-sim's --target expects and a plain pgxpool.Pool (a second,
 // independent connection to the same schema) for this test's own read-only
 // assertions.
-func newE2EApp(t *testing.T) (*App, string, *pgxpool.Pool) {
+// opts lets a second App in the same test binary pass
+// WithRegisterer(prometheus.NewRegistry()): the ingest/rollup metrics are
+// registered on prometheus.DefaultRegisterer by default, and registering the
+// same collectors twice in one process panics ("duplicate metrics collector
+// registration attempted"). Existing callers pass nothing and keep the
+// default registry, exactly as before.
+func newE2EApp(t *testing.T, opts ...Option) (*App, string, *pgxpool.Pool) {
 	t.Helper()
 	ctx := context.Background()
 
@@ -214,7 +220,7 @@ func newE2EApp(t *testing.T) (*App, string, *pgxpool.Pool) {
 	require.Empty(t, warnings)
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	a, err := New(ctx, cfg, logger)
+	a, err := New(ctx, cfg, logger, opts...)
 	require.NoError(t, err)
 
 	serveCtx, cancel := context.WithCancel(context.Background())

@@ -33,6 +33,25 @@ yet been amended to match — that amendment is the owner's call on the RULING N
 | `estimated_cost_present` | Computed via `AnalyticsSummary` over all recorded history | No dedicated store method exists, and SPEC §2.5 allow-lists only the two quality queries onto `events`. Rollup-only, and retention never prunes rollups. |
 | `PartitionJob` construction | Takes `retentionRawDays int` | `internal/store` must not import `internal/config`; `internal/app` owns the config dependency. |
 
+## Integration defects found only by running the product (both would have shipped)
+
+Both were found during the CI-exact / exit-criteria pass against a live
+`docker compose` stack — **not** by the test suite, which was green at 715 tests
+throughout. Both sat in the gap between components that were each individually
+correct and individually well tested.
+
+| Defect | Symptom | Why no test saw it | Fix |
+|---|---|---|---|
+| **The entire read API was unmounted on the real server.** `Serve` never set `Deps.Reader`/`Deps.Analytics`, and `router.go` mounts each group only when those are non-nil (a nil-safe default inherited from P1-05). | `docker compose up` + `curl /api/v1/sessions` → **404**, likewise every session, event, tool-call, analytics, facets and quality route. Only `/meta`, `/healthz`, `/readyz`, `/metrics` and the ingest paths answered. | P3-07's and P3-08's handler suites *and* P3-09's conformance harness (100% of operationIds) all construct `httpapi.New` directly with a fake reader. None goes through `Serve`, so none exercises the real route table. | `951e4ed` — two lines in `serve.go` plus `read_api_e2e_test.go`, which starts the real App via `New` + `Serve` and asserts all 17 read routes answer non-404. Verified to fail without the wiring: 16 of 17 red. |
+| **`model_prices` was empty on every deployment**, so cost estimation could never resolve a price. | After `--cost-mode=omit`, 31 uncosted `llm.request` events across 3 models were stored while the API reported `cost.estimated_usd = 0` and `estimated_share = 0` — the silent zero SPEC §4.1 forbids, on the numbers that tell an operator a cost is estimated rather than measured. | The table ships embedded and `argusd prices import` loads it, but nothing ran that command — not compose, not the quickstart, not startup. Every pricing and rollup test seeds prices itself. | `df3a7ab` — `New` imports the embedded table after migrations and fails startup if it cannot. Verified: 3 rows at boot, then `estimated_usd = 9.33385798`, `estimated_share = 1`. |
+
+The second is also a **SPEC gap worth ratifying**: §3.8 lists `prices` as an
+operator subcommand and §2.4 defines `cost_estimated_usd` in terms of
+`model_prices`, but nothing says who populates that table on a fresh install.
+Unconditional idempotent startup import (repo-sourced rows only) is the reading
+taken here; the alternative — documenting a manual step — leaves estimated cost
+silently zero for any operator who skips it.
+
 ## CI and test-harness hardening (not SPEC/PLAN deviations)
 
 | Fix | What broke | Fix |
