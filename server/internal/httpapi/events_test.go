@@ -12,7 +12,6 @@ import (
 	"github.com/YohannHommet/argus/server/internal/httpapi"
 	"github.com/YohannHommet/argus/server/internal/model"
 	"github.com/YohannHommet/argus/server/internal/store"
-	"github.com/YohannHommet/argus/server/internal/store/postgres"
 )
 
 func TestGetEvent_MalformedRef_400InvalidEventRef(t *testing.T) {
@@ -34,8 +33,8 @@ func TestGetEvent_WellFormedButUnknownRef_404(t *testing.T) {
 	t.Parallel()
 
 	reader := &fakeReader{
-		getEvent: func(_ context.Context, _ model.EventRef) (*model.Event, error) {
-			return nil, postgres.ErrEventNotFound
+		GetEventFunc: func(_ context.Context, _ model.EventRef) (*model.Event, error) {
+			return nil, store.ErrEventNotFound
 		},
 	}
 	r := httpapi.New(httpapi.Deps{Reader: reader})
@@ -57,7 +56,7 @@ func TestGetEvent_Found_ReturnsAttrs(t *testing.T) {
 	toolName := "Edit"
 	ref := model.EventRef{TS: time.Date(2026, 8, 11, 9, 12, 4, 221_000_000, time.UTC), Seq: 918233}
 	reader := &fakeReader{
-		getEvent: func(_ context.Context, gotRef model.EventRef) (*model.Event, error) {
+		GetEventFunc: func(_ context.Context, gotRef model.EventRef) (*model.Event, error) {
 			require.True(t, gotRef.TS.Equal(ref.TS))
 			require.Equal(t, ref.Seq, gotRef.Seq)
 			return &model.Event{
@@ -90,7 +89,7 @@ func TestListEvents_RepeatedProjectParamsOR(t *testing.T) {
 
 	var gotFilter store.EventFilter
 	reader := &fakeReader{
-		listEvents: func(_ context.Context, f store.EventFilter, _ store.Page) ([]model.Event, store.Cursor, error) {
+		ListEventsFunc: func(_ context.Context, f store.EventFilter, _ store.Page) ([]model.Event, store.Cursor, error) {
 			gotFilter = f
 			return []model.Event{}, "", nil
 		},
@@ -110,7 +109,7 @@ func TestListEvents_LimitClamps(t *testing.T) {
 
 	var gotPage store.Page
 	reader := &fakeReader{
-		listEvents: func(_ context.Context, _ store.EventFilter, p store.Page) ([]model.Event, store.Cursor, error) {
+		ListEventsFunc: func(_ context.Context, _ store.EventFilter, p store.Page) ([]model.Event, store.Cursor, error) {
 			gotPage = p
 			return []model.Event{}, "", nil
 		},
@@ -129,8 +128,8 @@ func TestGetSessionTimeline_UnknownSessionID_404(t *testing.T) {
 	t.Parallel()
 
 	reader := &fakeReader{
-		getSession: func(_ context.Context, _ string) (*model.SessionDetail, error) {
-			return nil, postgres.ErrSessionNotFound
+		GetSessionFunc: func(_ context.Context, _ string) (*model.SessionDetail, error) {
+			return nil, store.ErrSessionNotFound
 		},
 	}
 	r := httpapi.New(httpapi.Deps{Reader: reader})
@@ -149,10 +148,10 @@ func TestGetSessionTimeline_HappyPath(t *testing.T) {
 	inputTokens := int64(41233)
 	ts := time.Date(2026, 8, 11, 9, 12, 4, 221_000_000, time.UTC)
 	reader := &fakeReader{
-		getSession: func(_ context.Context, id string) (*model.SessionDetail, error) {
+		GetSessionFunc: func(_ context.Context, id string) (*model.SessionDetail, error) {
 			return newTestSession(id), nil
 		},
-		listEvents: func(_ context.Context, f store.EventFilter, p store.Page) ([]model.Event, store.Cursor, error) {
+		ListEventsFunc: func(_ context.Context, f store.EventFilter, p store.Page) ([]model.Event, store.Cursor, error) {
 			require.Equal(t, "s1", f.SessionID)
 			require.Equal(t, 50, p.Limit)
 			return []model.Event{

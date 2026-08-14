@@ -12,7 +12,6 @@ import (
 	"github.com/YohannHommet/argus/server/internal/httpapi"
 	"github.com/YohannHommet/argus/server/internal/model"
 	"github.com/YohannHommet/argus/server/internal/store"
-	"github.com/YohannHommet/argus/server/internal/store/postgres"
 )
 
 func TestListToolCalls_RepeatedToolParamsOR(t *testing.T) {
@@ -20,7 +19,7 @@ func TestListToolCalls_RepeatedToolParamsOR(t *testing.T) {
 
 	var gotFilter store.ToolCallFilter
 	reader := &fakeReader{
-		listToolCalls: func(_ context.Context, f store.ToolCallFilter, _ store.Page) ([]model.ToolCall, store.Cursor, error) {
+		ListToolCallsFunc: func(_ context.Context, f store.ToolCallFilter, _ store.Page) ([]model.ToolCall, store.Cursor, error) {
 			gotFilter = f
 			return []model.ToolCall{}, "", nil
 		},
@@ -40,7 +39,7 @@ func TestListToolCalls_LimitClamps(t *testing.T) {
 
 	var gotPage store.Page
 	reader := &fakeReader{
-		listToolCalls: func(_ context.Context, _ store.ToolCallFilter, p store.Page) ([]model.ToolCall, store.Cursor, error) {
+		ListToolCallsFunc: func(_ context.Context, _ store.ToolCallFilter, p store.Page) ([]model.ToolCall, store.Cursor, error) {
 			gotPage = p
 			return []model.ToolCall{}, "", nil
 		},
@@ -74,8 +73,8 @@ func TestListSessionToolCalls_UnknownSessionID_404(t *testing.T) {
 	t.Parallel()
 
 	reader := &fakeReader{
-		getSession: func(_ context.Context, _ string) (*model.SessionDetail, error) {
-			return nil, postgres.ErrSessionNotFound
+		GetSessionFunc: func(_ context.Context, _ string) (*model.SessionDetail, error) {
+			return nil, store.ErrSessionNotFound
 		},
 	}
 	r := httpapi.New(httpapi.Deps{Reader: reader})
@@ -93,10 +92,10 @@ func TestListSessionToolCalls_HappyPath(t *testing.T) {
 
 	toolUseID := "toolu_01A"
 	reader := &fakeReader{
-		getSession: func(_ context.Context, id string) (*model.SessionDetail, error) {
+		GetSessionFunc: func(_ context.Context, id string) (*model.SessionDetail, error) {
 			return newTestSession(id), nil
 		},
-		listToolCalls: func(_ context.Context, f store.ToolCallFilter, p store.Page) ([]model.ToolCall, store.Cursor, error) {
+		ListToolCallsFunc: func(_ context.Context, f store.ToolCallFilter, p store.Page) ([]model.ToolCall, store.Cursor, error) {
 			require.Equal(t, "s1", f.SessionID)
 			require.Equal(t, 50, p.Limit)
 			return []model.ToolCall{

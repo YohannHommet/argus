@@ -102,7 +102,7 @@ func TestGetAnalyticsSummary_SourceMetric_NeverMixedWithEvent(t *testing.T) {
 
 	var gotSource store.AnalyticsSource
 	reader := &fakeReader{
-		analyticsSummary: func(_ context.Context, f store.AnalyticsFilter) (model.Summary, error) {
+		AnalyticsSummaryFunc: func(_ context.Context, f store.AnalyticsFilter) (model.Summary, error) {
 			gotSource = f.Source
 			return model.Summary{Source: model.Source(f.Source), MetricsOnlyProjects: []string{}, NotAttributable: []string{}}, nil
 		},
@@ -122,7 +122,7 @@ func TestGetAnalyticsSummary_SourceEvent_IsTheDefault(t *testing.T) {
 
 	var gotSource store.AnalyticsSource
 	reader := &fakeReader{
-		analyticsSummary: func(_ context.Context, f store.AnalyticsFilter) (model.Summary, error) {
+		AnalyticsSummaryFunc: func(_ context.Context, f store.AnalyticsFilter) (model.Summary, error) {
 			gotSource = f.Source
 			return model.Summary{Source: model.Source("event"), MetricsOnlyProjects: []string{}, NotAttributable: []string{}}, nil
 		},
@@ -142,7 +142,7 @@ func TestGetAnalyticsSummary_SourceEvent_IsTheDefault(t *testing.T) {
 func TestGetAnalyticsTimeseries_NotAttributable_400(t *testing.T) {
 	t.Parallel()
 	reader := &fakeReader{
-		analyticsSeries: func(context.Context, store.AnalyticsFilter, store.Grouping) (model.Series, error) {
+		AnalyticsSeriesFunc: func(context.Context, store.AnalyticsFilter, store.Grouping) (model.Series, error) {
 			return model.Series{}, store.ErrNotAttributable
 		},
 	}
@@ -158,7 +158,7 @@ func TestGetAnalyticsTimeseries_NotAttributable_400(t *testing.T) {
 func TestGetAnalyticsBreakdown_NotAttributable_400(t *testing.T) {
 	t.Parallel()
 	reader := &fakeReader{
-		analyticsBreakdown: func(context.Context, store.AnalyticsFilter, store.Dimension) (model.Breakdown, error) {
+		AnalyticsBreakdownFunc: func(context.Context, store.AnalyticsFilter, store.Dimension) (model.Breakdown, error) {
 			return model.Breakdown{}, store.ErrNotAttributable
 		},
 	}
@@ -178,7 +178,7 @@ func TestGetAnalyticsBreakdown_NotAttributable_400(t *testing.T) {
 func TestGetAnalyticsSummary_ModelFiltered_NullCountersPassThrough(t *testing.T) {
 	t.Parallel()
 	reader := &fakeReader{
-		analyticsSummary: func(_ context.Context, _ store.AnalyticsFilter) (model.Summary, error) {
+		AnalyticsSummaryFunc: func(_ context.Context, _ store.AnalyticsFilter) (model.Summary, error) {
 			return model.Summary{
 				Source:              model.Source("event"),
 				MetricsOnlyProjects: []string{},
@@ -209,7 +209,7 @@ func TestGetFacets_ServedFromCacheOnSecondCall(t *testing.T) {
 
 	var calls int32
 	reader := &fakeReader{
-		facets: func(context.Context) (model.Facets, error) {
+		FacetsFunc: func(context.Context) (model.Facets, error) {
 			atomic.AddInt32(&calls, 1)
 			return model.Facets{Projects: []string{"argus"}, Models: []string{}, Vendors: []string{}, Tools: []string{}, DecisionSources: []string{}, QuerySources: []string{}}, nil
 		},
@@ -234,7 +234,7 @@ func TestGetFacets_StoreErrorNotCached(t *testing.T) {
 
 	var calls int32
 	reader := &fakeReader{
-		facets: func(context.Context) (model.Facets, error) {
+		FacetsFunc: func(context.Context) (model.Facets, error) {
 			n := atomic.AddInt32(&calls, 1)
 			if n == 1 {
 				return model.Facets{}, context.DeadlineExceeded
@@ -260,15 +260,15 @@ func TestGetMeta_ExtendedFields_ReportsHonestFalseFlags(t *testing.T) {
 	t.Parallel()
 
 	reader := &fakeReader{
-		facets: func(context.Context) (model.Facets, error) {
+		FacetsFunc: func(context.Context) (model.Facets, error) {
 			return model.Facets{Projects: []string{}, Models: []string{}, Vendors: []string{"claude_code"}, Tools: []string{}, DecisionSources: []string{}, QuerySources: []string{}}, nil
 		},
-		dataQuality: func(context.Context) (model.DataQuality, error) {
+		DataQualityFunc: func(context.Context) (model.DataQuality, error) {
 			// A database that received only OTLP: logs/metrics seen, hooks
 			// and tool_parameters detail never seen.
 			return model.DataQuality{LogsExporterSeen: true, MetricsExporterSeen: false, HooksSeen: false, ToolDetailsSeen: false}, nil
 		},
-		analyticsSummary: func(context.Context, store.AnalyticsFilter) (model.Summary, error) {
+		AnalyticsSummaryFunc: func(context.Context, store.AnalyticsFilter) (model.Summary, error) {
 			return model.Summary{Source: model.Source("event"), MetricsOnlyProjects: []string{}, NotAttributable: []string{}}, nil
 		},
 	}
@@ -309,7 +309,7 @@ func TestGetQualityUnknownKinds_PassesSinceThrough(t *testing.T) {
 
 	var gotSince time.Time
 	reader := &fakeReader{
-		unknownKinds: func(_ context.Context, since time.Time, _ int) ([]model.UnknownKindGroup, error) {
+		UnknownKindsFunc: func(_ context.Context, since time.Time, _ int) ([]model.UnknownKindGroup, error) {
 			gotSince = since
 			return []model.UnknownKindGroup{
 				{EventName: "some_new_event", Source: model.SourceOTelLog, Count: 41, FirstSeen: since, LastSeen: since, Sample: map[string]any{"raw.attr": "value"}},
@@ -335,7 +335,7 @@ func TestGetQualityUnknownKinds_DefaultSinceIsMinus24h(t *testing.T) {
 
 	var gotSince time.Time
 	reader := &fakeReader{
-		unknownKinds: func(_ context.Context, since time.Time, _ int) ([]model.UnknownKindGroup, error) {
+		UnknownKindsFunc: func(_ context.Context, since time.Time, _ int) ([]model.UnknownKindGroup, error) {
 			gotSince = since
 			return nil, nil
 		},
@@ -353,7 +353,7 @@ func TestGetQualityHookLatency_ReturnsRowsPerHookEvent(t *testing.T) {
 	t.Parallel()
 
 	reader := &fakeReader{
-		hookLatency: func(context.Context, store.AnalyticsFilter) (model.HookLatency, error) {
+		HookLatencyFunc: func(context.Context, store.AnalyticsFilter) (model.HookLatency, error) {
 			return model.HookLatency{Rows: []model.HookLatencyRow{
 				{HookEvent: "PostToolUse", Executions: 412, P50MS: 9, P95MS: 41, P99MS: 120, Errors: 0, Cancelled: 0},
 			}}, nil
@@ -376,7 +376,7 @@ func TestGetAnalyticsDecisions_ReturnsMatrix(t *testing.T) {
 	t.Parallel()
 
 	reader := &fakeReader{
-		analyticsDecisions: func(context.Context, store.AnalyticsFilter) (model.DecisionMatrix, error) {
+		AnalyticsDecisionsFunc: func(context.Context, store.AnalyticsFilter) (model.DecisionMatrix, error) {
 			return model.DecisionMatrix{Rows: []model.DecisionMatrixRow{
 				{ToolName: "Edit", Accept: 300, Reject: 41, BySource: map[string]int64{"config": 210}, ExactShare: 1.0},
 			}}, nil
@@ -398,7 +398,7 @@ func TestGetAnalyticsBreakdown_ReturnsRows(t *testing.T) {
 	t.Parallel()
 
 	reader := &fakeReader{
-		analyticsBreakdown: func(_ context.Context, _ store.AnalyticsFilter, d store.Dimension) (model.Breakdown, error) {
+		AnalyticsBreakdownFunc: func(_ context.Context, _ store.AnalyticsFilter, d store.Dimension) (model.Breakdown, error) {
 			require.Equal(t, store.DimensionTool, d.Name)
 			return model.Breakdown{Dimension: string(d.Name), Rows: []model.BreakdownRow{{Key: "Edit", Value: 812, Share: 0.37}}}, nil
 		},

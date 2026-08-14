@@ -14,147 +14,16 @@ import (
 	"github.com/YohannHommet/argus/server/internal/model"
 	"github.com/YohannHommet/argus/server/internal/query"
 	"github.com/YohannHommet/argus/server/internal/store"
-	"github.com/YohannHommet/argus/server/internal/store/postgres"
+	storetest "github.com/YohannHommet/argus/server/internal/store/testing"
 )
 
-// fakeReader is the P3-07 test double for httpapi.Reader: the ticket's
-// "fake store" AC scenario refers to store/testing.Fake, which is P3-09's
-// deliverable and runs after this ticket, so this is a minimal, local
-// stand-in implementing only the methods httpapi.Reader declares. P3-09
-// should consolidate this (and its events_test.go/toolcalls_test.go
-// siblings) into the shared Fake rather than keep three separate ones.
-//
-// Every field is a settable func so each test wires up only the behaviour
-// it needs; an unset func fails loudly (never a silent zero value) so a
-// test that forgot to stub a call path is caught immediately rather than
-// asserting against an empty response.
-type fakeReader struct {
-	listSessions  func(ctx context.Context, f store.SessionFilter, p store.Page) ([]model.SessionSummary, store.Cursor, error)
-	getSession    func(ctx context.Context, id string) (*model.SessionDetail, error)
-	listTurns     func(ctx context.Context, sessionID string) ([]model.Turn, error)
-	listEvents    func(ctx context.Context, f store.EventFilter, p store.Page) ([]model.Event, store.Cursor, error)
-	getEvent      func(ctx context.Context, ref model.EventRef) (*model.Event, error)
-	listToolCalls func(ctx context.Context, f store.ToolCallFilter, p store.Page) ([]model.ToolCall, store.Cursor, error)
-	subagentTree  func(ctx context.Context, sessionID string) (model.SubagentTree, error)
-
-	// The eight fields below back httpapi.AnalyticsReader (P3-08:
-	// analytics.go/facets.go/quality.go/meta.go's port), extending — not
-	// duplicating — this ticket's fakeReader per the P3-08 ticket note
-	// ("reuse and extend that rather than creating a second one").
-	analyticsSummary   func(ctx context.Context, f store.AnalyticsFilter) (model.Summary, error)
-	analyticsSeries    func(ctx context.Context, f store.AnalyticsFilter, g store.Grouping) (model.Series, error)
-	analyticsBreakdown func(ctx context.Context, f store.AnalyticsFilter, d store.Dimension) (model.Breakdown, error)
-	analyticsDecisions func(ctx context.Context, f store.AnalyticsFilter) (model.DecisionMatrix, error)
-	facets             func(ctx context.Context) (model.Facets, error)
-	dataQuality        func(ctx context.Context) (model.DataQuality, error)
-	unknownKinds       func(ctx context.Context, since time.Time, limit int) ([]model.UnknownKindGroup, error)
-	hookLatency        func(ctx context.Context, f store.AnalyticsFilter) (model.HookLatency, error)
-}
-
-func (f *fakeReader) ListSessions(ctx context.Context, filter store.SessionFilter, p store.Page) ([]model.SessionSummary, store.Cursor, error) {
-	if f.listSessions == nil {
-		panic("fakeReader.ListSessions not stubbed")
-	}
-	return f.listSessions(ctx, filter, p)
-}
-
-func (f *fakeReader) GetSession(ctx context.Context, id string) (*model.SessionDetail, error) {
-	if f.getSession == nil {
-		panic("fakeReader.GetSession not stubbed")
-	}
-	return f.getSession(ctx, id)
-}
-
-func (f *fakeReader) ListTurns(ctx context.Context, sessionID string) ([]model.Turn, error) {
-	if f.listTurns == nil {
-		panic("fakeReader.ListTurns not stubbed")
-	}
-	return f.listTurns(ctx, sessionID)
-}
-
-func (f *fakeReader) ListEvents(ctx context.Context, filter store.EventFilter, p store.Page) ([]model.Event, store.Cursor, error) {
-	if f.listEvents == nil {
-		panic("fakeReader.ListEvents not stubbed")
-	}
-	return f.listEvents(ctx, filter, p)
-}
-
-func (f *fakeReader) GetEvent(ctx context.Context, ref model.EventRef) (*model.Event, error) {
-	if f.getEvent == nil {
-		panic("fakeReader.GetEvent not stubbed")
-	}
-	return f.getEvent(ctx, ref)
-}
-
-func (f *fakeReader) ListToolCalls(ctx context.Context, filter store.ToolCallFilter, p store.Page) ([]model.ToolCall, store.Cursor, error) {
-	if f.listToolCalls == nil {
-		panic("fakeReader.ListToolCalls not stubbed")
-	}
-	return f.listToolCalls(ctx, filter, p)
-}
-
-func (f *fakeReader) SubagentTree(ctx context.Context, sessionID string) (model.SubagentTree, error) {
-	if f.subagentTree == nil {
-		panic("fakeReader.SubagentTree not stubbed")
-	}
-	return f.subagentTree(ctx, sessionID)
-}
-
-func (f *fakeReader) AnalyticsSummary(ctx context.Context, filter store.AnalyticsFilter) (model.Summary, error) {
-	if f.analyticsSummary == nil {
-		panic("fakeReader.AnalyticsSummary not stubbed")
-	}
-	return f.analyticsSummary(ctx, filter)
-}
-
-func (f *fakeReader) AnalyticsSeries(ctx context.Context, filter store.AnalyticsFilter, g store.Grouping) (model.Series, error) {
-	if f.analyticsSeries == nil {
-		panic("fakeReader.AnalyticsSeries not stubbed")
-	}
-	return f.analyticsSeries(ctx, filter, g)
-}
-
-func (f *fakeReader) AnalyticsBreakdown(ctx context.Context, filter store.AnalyticsFilter, d store.Dimension) (model.Breakdown, error) {
-	if f.analyticsBreakdown == nil {
-		panic("fakeReader.AnalyticsBreakdown not stubbed")
-	}
-	return f.analyticsBreakdown(ctx, filter, d)
-}
-
-func (f *fakeReader) AnalyticsDecisions(ctx context.Context, filter store.AnalyticsFilter) (model.DecisionMatrix, error) {
-	if f.analyticsDecisions == nil {
-		panic("fakeReader.AnalyticsDecisions not stubbed")
-	}
-	return f.analyticsDecisions(ctx, filter)
-}
-
-func (f *fakeReader) Facets(ctx context.Context) (model.Facets, error) {
-	if f.facets == nil {
-		panic("fakeReader.Facets not stubbed")
-	}
-	return f.facets(ctx)
-}
-
-func (f *fakeReader) DataQuality(ctx context.Context) (model.DataQuality, error) {
-	if f.dataQuality == nil {
-		panic("fakeReader.DataQuality not stubbed")
-	}
-	return f.dataQuality(ctx)
-}
-
-func (f *fakeReader) UnknownKinds(ctx context.Context, since time.Time, limit int) ([]model.UnknownKindGroup, error) {
-	if f.unknownKinds == nil {
-		panic("fakeReader.UnknownKinds not stubbed")
-	}
-	return f.unknownKinds(ctx, since, limit)
-}
-
-func (f *fakeReader) HookLatency(ctx context.Context, filter store.AnalyticsFilter) (model.HookLatency, error) {
-	if f.hookLatency == nil {
-		panic("fakeReader.HookLatency not stubbed")
-	}
-	return f.hookLatency(ctx, filter)
-}
+// fakeReader is this package's shared httpapi.Reader/httpapi.AnalyticsReader
+// test double: storetest.Fake (P3-09's shared in-memory store.Reader
+// double), consolidating what used to be three near-identical local doubles
+// here, in events_test.go, and in toolcalls_test.go (P3-07/P3-08). Aliased
+// under the pre-P3-09 name so every existing `&fakeReader{...}` literal in
+// this package keeps working unchanged.
+type fakeReader = storetest.Fake
 
 // newTestSession is a minimal, valid *model.SessionDetail for handlers that
 // only need "some session", not a specific one's fields.
@@ -182,7 +51,7 @@ func TestListSessions_RepeatedProjectParamsOR(t *testing.T) {
 
 	var gotFilter store.SessionFilter
 	reader := &fakeReader{
-		listSessions: func(_ context.Context, f store.SessionFilter, _ store.Page) ([]model.SessionSummary, store.Cursor, error) {
+		ListSessionsFunc: func(_ context.Context, f store.SessionFilter, _ store.Page) ([]model.SessionSummary, store.Cursor, error) {
 			gotFilter = f
 			return []model.SessionSummary{}, "", nil
 		},
@@ -203,7 +72,7 @@ func TestListSessions_LimitClampsAndDefaultTimeIsUnbounded(t *testing.T) {
 	var gotPage store.Page
 	var gotFilter store.SessionFilter
 	reader := &fakeReader{
-		listSessions: func(_ context.Context, f store.SessionFilter, p store.Page) ([]model.SessionSummary, store.Cursor, error) {
+		ListSessionsFunc: func(_ context.Context, f store.SessionFilter, p store.Page) ([]model.SessionSummary, store.Cursor, error) {
 			gotFilter = f
 			gotPage = p
 			return []model.SessionSummary{}, "", nil
@@ -226,7 +95,7 @@ func TestListSessions_FromRelativeShorthandParses(t *testing.T) {
 
 	var gotFilter store.SessionFilter
 	reader := &fakeReader{
-		listSessions: func(_ context.Context, f store.SessionFilter, _ store.Page) ([]model.SessionSummary, store.Cursor, error) {
+		ListSessionsFunc: func(_ context.Context, f store.SessionFilter, _ store.Page) ([]model.SessionSummary, store.Cursor, error) {
 			gotFilter = f
 			return []model.SessionSummary{}, "", nil
 		},
@@ -262,8 +131,8 @@ func TestGetSession_UnknownID_404Problem(t *testing.T) {
 	t.Parallel()
 
 	reader := &fakeReader{
-		getSession: func(_ context.Context, _ string) (*model.SessionDetail, error) {
-			return nil, postgres.ErrSessionNotFound
+		GetSessionFunc: func(_ context.Context, _ string) (*model.SessionDetail, error) {
+			return nil, store.ErrSessionNotFound
 		},
 	}
 	r := httpapi.New(httpapi.Deps{Reader: reader})
@@ -281,7 +150,7 @@ func TestGetSession_ETagAndIfNoneMatch(t *testing.T) {
 	t.Parallel()
 
 	reader := &fakeReader{
-		getSession: func(_ context.Context, id string) (*model.SessionDetail, error) {
+		GetSessionFunc: func(_ context.Context, id string) (*model.SessionDetail, error) {
 			return newTestSession(id), nil
 		},
 	}
@@ -317,10 +186,10 @@ func TestGetSessionSubagents_CostAttributionPerNodeUnavailableAndCostNull(t *tes
 	t.Parallel()
 
 	reader := &fakeReader{
-		getSession: func(_ context.Context, id string) (*model.SessionDetail, error) {
+		GetSessionFunc: func(_ context.Context, id string) (*model.SessionDetail, error) {
 			return newTestSession(id), nil
 		},
-		subagentTree: func(_ context.Context, _ string) (model.SubagentTree, error) {
+		SubagentTreeFunc: func(_ context.Context, _ string) (model.SubagentTree, error) {
 			return model.SubagentTree{
 				Nodes: []model.SubagentNode{
 					{
@@ -353,8 +222,8 @@ func TestGetSessionSubagents_UnknownSessionID_404(t *testing.T) {
 	t.Parallel()
 
 	reader := &fakeReader{
-		getSession: func(_ context.Context, _ string) (*model.SessionDetail, error) {
-			return nil, postgres.ErrSessionNotFound
+		GetSessionFunc: func(_ context.Context, _ string) (*model.SessionDetail, error) {
+			return nil, store.ErrSessionNotFound
 		},
 	}
 	r := httpapi.New(httpapi.Deps{Reader: reader})
@@ -377,10 +246,10 @@ func TestListSessionTurns_PaginatesInMemoryAndRoundTripsCursor(t *testing.T) {
 		{SessionID: "s1", PromptID: "p1", FirstSeenAt: t0},
 	}
 	reader := &fakeReader{
-		getSession: func(_ context.Context, id string) (*model.SessionDetail, error) {
+		GetSessionFunc: func(_ context.Context, id string) (*model.SessionDetail, error) {
 			return newTestSession(id), nil
 		},
-		listTurns: func(_ context.Context, sessionID string) ([]model.Turn, error) {
+		ListTurnsFunc: func(_ context.Context, sessionID string) ([]model.Turn, error) {
 			require.Equal(t, "s1", sessionID)
 			return allTurns, nil
 		},
@@ -418,7 +287,7 @@ func TestListSessionTurns_InvalidCursorValue_400(t *testing.T) {
 	t.Parallel()
 
 	reader := &fakeReader{
-		getSession: func(_ context.Context, id string) (*model.SessionDetail, error) {
+		GetSessionFunc: func(_ context.Context, id string) (*model.SessionDetail, error) {
 			return newTestSession(id), nil
 		},
 	}
