@@ -38,6 +38,22 @@ func (a *App) Serve(ctx context.Context) error {
 		Migrations: a.store,
 		Queue:      a.ingest,
 
+		// Reader/Analytics wire the Phase-3 read API: P3-07's
+		// session/timeline/event/tool-call handlers and P3-08's analytics,
+		// facets, meta and quality handlers. postgres.Store satisfies both
+		// narrow ports structurally, the same convention Migrations follows.
+		//
+		// These two lines are load-bearing in a way nothing else here is:
+		// router.go mounts each group only when these are non-nil, a nil-safe
+		// default that allowed the entire read API to be silently absent from
+		// the running server while every handler test passed — those tests and
+		// the conformance harness call httpapi.New directly and never come
+		// through Serve. `docker compose up` followed by a curl to
+		// /api/v1/sessions returned 404 until these were added, which is what
+		// TestServe_ReadAPIRoutesAreMounted now pins.
+		Reader:    a.store,
+		Analytics: a.store,
+
 		// HookMounter wires P2-11's POST /ingest/hook onto the mount seam
 		// router.go already exposes; router.go itself is never touched.
 		HookMounter: a.hooks,
