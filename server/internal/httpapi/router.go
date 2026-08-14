@@ -12,6 +12,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/YohannHommet/argus/server/internal/config"
+	"github.com/YohannHommet/argus/server/internal/model"
+	"github.com/YohannHommet/argus/server/internal/store"
 )
 
 // requestTimeout bounds how long a single request may run before chi's
@@ -56,6 +58,24 @@ type QueueSaturationChecker interface {
 	QueueSaturated() bool
 }
 
+// Reader is the narrow read-store port GET /api/v1/sessions, /events, and
+// /tool-calls need (SPEC §3.1's httpapi -> query -> store direction):
+// internal/store.Store satisfies it structurally, but httpapi depends only
+// on the Reader methods P3-07 actually calls — not the analytics/facets/
+// quality methods P3-08 owns, which that ticket will likely add to a
+// sibling interface rather than widening this one. A nil Reader (P1-05's
+// default, and any test that doesn't care) mounts none of these routes,
+// the same nil-safe convention Mounter already establishes.
+type Reader interface {
+	ListSessions(ctx context.Context, f store.SessionFilter, p store.Page) ([]model.SessionSummary, store.Cursor, error)
+	GetSession(ctx context.Context, id string) (*model.SessionDetail, error)
+	ListTurns(ctx context.Context, sessionID string) ([]model.Turn, error)
+	ListEvents(ctx context.Context, f store.EventFilter, p store.Page) ([]model.Event, store.Cursor, error)
+	GetEvent(ctx context.Context, ref model.EventRef) (*model.Event, error)
+	ListToolCalls(ctx context.Context, f store.ToolCallFilter, p store.Page) ([]model.ToolCall, store.Cursor, error)
+	SubagentTree(ctx context.Context, sessionID string) (model.SubagentTree, error)
+}
+
 // Mounter lets a not-yet-built package attach its own routes to the router
 // without router.go ever being edited again. P2-10 (OTLP receivers under
 // /v1/*) and P2-11 (the hooks webhook under /ingest/hook) each implement
@@ -82,6 +102,11 @@ type Deps struct {
 	// check keep working unchanged.
 	Migrations MigrationsChecker
 	Queue      QueueSaturationChecker
+
+	// Reader backs the P3-07 read API (/sessions, /events, /tool-calls and
+	// their sub-resources). nil mounts none of those routes — see Reader's
+	// own doc comment.
+	Reader Reader
 
 	OTLPMounter Mounter // future P2-10 (POST /v1/logs, /v1/metrics, /v1/traces); nil = no-op
 	HookMounter Mounter // future P2-11 (POST /ingest/hook); nil = no-op
@@ -135,6 +160,16 @@ func New(d Deps) http.Handler {
 			}
 
 			v1.Get("/meta", metaHandler(d.Config))
+
+			// P3-07's read API. A nil Reader (P1-05's default) mounts none
+			// of these, matching Mounter's nil-safe convention. P3-08 will
+			// likely add mountAnalyticsRoutes, mountFacetRoutes, and
+			// mountQualityRoutes here shortly after, plus extend /meta.
+			if d.Reader != nil {
+				mountSessionRoutes(v1, d.Reader)
+				mountEventRoutes(v1, d.Reader)
+				mountToolCallRoutes(v1, d.Reader)
+			}
 		})
 	})
 

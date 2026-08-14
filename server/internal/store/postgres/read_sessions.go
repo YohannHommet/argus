@@ -78,7 +78,14 @@ var ErrInvalidCursor = errors.New("postgres: invalid cursor")
 // ErrSessionNotFound is GetSession's not-found signal (SPEC §4.3's `GET
 // /api/v1/sessions/{id}` 404 response), wrapping pgx.ErrNoRows so callers
 // can match on it without importing pgx themselves.
-var ErrSessionNotFound = errors.New("postgres: session not found")
+//
+// It is an alias for store.ErrSessionNotFound, not its own error value: the
+// sentinel belongs on the seam so every backend (and storetest.Fake) can
+// produce it and internal/query never has to import this package to
+// recognise a 404 — see store/errors.go for the full reasoning. Existing
+// callers and tests that reference postgres.ErrSessionNotFound keep working,
+// and errors.Is holds against either name.
+var ErrSessionNotFound = store.ErrSessionNotFound
 
 // sessionCursorPayload is the wire shape SPEC §4.1 specifies:
 // `{"k":"<sort key>","v":[…]}`. V holds exactly two elements for a session

@@ -1270,6 +1270,7 @@ export interface operations {
                 prompt_id?: components["parameters"]["PromptID"];
                 agent_id?: components["parameters"]["AgentID"];
                 order?: components["parameters"]["Order"];
+                /** @description Reserved: accepted and currently ignored by the server. SPEC §4.3 lists it on this endpoint, but collapsing repeated events into groups is a presentation concern the UI performs client-side (PLAN P4-04's collapseEvents), and SPEC defines no server-side semantics for it. Documented as a no-op rather than silently accepted, so no client mistakes it for a filter that changes the result set. */
                 collapse?: boolean;
                 /** @description slim (default, no attrs) or full. */
                 fields?: components["parameters"]["Fields"];

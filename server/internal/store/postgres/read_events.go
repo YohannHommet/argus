@@ -62,8 +62,9 @@ const (
 // ErrEventNotFound is GetEvent's not-found signal (SPEC §4.2's `GET
 // /api/v1/events/{ref}` 404 response), wrapping pgx.ErrNoRows so callers
 // can match on it without importing pgx themselves — same convention as
-// ErrSessionNotFound.
-var ErrEventNotFound = errors.New("postgres: event not found")
+// ErrSessionNotFound, and like it an alias for the seam-level
+// store.ErrEventNotFound rather than its own value.
+var ErrEventNotFound = store.ErrEventNotFound
 
 // eventCursorPayload is the wire shape SPEC §4.1 specifies:
 // `{"k":"<sort key>","v":[…]}`. V holds exactly three elements: ts,
