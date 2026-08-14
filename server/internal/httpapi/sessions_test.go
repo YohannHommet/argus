@@ -36,6 +36,19 @@ type fakeReader struct {
 	getEvent      func(ctx context.Context, ref model.EventRef) (*model.Event, error)
 	listToolCalls func(ctx context.Context, f store.ToolCallFilter, p store.Page) ([]model.ToolCall, store.Cursor, error)
 	subagentTree  func(ctx context.Context, sessionID string) (model.SubagentTree, error)
+
+	// The eight fields below back httpapi.AnalyticsReader (P3-08:
+	// analytics.go/facets.go/quality.go/meta.go's port), extending — not
+	// duplicating — this ticket's fakeReader per the P3-08 ticket note
+	// ("reuse and extend that rather than creating a second one").
+	analyticsSummary   func(ctx context.Context, f store.AnalyticsFilter) (model.Summary, error)
+	analyticsSeries    func(ctx context.Context, f store.AnalyticsFilter, g store.Grouping) (model.Series, error)
+	analyticsBreakdown func(ctx context.Context, f store.AnalyticsFilter, d store.Dimension) (model.Breakdown, error)
+	analyticsDecisions func(ctx context.Context, f store.AnalyticsFilter) (model.DecisionMatrix, error)
+	facets             func(ctx context.Context) (model.Facets, error)
+	dataQuality        func(ctx context.Context) (model.DataQuality, error)
+	unknownKinds       func(ctx context.Context, since time.Time, limit int) ([]model.UnknownKindGroup, error)
+	hookLatency        func(ctx context.Context, f store.AnalyticsFilter) (model.HookLatency, error)
 }
 
 func (f *fakeReader) ListSessions(ctx context.Context, filter store.SessionFilter, p store.Page) ([]model.SessionSummary, store.Cursor, error) {
@@ -85,6 +98,62 @@ func (f *fakeReader) SubagentTree(ctx context.Context, sessionID string) (model.
 		panic("fakeReader.SubagentTree not stubbed")
 	}
 	return f.subagentTree(ctx, sessionID)
+}
+
+func (f *fakeReader) AnalyticsSummary(ctx context.Context, filter store.AnalyticsFilter) (model.Summary, error) {
+	if f.analyticsSummary == nil {
+		panic("fakeReader.AnalyticsSummary not stubbed")
+	}
+	return f.analyticsSummary(ctx, filter)
+}
+
+func (f *fakeReader) AnalyticsSeries(ctx context.Context, filter store.AnalyticsFilter, g store.Grouping) (model.Series, error) {
+	if f.analyticsSeries == nil {
+		panic("fakeReader.AnalyticsSeries not stubbed")
+	}
+	return f.analyticsSeries(ctx, filter, g)
+}
+
+func (f *fakeReader) AnalyticsBreakdown(ctx context.Context, filter store.AnalyticsFilter, d store.Dimension) (model.Breakdown, error) {
+	if f.analyticsBreakdown == nil {
+		panic("fakeReader.AnalyticsBreakdown not stubbed")
+	}
+	return f.analyticsBreakdown(ctx, filter, d)
+}
+
+func (f *fakeReader) AnalyticsDecisions(ctx context.Context, filter store.AnalyticsFilter) (model.DecisionMatrix, error) {
+	if f.analyticsDecisions == nil {
+		panic("fakeReader.AnalyticsDecisions not stubbed")
+	}
+	return f.analyticsDecisions(ctx, filter)
+}
+
+func (f *fakeReader) Facets(ctx context.Context) (model.Facets, error) {
+	if f.facets == nil {
+		panic("fakeReader.Facets not stubbed")
+	}
+	return f.facets(ctx)
+}
+
+func (f *fakeReader) DataQuality(ctx context.Context) (model.DataQuality, error) {
+	if f.dataQuality == nil {
+		panic("fakeReader.DataQuality not stubbed")
+	}
+	return f.dataQuality(ctx)
+}
+
+func (f *fakeReader) UnknownKinds(ctx context.Context, since time.Time, limit int) ([]model.UnknownKindGroup, error) {
+	if f.unknownKinds == nil {
+		panic("fakeReader.UnknownKinds not stubbed")
+	}
+	return f.unknownKinds(ctx, since, limit)
+}
+
+func (f *fakeReader) HookLatency(ctx context.Context, filter store.AnalyticsFilter) (model.HookLatency, error) {
+	if f.hookLatency == nil {
+		panic("fakeReader.HookLatency not stubbed")
+	}
+	return f.hookLatency(ctx, filter)
 }
 
 // newTestSession is a minimal, valid *model.SessionDetail for handlers that

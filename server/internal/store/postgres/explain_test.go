@@ -339,19 +339,62 @@ func TestExplainGuard_AnalyticsQueriesNeverTouchEvents(t *testing.T) {
 	}
 }
 
-// TestExplainGuard_DataQualityAllowList passes vacuously today (see
-// dataQualityAllowList's doc) and starts actually asserting the moment
-// P3-08 populates that list — SPEC §2.5's explicit exemption for the
-// data-quality/hook-latency queries, which DO legitimately touch events but
-// only ever bounded to a 24h window.
+// TestExplainGuard_DataQualityAllowList asserts the two conditions SPEC §2.5
+// attaches to its exemption, rather than merely printing the plans.
+//
+// The exemption is conditional — those queries "are exempt and explicitly
+// listed in that test's allow-list, **bounded to their windows**" — so an
+// allow-listed entry that stopped being window-bounded would be exactly the
+// unbounded scan over `events` the gate exists to prevent, while sitting on
+// the list that excuses it. Two things are therefore checked per entry:
+//
+//  1. the plan really does touch `events` — an entry that does not belong on
+//     this list at all should be caught, not silently carried; and
+//  2. the plan applies a `ts` bound, which is what keeps the scan
+//     proportional to the requested window instead of to all of retention.
+//
+// This test was log-only when first written (t.Logf and no assertion), which
+// made a populated allow-list indistinguishable from an empty one.
 func TestExplainGuard_DataQualityAllowList(t *testing.T) {
-	_, pool := newStore(t)
+	st, pool := newStore(t)
+	require.NotEmpty(t, dataQualityAllowList,
+		"an empty allow-list makes this test vacuous: the SPEC §2.5-exempted queries must be listed here so their window-bounding stays asserted")
+
+	// Partitions covering the queries' 24h window must exist first. Without
+	// them Postgres prunes every partition away and plans the whole statement
+	// as `Result / One-Time Filter: false` — a plan that scans nothing, in
+	// which neither the events relation nor a ts bound appears, so both
+	// assertions below would be measuring an empty plan rather than the query.
+	// (The first assertion still passed on such a plan, because a Group Key
+	// mentions `events.event_name` even when no partition is read — which is
+	// precisely how a plan-text guard can look green while proving nothing.)
+	now := time.Now().UTC()
+	require.NoError(t, st.EnsurePartitions(context.Background(), now.Add(-24*time.Hour), now))
+
 	for _, c := range dataQualityAllowList {
 		t.Run(c.name, func(t *testing.T) {
 			plan := explainPlanText(t, pool, c.sql, c.args)
-			t.Logf("%s plan (allow-listed, expected to mention events):\n%s", c.name, plan)
+			require.True(t, planMentionsEvents(plan),
+				"%s is allow-listed as an events-touching query but its plan does not mention events — it either does not belong on this list, or the query changed:\n%s", c.name, plan)
+			require.True(t, planBoundsTS(plan),
+				"%s is exempt from the no-events rule ONLY because it is bounded to the requested window (SPEC §2.5), but its plan shows no ts bound — an unbounded scan over every partition:\n%s", c.name, plan)
 		})
 	}
+}
+
+// planBoundsTS reports whether an EXPLAIN plan constrains `ts`, whether the
+// bound shows up as an index condition, a filter, or partition pruning. It
+// deliberately looks for the column in a comparison rather than for a
+// specific plan node: which of those forms Postgres picks depends on row
+// counts and available indexes, and this assertion is about the query being
+// window-bounded at all, not about how the planner chose to apply it.
+func planBoundsTS(plan string) bool {
+	for _, form := range []string{"ts >=", "ts >", "ts <=", "ts <", "ts = "} {
+		if strings.Contains(plan, form) {
+			return true
+		}
+	}
+	return false
 }
 
 // TestExplainGuard_DetectsEventsInPlan is the guard's own regression test:

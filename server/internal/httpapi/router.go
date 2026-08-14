@@ -13,6 +13,7 @@ import (
 
 	"github.com/YohannHommet/argus/server/internal/config"
 	"github.com/YohannHommet/argus/server/internal/model"
+	"github.com/YohannHommet/argus/server/internal/query"
 	"github.com/YohannHommet/argus/server/internal/store"
 )
 
@@ -76,6 +77,21 @@ type Reader interface {
 	SubagentTree(ctx context.Context, sessionID string) (model.SubagentTree, error)
 }
 
+// AnalyticsReader is the narrow read-store port GET /api/v1/analytics/*,
+// /facets, and /quality/* need (SPEC §3.1's httpapi -> query -> store
+// direction) — the "sibling interface" Reader's own doc comment anticipates
+// P3-08 adding rather than widening Reader itself: internal/store.Store
+// satisfies it structurally, but httpapi depends only on the methods
+// analytics.go/facets.go/quality.go/meta.go actually call. A nil
+// AnalyticsReader (P1-05/P3-07's default, and any test that doesn't care)
+// mounts none of these routes and leaves GET /api/v1/meta's P3-08 fields at
+// their zero values, the same nil-safe convention Reader already
+// establishes.
+type AnalyticsReader interface {
+	query.AnalyticsReader
+	query.QualityReader
+}
+
 // Mounter lets a not-yet-built package attach its own routes to the router
 // without router.go ever being edited again. P2-10 (OTLP receivers under
 // /v1/*) and P2-11 (the hooks webhook under /ingest/hook) each implement
@@ -107,6 +123,12 @@ type Deps struct {
 	// their sub-resources). nil mounts none of those routes — see Reader's
 	// own doc comment.
 	Reader Reader
+
+	// Analytics backs the P3-08 read API (/analytics/*, /facets,
+	// /quality/*) and extends GET /meta. nil mounts none of those routes
+	// and leaves /meta's P3-08 fields at their zero values — see
+	// AnalyticsReader's own doc comment.
+	Analytics AnalyticsReader
 
 	OTLPMounter Mounter // future P2-10 (POST /v1/logs, /v1/metrics, /v1/traces); nil = no-op
 	HookMounter Mounter // future P2-11 (POST /ingest/hook); nil = no-op
@@ -159,16 +181,23 @@ func New(d Deps) http.Handler {
 				v1.Use(RequireAPIToken(d.Config.APIToken))
 			}
 
-			v1.Get("/meta", metaHandler(d.Config))
+			v1.Get("/meta", metaHandler(d.Config, d.Analytics))
 
 			// P3-07's read API. A nil Reader (P1-05's default) mounts none
-			// of these, matching Mounter's nil-safe convention. P3-08 will
-			// likely add mountAnalyticsRoutes, mountFacetRoutes, and
-			// mountQualityRoutes here shortly after, plus extend /meta.
+			// of these, matching Mounter's nil-safe convention.
 			if d.Reader != nil {
 				mountSessionRoutes(v1, d.Reader)
 				mountEventRoutes(v1, d.Reader)
 				mountToolCallRoutes(v1, d.Reader)
+			}
+
+			// P3-08's read API. A nil Analytics (P1-05/P3-07's default)
+			// mounts none of these, matching Reader's own nil-safe
+			// convention above.
+			if d.Analytics != nil {
+				mountAnalyticsRoutes(v1, d.Analytics)
+				mountFacetRoutes(v1, d.Analytics)
+				mountQualityRoutes(v1, d.Analytics)
 			}
 		})
 	})
