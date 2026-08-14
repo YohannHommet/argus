@@ -1,5 +1,5 @@
 import { createPinia, setActivePinia } from 'pinia'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { useUiStore } from '@/stores/ui'
 
@@ -45,6 +45,39 @@ describe('useUiStore', () => {
 
     expect(ui.theme).toBe('light')
     expect(document.documentElement.classList.contains('light')).toBe(true)
+  })
+
+  it('toggle() does not throw when localStorage.setItem fails (m22)', () => {
+    const ui = useUiStore()
+    const setItemSpy = vi
+      .spyOn(Storage.prototype, 'setItem')
+      .mockImplementation(() => {
+        throw new DOMException('QuotaExceededError', 'QuotaExceededError')
+      })
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    expect(() => ui.toggle()).not.toThrow()
+
+    // <html>'s class still flips even though persistence failed — the
+    // failure must not roll back work already applied by the watcher.
+    expect(ui.theme).toBe('light')
+    expect(document.documentElement.classList.contains('light')).toBe(true)
+    expect(consoleErrorSpy).toHaveBeenCalled()
+
+    setItemSpy.mockRestore()
+    consoleErrorSpy.mockRestore()
+  })
+
+  it('preserves an unrelated sibling field already in the argus-ui key on a theme change (m22)', () => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ theme: 'dark', sidebar: 'collapsed' }))
+    const ui = useUiStore()
+
+    ui.toggle()
+
+    expect(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}')).toEqual({
+      theme: 'light',
+      sidebar: 'collapsed',
+    })
   })
 
   it('uses light when prefers-color-scheme: light matches and no localStorage entry exists', () => {
