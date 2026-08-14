@@ -130,25 +130,8 @@ func (s *Store) Close() {
 // SubagentTree implements store.Reader; implemented in subagent_tree.go
 // (P2-08).
 
-// AnalyticsSummary implements store.Reader; not yet implemented (P1-04 stub).
-func (s *Store) AnalyticsSummary(_ context.Context, _ store.AnalyticsFilter) (model.Summary, error) {
-	return model.Summary{}, store.ErrNotImplemented
-}
-
-// AnalyticsSeries implements store.Reader; not yet implemented (P1-04 stub).
-func (s *Store) AnalyticsSeries(_ context.Context, _ store.AnalyticsFilter, _ store.Grouping) (model.Series, error) {
-	return model.Series{}, store.ErrNotImplemented
-}
-
-// AnalyticsBreakdown implements store.Reader; not yet implemented (P1-04 stub).
-func (s *Store) AnalyticsBreakdown(_ context.Context, _ store.AnalyticsFilter, _ store.Dimension) (model.Breakdown, error) {
-	return model.Breakdown{}, store.ErrNotImplemented
-}
-
-// AnalyticsDecisions implements store.Reader; not yet implemented (P1-04 stub).
-func (s *Store) AnalyticsDecisions(_ context.Context, _ store.AnalyticsFilter) (model.DecisionMatrix, error) {
-	return model.DecisionMatrix{}, store.ErrNotImplemented
-}
+// AnalyticsSummary, AnalyticsSeries, AnalyticsBreakdown, AnalyticsDecisions
+// implement store.Reader; implemented in read_analytics.go (P3-06).
 
 // EventsSince implements store.Reader; not yet implemented (P1-04 stub).
 func (s *Store) EventsSince(_ context.Context, _ model.EventRef, _ time.Time, _ int) ([]model.Event, error) {

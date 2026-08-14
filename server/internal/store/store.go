@@ -234,14 +234,188 @@ type ToolCallFilter struct {
 	To             *time.Time
 }
 
-// AnalyticsFilter narrows the Reader.Analytics* methods and HookLatency.
-type AnalyticsFilter struct{}
+// AnalyticsSource is the `?source=event|metric` toggle on every analytics
+// endpoint (SPEC §4.3, openapi.yaml's AnalyticsSource parameter):
+// "source='event' and source='metric' rows are never summed together"
+// (SPEC §2.4). Closed, unlike the vendor-vocabulary filter fields beside
+// it on AnalyticsFilter — it is Argus's own request/response toggle naming
+// which rollup partition to aggregate ("Argus-invented toggle, not vendor
+// vocabulary", openapi's own description), the same reasoning as
+// SessionSort/SortOrder/Fields.
+type AnalyticsSource string
 
-// Grouping selects the time-bucketing for Reader.AnalyticsSeries.
-type Grouping struct{}
+// AnalyticsSource constants (SPEC §4.3/§2.4). The zero value is treated as
+// AnalyticsSourceEvent by every Analytics* method (openapi's documented
+// default).
+const (
+	AnalyticsSourceEvent  AnalyticsSource = "event"
+	AnalyticsSourceMetric AnalyticsSource = "metric"
+)
 
-// Dimension selects the breakdown dimension for Reader.AnalyticsBreakdown.
-type Dimension struct{}
+// TimeseriesMetric is the closed set GET /api/v1/analytics/timeseries can
+// plot (SPEC §4.3: "metric=cost|tokens|sessions|turns|api_requests|
+// api_errors|tool_calls|tool_rejects|loc"). Closed for the same reason as
+// AnalyticsSource: it names Argus's own query surface. Cost/Tokens/APIRequests/
+// APIErrors are the model-attributable subset (SPEC §4.3's "Model-filtered
+// requests" paragraph: "only llm.request events carry a model, so only
+// these counters are model-attributable"); every other value is not, and
+// AnalyticsSeries returns store.ErrNotAttributable for one of them under an
+// active `?model=` filter rather than a silently empty series.
+type TimeseriesMetric string
+
+// TimeseriesMetric constants (SPEC §4.3).
+const (
+	MetricCost        TimeseriesMetric = "cost"
+	MetricTokens      TimeseriesMetric = "tokens"
+	MetricSessions    TimeseriesMetric = "sessions"
+	MetricTurns       TimeseriesMetric = "turns"
+	MetricAPIRequests TimeseriesMetric = "api_requests"
+	MetricAPIErrors   TimeseriesMetric = "api_errors"
+	MetricToolCalls   TimeseriesMetric = "tool_calls"
+	MetricToolRejects TimeseriesMetric = "tool_rejects"
+	MetricLOC         TimeseriesMetric = "loc"
+)
+
+// modelAttributableMetrics is SPEC §4.3's model-attributable subset of
+// TimeseriesMetric: "only llm.request events carry a model, so only these
+// counters are model-attributable: api_requests, api_errors, tokens.*,
+// cost.*". Every other TimeseriesMetric is not attributable to a model.
+var modelAttributableMetrics = map[TimeseriesMetric]bool{
+	MetricCost:        true,
+	MetricTokens:      true,
+	MetricAPIRequests: true,
+	MetricAPIErrors:   true,
+}
+
+// Attributable reports whether m is one of SPEC §4.3's model-attributable
+// counters (SPEC §4.3: "only these counters are model-attributable:
+// api_requests, api_errors, tokens.*, cost.*").
+func (m TimeseriesMetric) Attributable() bool {
+	return modelAttributableMetrics[m]
+}
+
+// GroupBy is GET /api/v1/analytics/timeseries's `group_by` parameter (SPEC
+// §4.3: "group_by=project|model|vendor|none"). Closed, naming Argus's own
+// query surface.
+type GroupBy string
+
+// GroupBy constants (SPEC §4.3). The zero value is treated as GroupByNone.
+const (
+	GroupByProject GroupBy = "project"
+	GroupByModel   GroupBy = "model"
+	GroupByVendor  GroupBy = "vendor"
+	GroupByNone    GroupBy = "none"
+)
+
+// AnalyticsBucket is GET /api/v1/analytics/timeseries's `bucket` parameter
+// (SPEC §4.3: "bucket=hour|day ... defaults to hour for windows <= 7 days,
+// day beyond"). Closed, naming Argus's own query surface.
+type AnalyticsBucket string
+
+// AnalyticsBucket constants (SPEC §4.3). The zero value means "auto-select
+// per SPEC §4.3's window-length rule" — AnalyticsSeries, not its caller,
+// resolves it.
+const (
+	BucketHour AnalyticsBucket = "hour"
+	BucketDay  AnalyticsBucket = "day"
+)
+
+// AnalyticsDimension is GET /api/v1/analytics/breakdown's `dimension`
+// parameter (SPEC §4.3: "dimension=model|project|tool|decision_source|
+// query_source|error_type"). Closed — per openapi.yaml's own description,
+// it is "the Argus-invented selector naming which raw dimension to break
+// down by — not the vendor value itself, which stays an unconstrained
+// string in the response rows" (BreakdownRow.Key).
+type AnalyticsDimension string
+
+// AnalyticsDimension constants (SPEC §4.3).
+const (
+	DimensionModel          AnalyticsDimension = "model"
+	DimensionProject        AnalyticsDimension = "project"
+	DimensionTool           AnalyticsDimension = "tool"
+	DimensionDecisionSource AnalyticsDimension = "decision_source"
+	DimensionQuerySource    AnalyticsDimension = "query_source"
+	DimensionErrorType      AnalyticsDimension = "error_type"
+)
+
+// BreakdownMetric is GET /api/v1/analytics/breakdown's `metric` parameter
+// (SPEC §4.3: "metric=cost|calls|tokens"). Closed, naming Argus's own query
+// surface.
+type BreakdownMetric string
+
+// BreakdownMetric constants (SPEC §4.3). The zero value is treated as
+// BreakdownMetricCalls (openapi's documented default).
+const (
+	BreakdownMetricCost   BreakdownMetric = "cost"
+	BreakdownMetricCalls  BreakdownMetric = "calls"
+	BreakdownMetricTokens BreakdownMetric = "tokens"
+)
+
+// AnalyticsFilter narrows every Reader.Analytics* method plus HookLatency
+// (SPEC §4.3's shared `from`/`to`/`project`/`model`/`vendor`/`source`
+// query parameters). Project/Model/Vendor follow SessionFilter's own
+// convention: an OR-set within the field, empty means "no restriction"
+// (SPEC §4.1). From/To bound the rollup `bucket` column (AnalyticsSeries/
+// AnalyticsSummary/AnalyticsBreakdown) or `tool_calls.started_at`
+// (AnalyticsDecisions) — whichever table a given method reads.
+//
+//   - Model is the trigger for SPEC §4.3's model-attributability rule:
+//     when non-empty, every non-model-attributable counter is nil/omitted
+//     and named in Summary.NotAttributable, and AnalyticsSeries/
+//     AnalyticsBreakdown return ErrNotAttributable for a non-attributable
+//     metric/dimension rather than a silently empty result.
+//   - Source selects which rollup partition to aggregate (SPEC §2.4:
+//     'event' and 'metric' rows are never summed together); the zero
+//     value means AnalyticsSourceEvent. AnalyticsDecisions ignores it —
+//     openapi.yaml's decisions endpoint has no `source` parameter, since
+//     tool_calls carries no event/metric split.
+type AnalyticsFilter struct {
+	From    *time.Time
+	To      *time.Time
+	Project []string
+	Model   []string
+	Vendor  []string
+	Source  AnalyticsSource
+}
+
+// Grouping narrows Reader.AnalyticsSeries (SPEC §4.3's getAnalyticsTimeseries
+// shape): which metric to plot, at what bucket size, split into how many
+// series.
+//
+//   - Metric selects the single TimeseriesMetric plotted; required (openapi
+//     marks `metric` required, no zero-value default).
+//   - Bucket is the zero value (auto-select, SPEC §4.3's window-length
+//     rule) unless the caller pins hour|day explicitly.
+//   - GroupBy is the zero value (treated as GroupByNone: one series) unless
+//     the caller requests a split.
+//   - LimitSeries caps how many GroupBy series render individually before
+//     the remainder folds into `other` by total desc (SPEC §4.3); <= 0
+//     means AnalyticsSeries' own default (openapi: 8).
+type Grouping struct {
+	Metric      TimeseriesMetric
+	Bucket      AnalyticsBucket
+	GroupBy     GroupBy
+	LimitSeries int
+}
+
+// Dimension narrows Reader.AnalyticsBreakdown (SPEC §4.3's
+// getAnalyticsBreakdown shape): which raw dimension to group by, which
+// metric to rank rows on, how many rows to return.
+//
+//   - Name selects the dimension; required (openapi marks `dimension`
+//     required, no zero-value default).
+//   - Metric is the zero value (treated as BreakdownMetricCalls, openapi's
+//     documented default) unless the caller requests cost|tokens — and is
+//     ignored outright for Name values with no such data at all
+//     (Tool/DecisionSource/ErrorType always report call counts; QuerySource
+//     always reports cost — see read_analytics.go).
+//   - Limit caps the row count (openapi: default 20, max 500); <= 0 means
+//     AnalyticsBreakdown's own default.
+type Dimension struct {
+	Name   AnalyticsDimension
+	Metric BreakdownMetric
+	Limit  int
+}
 
 // Page is a keyset pagination request: an opaque cursor plus a page size.
 type Page struct {
