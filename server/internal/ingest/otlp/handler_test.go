@@ -340,9 +340,25 @@ func buildGzipBomb(t *testing.T, decompressedSize int) []byte {
 // decompressed size (readBody's io.LimitReader caps actual decompression to
 // maxBodyBytes+1 bytes — see codec.go's readBody doc — so heap growth
 // should track that cap, not decompressedSize).
+//
+// m17 (major): this asserts runtime.MemStats.TotalAlloc, a monotonically
+// increasing counter of every byte ever allocated, rather than HeapAlloc (the
+// *live* heap at the last GC). HeapAlloc is vacuous here for two independent
+// reasons the finding calls out: (1) an implementation that fully
+// decompressed the bomb and then dropped every reference to it before the
+// post-request runtime.GC() would show no HeapAlloc growth at all — GC
+// reclaims exactly what was allocated-then-freed, so a bug that allocates and
+// discards 32 MiB is invisible to a live-heap comparison; (2) the `if after >
+// before` guard silently skips the assertion entirely whenever GC happens to
+// net the heap smaller across the request (unrelated background allocation
+// freed, e.g.), which is exactly the "assertion never runs" failure mode a
+// flaky/no-op check produces. TotalAlloc has neither problem: it only grows,
+// never shrinks, so a decompressed-then-freed bomb still shows up, and the
+// comparison is safe unconditionally. t.Parallel() is deliberately dropped
+// (unlike every other test in this file) because a global allocation counter
+// is not a safe measurement while sibling subtests are concurrently
+// allocating on other goroutines.
 func TestHandleLogs_GzipBomb(t *testing.T) {
-	t.Parallel()
-
 	const maxBodyBytes = 64 * 1024    // small and distinct from testMaxBodyBytes, to keep the bomb setup itself fast
 	const decompressedSize = 32 << 20 // 32 MiB nominal (500x maxBodyBytes), compresses to well under 1 MiB of all-zero runs
 
@@ -365,15 +381,17 @@ func TestHandleLogs_GzipBomb(t *testing.T) {
 	runtime.ReadMemStats(&after)
 
 	// A buggy implementation that fully decompressed the bomb before
-	// checking its size would grow the heap by roughly decompressedSize
-	// (256 MiB). Bounded decompression should stay within a few MiB of
-	// maxBodyBytes; 16 MiB gives ample slack for GC/runtime noise while
-	// still failing loudly if the cap stopped being enforced.
-	const heapGrowthCeiling = 16 << 20
-	if after.HeapAlloc > before.HeapAlloc {
-		require.Less(t, after.HeapAlloc-before.HeapAlloc, uint64(heapGrowthCeiling),
-			"decompressing the gzip bomb allocated far more than the configured cap")
-	}
+	// checking its size would push TotalAlloc up by roughly decompressedSize
+	// (32 MiB), on top of whatever the request's other allocations cost.
+	// Bounded decompression should stay within a few MiB of maxBodyBytes;
+	// 8 MiB gives ample slack over the observed ~450-504 KiB baseline
+	// (5 runs with -race -count=5, see report) while still failing loudly —
+	// comfortably below the 32 MiB a full decompression would add — if the
+	// cap stopped being enforced. Unlike HeapAlloc, TotalAlloc only grows, so
+	// this comparison needs no "if it grew at all" guard.
+	const totalAllocGrowthCeiling = 8 << 20
+	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(totalAllocGrowthCeiling),
+		"decompressing the gzip bomb allocated far more than the configured cap")
 }
 
 // --- AC: malformed protobuf -> 400 with a Status body ---------------------
@@ -710,6 +728,38 @@ func TestHandleLogs_UnsupportedContentType(t *testing.T) {
 
 	resp := doRequest(t, srv, "/v1/logs", "text/plain", []byte("not otlp"), nil)
 	require.Equal(t, http.StatusUnsupportedMediaType, resp.status)
+}
+
+// TestUnsupportedContentType_AnswersInJSON covers m17 (minor): a 415 must
+// answer in a format the client can actually read. A request whose
+// Content-Type negotiation failed has, by definition, not declared it speaks
+// protobuf — readBody previously fell back to the zero wireFormat value
+// (wireProtobuf) on that path (codec.go's readBody, pre-fix), so a client
+// like this one got a binary google.rpc.Status body it could not parse.
+// Table-driven across all three routes because the finding calls out that
+// "all three handlers pass [the zero value] to writeStatus".
+func TestUnsupportedContentType_AnswersInJSON(t *testing.T) {
+	t.Parallel()
+
+	for _, path := range []string{"/v1/logs", "/v1/metrics", "/v1/traces"} {
+		t.Run(path, func(t *testing.T) {
+			t.Parallel()
+
+			h, _ := newTestHandler(t, nil)
+			srv := newTestServer(t, h)
+
+			resp := doRequest(t, srv, path, "text/plain", []byte("not otlp"), nil)
+			require.Equal(t, http.StatusUnsupportedMediaType, resp.status)
+			require.Equal(t, "application/json", resp.header.Get("Content-Type"))
+
+			// The body must parse as the JSON google.rpc.Status mapping
+			// (statusJSON), not protobuf bytes, and carry a readable message.
+			var s statusJSON
+			require.NoError(t, json.Unmarshal(resp.body, &s), "415 body must be valid JSON, not protobuf bytes")
+			require.Equal(t, grpcCodeInvalidArgument, s.Code)
+			require.NotEmpty(t, s.Message)
+		})
+	}
 }
 
 // --- AC: metrics rejections (unsupported aggregation type) ----------------

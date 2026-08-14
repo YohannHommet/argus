@@ -96,7 +96,13 @@ func (e *decodeErr) Error() string { return e.message }
 func readBody(w http.ResponseWriter, r *http.Request, maxBodyBytes int64) (wireFormat, []byte, *decodeErr) {
 	format, ok := negotiateFormat(r.Header.Get("Content-Type"))
 	if !ok {
-		return 0, nil, &decodeErr{
+		// The client's Content-Type is by definition not one we can answer
+		// in (that's the whole reason for the 415), so the response falls
+		// back to JSON — the one format guaranteed human-readable without a
+		// protobuf decoder — rather than the zero wireFormat value
+		// (wireProtobuf), which would hand a client that may not speak
+		// protobuf at all a binary diagnostic it cannot parse (m17 minor).
+		return wireJSON, nil, &decodeErr{
 			httpStatus: http.StatusUnsupportedMediaType,
 			grpcCode:   grpcCodeInvalidArgument,
 			message:    fmt.Sprintf("unsupported content-type %q (want application/x-protobuf or application/json)", r.Header.Get("Content-Type")),
