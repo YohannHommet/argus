@@ -20,8 +20,23 @@ function readStoredTheme(): Theme | null {
   }
 }
 
+/**
+ * Merges `{ theme }` over whatever the `argus-ui` key already holds — a
+ * sibling field (e.g. a future sidebar/density/filter preset, SPEC.md
+ * §Phase 4) must survive a theme change, not be clobbered by it — and
+ * swallows a write failure (quota exceeded, private-mode storage
+ * disabled) so it can't escape `toggle()`'s `flush: 'sync'` watcher after
+ * the `<html>` class has already been applied. Logged, not silently
+ * dropped, so an operator can tell theme persistence is broken.
+ */
 function persistTheme(theme: Theme) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify({ theme }))
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    const existing = raw ? (JSON.parse(raw) as Record<string, unknown>) : {}
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...existing, theme }))
+  } catch (error) {
+    console.error('Failed to persist theme to localStorage', error)
+  }
 }
 
 /**
