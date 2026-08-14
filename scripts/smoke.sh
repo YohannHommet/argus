@@ -8,7 +8,12 @@
 #   ARGUS_HTTP_PORT   host port to publish (default 8080). Some dev machines
 #                      and CI runners already have 8080 bound to something
 #                      else; this lets smoke runs rebind without touching the
-#                      container's own :8080 listener.
+#                      container's own :8080 listener. It also doubles as the
+#                      escape hatch for the M10 port collision below: a `make
+#                      compose-up` stack and this smoke stack are different
+#                      compose projects now, so they no longer share a volume,
+#                      but they'd still fight over the same host port unless
+#                      one of them sets this.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -18,16 +23,32 @@ port="${ARGUS_HTTP_PORT:-8080}"
 export ARGUS_HTTP_PORT="$port"
 base_url="http://localhost:${port}"
 
+# M10: run under our own compose project, distinct from `make compose-up`'s
+# (which takes the default project name derived from the `deploy` dir). Same
+# -f file, different -p, so `down -v` below only ever touches this project's
+# own containers/volumes — never a developer's live stack sharing that file.
+project_name="argus-smoke"
+dc() { docker compose -p "$project_name" -f "$compose_file" "$@"; }
+
 log() { printf '[smoke] %s\n' "$*" >&2; }
 
 cleanup() {
-  log "tearing down (docker compose down -v)"
-  docker compose -f "$compose_file" down -v --remove-orphans || true
+  log "tearing down (docker compose -p $project_name down -v)"
+  dc down -v --remove-orphans || true
 }
 trap cleanup EXIT
 
-log "starting from a clean state"
-docker compose -f "$compose_file" down -v --remove-orphans
+# The port is still shared host-wide even across projects: fail loudly and
+# early rather than let `up -d` collide with a live stack (or another smoke
+# run) already bound to it.
+if (exec 3<>"/dev/tcp/127.0.0.1/${port}") 2>/dev/null; then
+  exec 3>&- 3<&- || true
+  log "FAIL: host port ${port} is already in use — likely a live 'make compose-up' stack or another smoke run. Set ARGUS_HTTP_PORT to a free port, e.g.: ARGUS_HTTP_PORT=18080 bash scripts/smoke.sh"
+  exit 1
+fi
+
+log "starting from a clean state (project=$project_name)"
+dc down -v --remove-orphans
 
 version="$(git -C "$repo_root" describe --tags --always --dirty 2>/dev/null || echo dev)"
 commit="$(git -C "$repo_root" rev-parse --short HEAD 2>/dev/null || echo unknown)"
@@ -40,8 +61,8 @@ docker build \
   -t "$image" \
   "$repo_root"
 
-log "docker compose up -d (ARGUS_HTTP_PORT=$port)"
-docker compose -f "$compose_file" up -d
+log "docker compose up -d (ARGUS_HTTP_PORT=$port, project=$project_name)"
+dc up -d
 
 log "polling ${base_url}/readyz for up to 60s"
 deadline=$((SECONDS + 60))
@@ -58,7 +79,7 @@ done
 
 if [ -z "$ready" ]; then
   log "FAIL: /readyz did not report {\"status\":\"ok\",\"migrations\":\"current\"} within 60s"
-  docker compose -f "$compose_file" logs --no-color || true
+  dc logs --no-color || true
   exit 1
 fi
 log "readyz OK: $ready"
@@ -104,7 +125,7 @@ fi
 sim_sessions=5
 
 log "running the demo sim inside the argusd container (--sessions=${sim_sessions})"
-docker compose -f "$compose_file" exec -T argusd /argusd sim \
+dc exec -T argusd /argusd sim \
   --mode=demo \
   --sessions="$sim_sessions" \
   --flush-immediately \
@@ -112,7 +133,7 @@ docker compose -f "$compose_file" exec -T argusd /argusd sim \
   --target=http://localhost:8080
 
 psql_query() {
-  docker compose -f "$compose_file" exec -T postgres psql -U argus -d argus -tAc "$1"
+  dc exec -T postgres psql -U argus -d argus -tAc "$1"
 }
 
 # Poll to QUIESCENCE, not to first sight. This loop used to break the moment
@@ -143,7 +164,7 @@ done
 
 if [ "$stable" -ne 1 ]; then
   log "FAIL: event count never settled within 60s (last two reads: ${previous:-<empty>}, ${event_count:-<empty>})"
-  docker compose -f "$compose_file" logs --no-color argusd || true
+  dc logs --no-color argusd || true
   exit 1
 fi
 log "events: $event_count (settled)"
