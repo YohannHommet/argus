@@ -8,7 +8,7 @@
 # §8.3 target (90%) was reached and is now enforced below (P2-13).
 # Later tickets raise these numbers as they add tests; they must never go
 # down without a matching drop in real coverage.
-github.com/YohannHommet/argus/server/internal/httpapi 66.0
+github.com/YohannHommet/argus/server/internal/httpapi 75.0
 github.com/YohannHommet/argus/server/internal/store/postgres 83.0
 # Each entry gates EXACTLY that package, never its subpackages (see
 # coverage-floor.sh), so every package that should be gated needs its own

@@ -54,16 +54,23 @@ const (
 	chaosOrphanShift = 3
 
 	// chaosTooOldMonthsBack is how many calendar months before "now" the
-	// --chaos-clock-skew opt-in beyond-retention event is timestamped. See
-	// buildChaosTooOldEvent's doc comment for why this — not a timestamp
-	// that trips the §1.2 clamp — is the reachable path to
-	// argus_ingest_too_old_total: 2 months is comfortably inside the
-	// default 90-day ARGUS_RETENTION_RAW_DAYS window (so the clamp leaves
-	// it untouched) and comfortably outside the "current month + 2 ahead"
-	// range internal/app.New and the hourly PartitionJob ensure — Argus
-	// never creates a partition *behind* the current month, only ahead of
-	// it (SPEC §2.4's partition-manager job), so a legitimately-in-window
-	// event from two months ago has no partition to land in.
+	// --chaos-clock-skew opt-in beyond-retention event is timestamped: far
+	// enough back to be in a different monthly partition than "now", while
+	// staying comfortably inside the default 90-day
+	// ARGUS_RETENTION_RAW_DAYS window so §1.2's clamp leaves the timestamp
+	// alone (a clamped timestamp becomes "now" and can never reach a
+	// missing partition — see buildChaosTooOldEvent).
+	//
+	// Until P3-12 this alone produced argus_ingest_too_old_total, because
+	// the partition manager only ever created partitions for the current
+	// month and two ahead. P3-12 (SPEC §2.4 "Backward creation") now also
+	// creates them back to the retention horizon, so this month exists by
+	// default and the event lands normally. The fault therefore has to be
+	// injected on the storage side instead: internal/app's end-to-end test
+	// drops this month's `events` partition before the run, reproducing the
+	// only state in which rule 3 can still fire (a partition the manager
+	// has not created, or an operator dropped). The generator's job stays
+	// unchanged — emit an in-retention event in a different month.
 	chaosTooOldMonthsBack = 2
 )
 
@@ -157,17 +164,16 @@ func buildChaosUnknownEvent(id sessionIdentity, ts time.Time, seq int64, promptI
 // emits) whose event.timestamp/TimeUnixNano is set chaosTooOldMonthsBack
 // calendar months before ts.
 //
-// This — not a timestamp that trips the §1.2 clamp — is the reachable path
-// to argus_ingest_too_old_total (P2-13's live-run finding): the clamp
-// rewrites any ts outside [now-retention, now+1h] to ingested_at *before*
-// storage ever sees it, so a timestamp chosen to be "beyond retention" can
-// never itself reach a missing partition — it gets normalized to "now" and
-// lands in a partition that certainly exists. What reaches rule 3
-// (§1.7: "no DEFAULT partition") is an event that is genuinely inside the
-// retention window (so the clamp leaves it alone) but in a calendar month
-// the partition manager has not created, because §2.4's partition-manager
-// job only ever creates partitions for the current month and up to two
-// months *ahead* — never behind it.
+// A timestamp chosen to be *literally* beyond retention cannot reach rule 3
+// (§1.7: "no DEFAULT partition") at all (P2-13's live-run finding): §1.2's
+// clamp rewrites any ts outside [now-retention, now+1h] to ingested_at
+// before storage ever sees it, so such an event lands in a partition that
+// certainly exists and is merely flagged clock_skewed. The only state that
+// reaches rule 3 is an event genuinely inside the retention window (clamp
+// leaves it alone) whose calendar month has no partition — which since
+// P3-12's backward creation no longer happens by itself, so the missing
+// partition is injected by the test that asserts the counter (see
+// chaosTooOldMonthsBack).
 func buildChaosTooOldEvent(id sessionIdentity, ts time.Time, seq int64) *logspb.LogRecord {
 	tooOld := ts.AddDate(0, -chaosTooOldMonthsBack, 0)
 	return buildAPIRequest(id, tooOld, seq, nil, apiRequestFields{

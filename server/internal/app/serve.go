@@ -38,6 +38,22 @@ func (a *App) Serve(ctx context.Context) error {
 		Migrations: a.store,
 		Queue:      a.ingest,
 
+		// Reader/Analytics wire the Phase-3 read API: P3-07's
+		// session/timeline/event/tool-call handlers and P3-08's analytics,
+		// facets, meta and quality handlers. postgres.Store satisfies both
+		// narrow ports structurally, the same convention Migrations follows.
+		//
+		// These two lines are load-bearing in a way nothing else here is:
+		// router.go mounts each group only when these are non-nil, a nil-safe
+		// default that allowed the entire read API to be silently absent from
+		// the running server while every handler test passed — those tests and
+		// the conformance harness call httpapi.New directly and never come
+		// through Serve. `docker compose up` followed by a curl to
+		// /api/v1/sessions returned 404 until these were added, which is what
+		// TestServe_ReadAPIRoutesAreMounted now pins.
+		Reader:    a.store,
+		Analytics: a.store,
+
 		// HookMounter wires P2-11's POST /ingest/hook onto the mount seam
 		// router.go already exposes; router.go itself is never touched.
 		HookMounter: a.hooks,
@@ -87,6 +103,24 @@ func (a *App) Serve(ctx context.Context) error {
 	// pool closes just logs one error, never corrupts state, since
 	// EnsurePartitions is idempotent.
 	go a.partitions.Run(ctx)
+
+	// The rollup job (SPEC §2.4, P3-05) follows the exact same shutdown
+	// story as the partition job: it watches ctx, needs no shutdown() step,
+	// and a tick in flight when the pool closes just logs one error — its
+	// single transaction rolls back cleanly, leaving rollup_dirty intact
+	// for the next process's first tick (rollups.go's whole-transaction
+	// design).
+	go a.rollups.Run(ctx)
+
+	// The retention job (SPEC §2.4, P3-10) follows the same shutdown story
+	// as the partition/rollup jobs: it watches ctx and needs no shutdown()
+	// step. Unlike them it does not tick immediately (see RetentionJob.Run's
+	// doc), so a tick in flight when ctx is cancelled is rarer, but the same
+	// reasoning applies: ApplyRetention/PruneDedup are safe to interrupt
+	// (one drops a partition per statement inside its own transaction;
+	// PruneDedup deletes in independent bounded batches), so an in-flight
+	// tick at shutdown just logs one error, never corrupts state.
+	go a.retention.Run(ctx)
 
 	select {
 	case err := <-serveErr:

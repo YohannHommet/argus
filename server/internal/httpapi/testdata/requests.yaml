@@ -1,0 +1,342 @@
+# requests.yaml is P3-09's OpenAPI conformance table (docs/SPEC.md §4.4):
+# every request here is routed through the *real* chi router
+# (internal/httpapi.New) wired to a fake store (internal/store/testing.Fake),
+# and its response body is validated against server/api/openapi.yaml's
+# schema for the matched operationId — not just its status code.
+#
+# TestConformance (conformance_test.go) is the reader: `name` is a free-text
+# label, `operation_id` must name an operationId in openapi.yaml exactly
+# (TestConformance_OperationIDCoverage fails the build if an operationId is
+# missing from every row and from `exempt` below), `method`/`path` build the
+# request verbatim, `expect_status` is the HTTP status the real handler must
+# return. Two path placeholders are resolved by the test before the request
+# is built: `{{known_event_ref}}` (an event_ref the fake store actually has)
+# and `{{unknown_event_ref}}` (a well-formed event_ref for no stored event).
+#
+# `exempt` names operationIds this table deliberately does not round-trip,
+# with the reason — they still count toward the 100% operationId coverage
+# check.
+requests:
+  # --- ops (SPEC §3.8) -------------------------------------------------
+  - name: liveness probe
+    operation_id: healthz
+    method: GET
+    path: /healthz
+    expect_status: 200
+
+  - name: readiness probe, nothing wired so always ready
+    operation_id: readyz
+    method: GET
+    path: /readyz
+    expect_status: 200
+
+  - name: prometheus text exposition
+    operation_id: metrics
+    method: GET
+    path: /metrics
+    expect_status: 200
+
+  # --- meta / facets -----------------------------------------------------
+  - name: server metadata
+    operation_id: getMeta
+    method: GET
+    path: /api/v1/meta
+    expect_status: 200
+
+  - name: filter facets
+    operation_id: getFacets
+    method: GET
+    path: /api/v1/facets
+    expect_status: 200
+
+  # --- sessions ------------------------------------------------------------
+  - name: list sessions, default window
+    operation_id: listSessions
+    method: GET
+    path: /api/v1/sessions
+    expect_status: 200
+
+  - name: list sessions, repeated project + explicit sort
+    operation_id: listSessions
+    method: GET
+    path: /api/v1/sessions?project=argus&project=platform&sort=cost_usd&limit=10
+    expect_status: 200
+
+  - name: list sessions, status filter
+    operation_id: listSessions
+    method: GET
+    path: /api/v1/sessions?status=active&status=ended
+    expect_status: 200
+
+  - name: list sessions, malformed from param
+    operation_id: listSessions
+    method: GET
+    path: /api/v1/sessions?from=not-a-date
+    expect_status: 400
+
+  - name: get session, known id
+    operation_id: getSession
+    method: GET
+    path: /api/v1/sessions/s-conform
+    expect_status: 200
+
+  - name: get session, unknown id
+    operation_id: getSession
+    method: GET
+    path: /api/v1/sessions/does-not-exist
+    expect_status: 404
+
+  - name: session timeline, default paging
+    operation_id: getSessionTimeline
+    method: GET
+    path: /api/v1/sessions/s-conform/timeline
+    expect_status: 200
+
+  - name: session timeline, order desc + fields full + kinds filter
+    operation_id: getSessionTimeline
+    method: GET
+    path: /api/v1/sessions/s-conform/timeline?order=desc&fields=full&kinds=tool.decision&kinds=llm.request
+    expect_status: 200
+
+  - name: session timeline, unknown session
+    operation_id: getSessionTimeline
+    method: GET
+    path: /api/v1/sessions/does-not-exist/timeline
+    expect_status: 404
+
+  - name: session turns, default paging
+    operation_id: listSessionTurns
+    method: GET
+    path: /api/v1/sessions/s-conform/turns
+    expect_status: 200
+
+  - name: session turns, limit=1
+    operation_id: listSessionTurns
+    method: GET
+    path: /api/v1/sessions/s-conform/turns?limit=1
+    expect_status: 200
+
+  - name: session turns, unknown session
+    operation_id: listSessionTurns
+    method: GET
+    path: /api/v1/sessions/does-not-exist/turns
+    expect_status: 404
+
+  - name: session tool calls
+    operation_id: listSessionToolCalls
+    method: GET
+    path: /api/v1/sessions/s-conform/tool-calls
+    expect_status: 200
+
+  - name: session tool calls, tool + decision_source filters
+    operation_id: listSessionToolCalls
+    method: GET
+    path: /api/v1/sessions/s-conform/tool-calls?tool=Edit&decision_source=user_reject
+    expect_status: 200
+
+  - name: session tool calls, unknown session
+    operation_id: listSessionToolCalls
+    method: GET
+    path: /api/v1/sessions/does-not-exist/tool-calls
+    expect_status: 404
+
+  - name: session subagent tree
+    operation_id: getSessionSubagents
+    method: GET
+    path: /api/v1/sessions/s-conform/subagents
+    expect_status: 200
+
+  - name: session subagent tree, unknown session
+    operation_id: getSessionSubagents
+    method: GET
+    path: /api/v1/sessions/does-not-exist/subagents
+    expect_status: 404
+
+  # --- cross-session events -------------------------------------------------
+  - name: cross-session events, default
+    operation_id: listEvents
+    method: GET
+    path: /api/v1/events
+    expect_status: 200
+
+  - name: cross-session events, project + vendor filters
+    operation_id: listEvents
+    method: GET
+    path: /api/v1/events?project=argus&vendor=claude_code&tool=Edit
+    expect_status: 200
+
+  - name: cross-session events, malformed from param
+    operation_id: listEvents
+    method: GET
+    path: /api/v1/events?from=garbage
+    expect_status: 400
+
+  - name: get event, known ref, attrs included
+    operation_id: getEvent
+    method: GET
+    path: /api/v1/events/{{known_event_ref}}
+    expect_status: 200
+
+  - name: get event, malformed ref
+    operation_id: getEvent
+    method: GET
+    path: /api/v1/events/not-a-ref
+    expect_status: 400
+
+  - name: get event, well-formed but unknown ref
+    operation_id: getEvent
+    method: GET
+    path: /api/v1/events/{{unknown_event_ref}}
+    expect_status: 404
+
+  # --- cross-session tool calls ----------------------------------------------
+  - name: cross-session tool calls, default
+    operation_id: listToolCalls
+    method: GET
+    path: /api/v1/tool-calls
+    expect_status: 200
+
+  - name: cross-session tool calls, filtered
+    operation_id: listToolCalls
+    method: GET
+    path: /api/v1/tool-calls?project=argus&tool=Edit&decision_source=config
+    expect_status: 200
+
+  # --- analytics ------------------------------------------------------------
+  - name: analytics summary, default window
+    operation_id: getAnalyticsSummary
+    method: GET
+    path: /api/v1/analytics/summary
+    expect_status: 200
+
+  - name: analytics summary, source=metric
+    operation_id: getAnalyticsSummary
+    method: GET
+    path: /api/v1/analytics/summary?source=metric
+    expect_status: 200
+
+  - name: analytics summary, model filter nulls the non-attributable counters
+    operation_id: getAnalyticsSummary
+    method: GET
+    path: /api/v1/analytics/summary?model=claude-opus-5
+    expect_status: 200
+
+  - name: analytics timeseries, default
+    operation_id: getAnalyticsTimeseries
+    method: GET
+    path: /api/v1/analytics/timeseries?metric=cost
+    expect_status: 200
+
+  - name: analytics timeseries, grouped by project, day bucket
+    operation_id: getAnalyticsTimeseries
+    method: GET
+    path: /api/v1/analytics/timeseries?metric=tokens&bucket=day&group_by=project&limit_series=2
+    expect_status: 200
+
+  - name: analytics timeseries, invalid metric
+    operation_id: getAnalyticsTimeseries
+    method: GET
+    path: /api/v1/analytics/timeseries?metric=bogus
+    expect_status: 400
+
+  - name: analytics timeseries, sessions metric not attributable under a model filter
+    operation_id: getAnalyticsTimeseries
+    method: GET
+    path: /api/v1/analytics/timeseries?metric=sessions&model=claude-opus-5
+    expect_status: 400
+
+  - name: analytics breakdown, default
+    operation_id: getAnalyticsBreakdown
+    method: GET
+    path: /api/v1/analytics/breakdown?dimension=tool
+    expect_status: 200
+
+  - name: analytics breakdown, query_source dimension (unconstrained key)
+    operation_id: getAnalyticsBreakdown
+    method: GET
+    path: /api/v1/analytics/breakdown?dimension=query_source&metric=cost
+    expect_status: 200
+
+  - name: analytics breakdown, invalid dimension
+    operation_id: getAnalyticsBreakdown
+    method: GET
+    path: /api/v1/analytics/breakdown?dimension=bogus
+    expect_status: 400
+
+  - name: analytics decisions, default
+    operation_id: getAnalyticsDecisions
+    method: GET
+    path: /api/v1/analytics/decisions
+    expect_status: 200
+
+  - name: analytics decisions, project filter
+    operation_id: getAnalyticsDecisions
+    method: GET
+    path: /api/v1/analytics/decisions?project=argus
+    expect_status: 200
+
+  # --- quality ---------------------------------------------------------------
+  - name: quality unknown-kinds, default since
+    operation_id: getQualityUnknownKinds
+    method: GET
+    path: /api/v1/quality/unknown-kinds
+    expect_status: 200
+
+  - name: quality unknown-kinds, explicit since
+    operation_id: getQualityUnknownKinds
+    method: GET
+    path: /api/v1/quality/unknown-kinds?since=-1h
+    expect_status: 200
+
+  - name: quality hook-latency
+    operation_id: getQualityHookLatency
+    method: GET
+    path: /api/v1/quality/hook-latency
+    expect_status: 200
+
+exempt:
+  # SSE (SPEC §5): the hub is Phase 5 (P3-10's PLAN entry lists no hub
+  # ticket in Phase 3), so there is no live stream to open a connection
+  # against and no request/response pair to round-trip — an SSE response
+  # never finishes, it is framed events over one open connection. Their
+  # StreamEvent frame payloads are validated directly against
+  # components.schemas.StreamEvent in TestConformance_StreamEventSchemas
+  # instead (SPEC §5.1), which is the ticket note's prescribed treatment.
+  - operation_id: streamSession
+    reason: >-
+      SSE stream; no hub exists before Phase 5. Covered by
+      TestConformance_StreamEventSchemas validating representative
+      StreamEvent frames (event/session/stats/lag/reset/shutdown) directly
+      against components.schemas.StreamEvent.
+  - operation_id: streamAll
+    reason: >-
+      Same as streamSession — the firehose shares the same StreamEvent frame
+      schemas, covered by the same direct schema validation.
+
+  # OTLP + hooks ingest (SPEC §3.4/§3.5): these are mounted through
+  # httpapi.Deps.OTLPMounter/HookMounter, not through the Reader/
+  # AnalyticsReader ports this ticket's Fake backs — httpapi.New's default
+  # (nil Mounter) is a no-op, so there is nothing behind these routes to
+  # round-trip without also constructing a real internal/ingest/otlp.Handler
+  # or internal/ingest/hooks.Handler, each of which needs its own Enqueuer/
+  # Pipeline and normalize.Normalizer. Wiring those from internal/httpapi's
+  # test package would be internal/httpapi importing internal/ingest, a
+  # dependency direction this codebase does not otherwise take (see
+  # internal/ingest/otlp/handler_test.go's own newTestServer comment: "A true
+  # httpapi.New-based integration belongs in internal/app ... outside this
+  # ticket's file ownership" — the same boundary applies here, one layer up).
+  # Each already has its own handler-level test suite exercising exactly
+  # these request/response shapes.
+  - operation_id: ingestLogs
+    reason: >-
+      OTLP mount seam; covered by internal/ingest/otlp's own handler tests.
+      Wiring a real Handler here would require importing internal/ingest
+      into internal/httpapi, which no other file in this package does.
+  - operation_id: ingestMetrics
+    reason: "Same as ingestLogs — OTLP mount seam, covered by internal/ingest/otlp's own tests."
+  - operation_id: ingestTraces
+    reason: "Same as ingestLogs — OTLP mount seam, covered by internal/ingest/otlp's own tests."
+  - operation_id: ingestHook
+    reason: >-
+      Hooks webhook mount seam; covered by internal/ingest/hooks's own
+      handler tests, for the same reason as the OTLP operations above.

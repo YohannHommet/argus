@@ -115,28 +115,74 @@ psql_query() {
   docker compose -f "$compose_file" exec -T postgres psql -U argus -d argus -tAc "$1"
 }
 
-log "polling for the sim's rows to land (ingest is async, ARGUS_INGEST_FLUSH)"
-deadline=$((SECONDS + 30))
+# Poll to QUIESCENCE, not to first sight. This loop used to break the moment
+# `events > 0`, which meant it read its counts in the middle of ingest and
+# printed whatever had landed so far — a 5-session run reporting "sessions: 4"
+# and a partial event count, which looks like a lost session and is really
+# just an early read. Worse, `> 0` is too weak to fail: a regression that
+# persisted one event out of hundreds would still have passed this gate, even
+# though SPEC §8.3 describes this job as asserting row counts.
+#
+# Waiting for two consecutive equal reads is what makes the numbers below
+# mean something, and lets the session count be asserted exactly.
+log "polling for the sim's rows to settle (ingest is async, ARGUS_INGEST_FLUSH)"
+deadline=$((SECONDS + 60))
 event_count=0
+previous=-1
+stable=0
 until [ "$SECONDS" -ge "$deadline" ]; do
   event_count="$(psql_query 'SELECT count(*) FROM events' | tr -d '[:space:]')"
-  if [ -n "$event_count" ] && [ "$event_count" -gt 0 ] 2>/dev/null; then
+  [ -n "$event_count" ] || event_count=0
+  if [ "$event_count" -gt 0 ] 2>/dev/null && [ "$event_count" -eq "$previous" ] 2>/dev/null; then
+    stable=1
     break
   fi
-  sleep 1
+  previous="$event_count"
+  sleep 2
 done
 
-if [ -z "$event_count" ] || [ "$event_count" -le 0 ] 2>/dev/null; then
-  log "FAIL: expected events to be > 0 after the demo sim, got '${event_count:-<empty>}'"
+if [ "$stable" -ne 1 ]; then
+  log "FAIL: event count never settled within 60s (last two reads: ${previous:-<empty>}, ${event_count:-<empty>})"
+  docker compose -f "$compose_file" logs --no-color argusd || true
   exit 1
 fi
-log "events: $event_count"
+log "events: $event_count (settled)"
 
+# Every session referenced by an event must have a sessions row, and there
+# must be no rows beyond those: stub-on-reference (SPEC §1.7) guarantees the
+# parent row exists for any event that arrives, so a mismatch means either a
+# lost session projection or an orphaned row. This is the assertion that can
+# actually catch something, where "> 0" would notice none of it.
+#
+# Deliberately NOT asserted as "== --sessions": that would be asserting a
+# property of the generator, not of the server. `argusd sim --sessions=5`
+# currently emits zero log and zero hook events for its last session (only a
+# metric sample — verified with --out=, where session-0004 holds one
+# metrics-*.pb and nothing else, and session-0003 gets 8 log events against
+# 121-203 for the earlier ordinals), so a metrics-only session correctly
+# produces no sessions row at all. That sim defect is recorded in
+# docs/review/phase-3-deviations.md; it belongs to the generator, and the
+# invariant below holds either way.
 session_count="$(psql_query 'SELECT count(*) FROM sessions' | tr -d '[:space:]')"
-if [ -z "$session_count" ] || [ "$session_count" -le 0 ] 2>/dev/null; then
-  log "FAIL: expected sessions to be > 0 after the demo sim, got '${session_count:-<empty>}'"
+event_sessions="$(psql_query 'SELECT count(DISTINCT session_id) FROM events' | tr -d '[:space:]')"
+if [ "${session_count:-0}" -ne "${event_sessions:-1}" ] 2>/dev/null; then
+  log "FAIL: every event's session must have a sessions row (SPEC §1.7 stub-on-reference): sessions=${session_count:-<empty>} vs distinct event session_ids=${event_sessions:-<empty>}"
   exit 1
 fi
-log "sessions: $session_count"
+if [ "${session_count:-0}" -le 0 ] 2>/dev/null; then
+  log "FAIL: expected at least one session after the demo sim, got '${session_count:-<empty>}'"
+  exit 1
+fi
+log "sessions: $session_count (= distinct event session_ids)"
+
+# A clean run (no --chaos-orphans) must leave no stub sessions: every session
+# saw its SessionStart, so started_at is populated everywhere (SPEC §1.7,
+# Phase-2 exit criterion 4).
+stub_count="$(psql_query 'SELECT count(*) FROM sessions WHERE started_at IS NULL' | tr -d '[:space:]')"
+if [ "${stub_count:-1}" -ne 0 ] 2>/dev/null; then
+  log "FAIL: expected 0 stub sessions (started_at IS NULL) after a clean run, got '${stub_count:-<empty>}'"
+  exit 1
+fi
+log "stub sessions: $stub_count"
 
 log "PASS"

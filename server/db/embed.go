@@ -13,3 +13,11 @@ import "embed"
 //
 //go:embed migrations/*.sql
 var MigrationsFS embed.FS
+
+// PricesFS holds the seeded server/db/prices/*.json price table(s),
+// embedded at build time so `argusd prices import` (SPEC §3.8) never
+// depends on a file being present on the deploy target, matching
+// MigrationsFS's rationale above.
+//
+//go:embed prices/*.json
+var PricesFS embed.FS

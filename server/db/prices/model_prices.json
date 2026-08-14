@@ -1,0 +1,32 @@
+[
+  {
+    "model": "claude-opus-5",
+    "effective_from": "2025-01-01",
+    "currency": "USD",
+    "input_per_mtok": 15,
+    "output_per_mtok": 75,
+    "cache_read_per_mtok": 1.5,
+    "cache_write_per_mtok": 18.75,
+    "source": "repo"
+  },
+  {
+    "model": "claude-sonnet-4-5",
+    "effective_from": "2025-01-01",
+    "currency": "USD",
+    "input_per_mtok": 3,
+    "output_per_mtok": 15,
+    "cache_read_per_mtok": 0.3,
+    "cache_write_per_mtok": 3.75,
+    "source": "repo"
+  },
+  {
+    "model": "claude-haiku-4-5",
+    "effective_from": "2025-01-01",
+    "currency": "USD",
+    "input_per_mtok": 0.8,
+    "output_per_mtok": 4,
+    "cache_read_per_mtok": 0.08,
+    "cache_write_per_mtok": 1,
+    "source": "repo"
+  }
+]

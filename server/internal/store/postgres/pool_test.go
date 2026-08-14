@@ -174,8 +174,8 @@ func TestMigrateStatus_ReportsAppliedVersions(t *testing.T) {
 
 	statuses, err := store.MigrateStatus(ctx)
 	require.NoError(t, err)
-	require.Len(t, statuses, 3, "001_core.sql, 002_events.sql, 003_projections.sql are the only migrations so far")
-	for i, want := range []int64{1, 2, 3} {
+	require.Len(t, statuses, 4, "001_core.sql, 002_events.sql, 003_projections.sql, 004_rollups.sql are the only migrations so far")
+	for i, want := range []int64{1, 2, 3, 4} {
 		require.Equal(t, want, statuses[i].Version)
 		require.True(t, statuses[i].Applied)
 	}

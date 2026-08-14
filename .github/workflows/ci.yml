@@ -118,6 +118,41 @@ jobs:
       - run: pnpm unit --coverage
       - run: pnpm build
 
+  openapi:
+    name: openapi
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: server/go.mod
+          cache: true
+          cache-dependency-path: server/go.sum
+      - name: spec lint
+        working-directory: server
+        # Spec-lint step only (SPEC §8.3): kin-openapi Validate + the AC's
+        # structural rules. The client-drift step (pnpm gen:api && git diff
+        # --exit-code web/src/api/schema.d.ts) lands below (P3-11).
+        run: go run ./internal/tools/specvalidate
+      - uses: pnpm/setup@v2
+        with:
+          version: 11
+          runtime: node@25
+          cache: true
+          cache-dependency-path: web/pnpm-lock.yaml
+          package-json-file: web/package.json
+          install: false
+      - run: pnpm install --frozen-lockfile
+        working-directory: web
+      - name: client drift
+        working-directory: web
+        # SPEC §8.3: regenerate the TS client from openapi.yaml and fail if
+        # it produced a diff — schema.d.ts is committed, so drift means the
+        # spec changed without regenerating the client.
+        run: |
+          pnpm gen:api
+          git diff --exit-code src/api/schema.d.ts
+
   compose:
     name: compose
     runs-on: ubuntu-latest

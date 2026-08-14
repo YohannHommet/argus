@@ -54,6 +54,8 @@ type App struct {
 	ready  *httpapi.ReadyState
 
 	partitions *PartitionJob    // started by Serve
+	rollups    *RollupJob       // started by Serve (P3-05)
+	retention  *RetentionJob    // started by Serve (P3-10)
 	ingest     *ingest.Pipeline // drained by Serve's shutdown sequence (drainIngest)
 	hooks      *hooks.Mounter   // P2-11: POST /ingest/hook, wired into httpapi.Deps.HookMounter by Serve
 	otlp       *otlp.Handler    // P2-10: POST /v1/{logs,metrics,traces}, wired into httpapi.Deps.OTLPMounter by Serve
@@ -71,11 +73,14 @@ type App struct {
 // New connects the database pool, wraps it in the postgres Store, and runs
 // migrations when ARGUS_AUTO_MIGRATE is true (SPEC §3.7, §3.8) — all before
 // the HTTP listener exists, so a `serve` that fails to migrate never starts
-// accepting traffic. It then ensures the current-through-two-months-ahead
-// partitions exist (SPEC §2.4's "startup fails loudly if the current
-// month's partition cannot be created") for the same reason: an ingest
-// request landing before the first hourly PartitionJob tick must never hit
-// a missing partition. It does not start serving; call Serve for that.
+// accepting traffic. It then ensures the retention-horizon-through-two-
+// months-ahead partitions exist (SPEC §2.4's "startup fails loudly if the
+// current month's partition cannot be created", plus the P3-12 backward
+// reach to ARGUS_RETENTION_RAW_DAYS) for the same reason: an ingest request
+// landing before the first hourly PartitionJob tick — whether newly
+// arrived or an in-retention backfill crossing a month boundary — must
+// never hit a missing partition. It does not start serving; call Serve for
+// that.
 func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, opts ...Option) (*App, error) {
 	var o options
 	for _, opt := range opts {
@@ -99,11 +104,52 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, opts ...O
 		}
 	}
 
+	// Seed model_prices from the price table embedded in this binary
+	// (db/prices/*.json), immediately after migrations and for the same
+	// reason: without it the table is empty on every fresh deployment, and an
+	// empty table means pricing.Estimate can never resolve a price, so
+	// cost_estimated_usd and estimated_share are silently 0 forever — the
+	// exact silent zero SPEC §4.1 exists to forbid, on the one number the UI
+	// uses to flag that a cost is estimated rather than reported.
+	//
+	// `argusd prices import` (SPEC §3.8) stays as the operator-facing way to
+	// re-import or update, but it cannot be the only way: nothing in
+	// docker-compose or the quickstart runs it, and a `docker compose up`
+	// deployment reported estimated_usd = 0 with a populated events table
+	// until this call existed. The import is idempotent (ON CONFLICT with an
+	// IS DISTINCT FROM guard, so a re-run touches no rows) and only writes
+	// the repo-sourced rows, leaving operator-supplied ones alone.
+	//
+	// Not gated behind a new config key: SPEC §3.7's table is normative and
+	// complete, and adding an unlisted ARGUS_* key would be the larger
+	// deviation. A failure here is fatal for the same reason a failed
+	// migration is — starting up with prices missing produces wrong numbers
+	// rather than an obvious error.
+	priceSummary, priceErr := st.ImportPrices(ctx)
+	if priceErr != nil {
+		pool.Close()
+		return nil, fmt.Errorf("app: importing the embedded model price table: %w", priceErr)
+	}
+	logger.Info("model prices imported",
+		"inserted", priceSummary.Inserted, "updated", priceSummary.Updated, "unchanged", priceSummary.Unchanged)
+
 	now := time.Now()
-	if err := st.EnsurePartitions(ctx, now, now.Add(partitionJobHorizon)); err != nil {
+	retention := time.Duration(cfg.RetentionRawDays) * 24 * time.Hour
+	if err := st.EnsurePartitions(ctx, now.Add(-retention), now.Add(partitionJobHorizon)); err != nil {
 		pool.Close()
 		return nil, fmt.Errorf("app: ensuring startup partitions: %w", err)
 	}
+
+	// P3-05: the rollup job (SPEC §2.4). Its metrics follow the same
+	// o.registerer plumbing as the ingest pipeline/hooks handler below, for
+	// the identical reason (a test process constructing a second App must
+	// not panic registering the same metric names on the default registry
+	// twice).
+	var rollupMetrics *RollupJobMetrics
+	if o.registerer != nil {
+		rollupMetrics = NewRollupJobMetrics(o.registerer)
+	}
+	rollupJob := NewRollupJob(st, logger, rollupMetrics, cfg.RollupInterval, cfg.RollupMaxBuckets)
 
 	ingestOpts := []ingest.Option{ingest.WithLogger(logger)}
 	if o.registerer != nil {
@@ -150,7 +196,9 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, opts ...O
 		logger:     logger,
 		store:      st,
 		ready:      httpapi.NewReadyState(),
-		partitions: NewPartitionJob(st, logger),
+		partitions: NewPartitionJob(st, logger, cfg.RetentionRawDays),
+		rollups:    rollupJob,
+		retention:  NewRetentionJob(st, logger, cfg.RetentionRawDays, cfg.DedupWindow, cfg.RetentionHour),
 		ingest:     ing,
 		hooks:      hookMounter,
 		otlp:       otlpHandler,

@@ -118,91 +118,33 @@ func (s *Store) Close() {
 
 // --- Reader -------------------------------------------------------------
 
-// ListSessions implements store.Reader; not yet implemented (P1-04 stub).
-func (s *Store) ListSessions(_ context.Context, _ store.SessionFilter, _ store.Page) ([]model.SessionSummary, store.Cursor, error) {
-	return nil, "", store.ErrNotImplemented
-}
+// ListSessions, GetSession, ListTurns implement store.Reader; implemented in
+// read_sessions.go (P3-02).
 
-// GetSession implements store.Reader; not yet implemented (P1-04 stub).
-func (s *Store) GetSession(_ context.Context, _ string) (*model.SessionDetail, error) {
-	return nil, store.ErrNotImplemented
-}
+// ListEvents, GetEvent implement store.Reader; implemented in read_events.go
+// (P3-03).
 
-// ListTurns implements store.Reader; not yet implemented (P1-04 stub).
-func (s *Store) ListTurns(_ context.Context, _ string) ([]model.Turn, error) {
-	return nil, store.ErrNotImplemented
-}
-
-// ListEvents implements store.Reader; not yet implemented (P1-04 stub).
-func (s *Store) ListEvents(_ context.Context, _ store.EventFilter, _ store.Page) ([]model.Event, store.Cursor, error) {
-	return nil, "", store.ErrNotImplemented
-}
-
-// GetEvent implements store.Reader; not yet implemented (P1-04 stub).
-func (s *Store) GetEvent(_ context.Context, _ model.EventRef) (*model.Event, error) {
-	return nil, store.ErrNotImplemented
-}
-
-// ListToolCalls implements store.Reader; not yet implemented (P1-04 stub).
-func (s *Store) ListToolCalls(_ context.Context, _ store.ToolCallFilter, _ store.Page) ([]model.ToolCall, store.Cursor, error) {
-	return nil, "", store.ErrNotImplemented
-}
+// ListToolCalls implements store.Reader; implemented in read_toolcalls.go
+// (P3-03).
 
 // SubagentTree implements store.Reader; implemented in subagent_tree.go
 // (P2-08).
 
-// AnalyticsSummary implements store.Reader; not yet implemented (P1-04 stub).
-func (s *Store) AnalyticsSummary(_ context.Context, _ store.AnalyticsFilter) (model.Summary, error) {
-	return model.Summary{}, store.ErrNotImplemented
-}
-
-// AnalyticsSeries implements store.Reader; not yet implemented (P1-04 stub).
-func (s *Store) AnalyticsSeries(_ context.Context, _ store.AnalyticsFilter, _ store.Grouping) (model.Series, error) {
-	return model.Series{}, store.ErrNotImplemented
-}
-
-// AnalyticsBreakdown implements store.Reader; not yet implemented (P1-04 stub).
-func (s *Store) AnalyticsBreakdown(_ context.Context, _ store.AnalyticsFilter, _ store.Dimension) (model.Breakdown, error) {
-	return model.Breakdown{}, store.ErrNotImplemented
-}
-
-// AnalyticsDecisions implements store.Reader; not yet implemented (P1-04 stub).
-func (s *Store) AnalyticsDecisions(_ context.Context, _ store.AnalyticsFilter) (model.DecisionMatrix, error) {
-	return model.DecisionMatrix{}, store.ErrNotImplemented
-}
+// AnalyticsSummary, AnalyticsSeries, AnalyticsBreakdown, AnalyticsDecisions
+// implement store.Reader; implemented in read_analytics.go (P3-06).
 
 // EventsSince implements store.Reader; not yet implemented (P1-04 stub).
 func (s *Store) EventsSince(_ context.Context, _ model.EventRef, _ time.Time, _ int) ([]model.Event, error) {
 	return nil, store.ErrNotImplemented
 }
 
-// Facets implements store.Reader; not yet implemented (P1-04 stub).
-func (s *Store) Facets(_ context.Context) (model.Facets, error) {
-	return model.Facets{}, store.ErrNotImplemented
-}
-
-// DataQuality implements store.Reader; not yet implemented (P1-04 stub).
-func (s *Store) DataQuality(_ context.Context) (model.DataQuality, error) {
-	return model.DataQuality{}, store.ErrNotImplemented
-}
-
-// UnknownKinds implements store.Reader; not yet implemented (P1-04 stub).
-func (s *Store) UnknownKinds(_ context.Context, _ time.Time, _ int) ([]model.UnknownKindGroup, error) {
-	return nil, store.ErrNotImplemented
-}
-
-// HookLatency implements store.Reader; not yet implemented (P1-04 stub).
-func (s *Store) HookLatency(_ context.Context, _ store.AnalyticsFilter) (model.HookLatency, error) {
-	return model.HookLatency{}, store.ErrNotImplemented
-}
+// Facets, DataQuality, UnknownKinds, HookLatency implement store.Reader;
+// implemented in read_quality.go (P3-08).
 
 // --- Maintenance (Migrate, EnsurePartitions, MigrationsCurrent excepted;
 // see migrate.go and partitions.go) ---------------------------------------
 
-// RunRollups implements store.Maintenance; not yet implemented (P1-04 stub).
-func (s *Store) RunRollups(_ context.Context, _ int) (store.RollupStats, error) {
-	return store.RollupStats{}, store.ErrNotImplemented
-}
+// RunRollups implements store.Maintenance; implemented in rollups.go (P3-05).
 
 // SweepAbandoned implements store.Maintenance (SPEC §1.7, §1.9, §2.4): moves
 // every session whose status is active|unknown, has no ended_at, and has
@@ -220,20 +162,12 @@ func (s *Store) SweepAbandoned(ctx context.Context, idle time.Duration) (int64, 
 	return n, nil
 }
 
-// ApplyRetention implements store.Maintenance; not yet implemented (P1-04 stub).
-func (s *Store) ApplyRetention(_ context.Context, _ time.Time, _ bool) ([]string, error) {
-	return nil, store.ErrNotImplemented
-}
+// ApplyRetention, PruneDedup implement store.Maintenance; ApplyRetentionPrecise
+// is a Store-only extra (not part of the interface). All three, plus
+// RebuildProjections below, are implemented in retention.go/rebuild.go (P3-10).
 
-// PruneDedup implements store.Maintenance; not yet implemented (P1-04 stub).
-func (s *Store) PruneDedup(_ context.Context, _ time.Time) (int64, error) {
-	return 0, store.ErrNotImplemented
-}
-
-// RebuildProjections implements store.Maintenance; not yet implemented (P1-04 stub).
-func (s *Store) RebuildProjections(_ context.Context, _ time.Time) error {
-	return store.ErrNotImplemented
-}
+// RebuildProjections implements store.Maintenance; implemented in
+// rebuild.go (P3-10).
 
 // compile-time assertion that Store satisfies store.Store.
 var _ store.Store = (*Store)(nil)
