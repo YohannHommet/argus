@@ -138,25 +138,8 @@ func (s *Store) EventsSince(_ context.Context, _ model.EventRef, _ time.Time, _ 
 	return nil, store.ErrNotImplemented
 }
 
-// Facets implements store.Reader; not yet implemented (P1-04 stub).
-func (s *Store) Facets(_ context.Context) (model.Facets, error) {
-	return model.Facets{}, store.ErrNotImplemented
-}
-
-// DataQuality implements store.Reader; not yet implemented (P1-04 stub).
-func (s *Store) DataQuality(_ context.Context) (model.DataQuality, error) {
-	return model.DataQuality{}, store.ErrNotImplemented
-}
-
-// UnknownKinds implements store.Reader; not yet implemented (P1-04 stub).
-func (s *Store) UnknownKinds(_ context.Context, _ time.Time, _ int) ([]model.UnknownKindGroup, error) {
-	return nil, store.ErrNotImplemented
-}
-
-// HookLatency implements store.Reader; not yet implemented (P1-04 stub).
-func (s *Store) HookLatency(_ context.Context, _ store.AnalyticsFilter) (model.HookLatency, error) {
-	return model.HookLatency{}, store.ErrNotImplemented
-}
+// Facets, DataQuality, UnknownKinds, HookLatency implement store.Reader;
+// implemented in read_quality.go (P3-08).
 
 // --- Maintenance (Migrate, EnsurePartitions, MigrationsCurrent excepted;
 // see migrate.go and partitions.go) ---------------------------------------
@@ -179,20 +162,12 @@ func (s *Store) SweepAbandoned(ctx context.Context, idle time.Duration) (int64, 
 	return n, nil
 }
 
-// ApplyRetention implements store.Maintenance; not yet implemented (P1-04 stub).
-func (s *Store) ApplyRetention(_ context.Context, _ time.Time, _ bool) ([]string, error) {
-	return nil, store.ErrNotImplemented
-}
+// ApplyRetention, PruneDedup implement store.Maintenance; ApplyRetentionPrecise
+// is a Store-only extra (not part of the interface). All three, plus
+// RebuildProjections below, are implemented in retention.go/rebuild.go (P3-10).
 
-// PruneDedup implements store.Maintenance; not yet implemented (P1-04 stub).
-func (s *Store) PruneDedup(_ context.Context, _ time.Time) (int64, error) {
-	return 0, store.ErrNotImplemented
-}
-
-// RebuildProjections implements store.Maintenance; not yet implemented (P1-04 stub).
-func (s *Store) RebuildProjections(_ context.Context, _ time.Time) error {
-	return store.ErrNotImplemented
-}
+// RebuildProjections implements store.Maintenance; implemented in
+// rebuild.go (P3-10).
 
 // compile-time assertion that Store satisfies store.Store.
 var _ store.Store = (*Store)(nil)

@@ -279,3 +279,109 @@ func (j *RollupJob) tick(ctx context.Context) {
 	j.metrics.BucketsClaimed.Add(float64(stats.BucketsClaimed))
 	j.metrics.BucketsRecomputed.Add(float64(stats.BucketsRecomputed))
 }
+
+// RetentionJob is the SPEC §2.4 "Retention job": daily at ARGUS_RETENTION_HOUR
+// (local time), it drops fully-expired events/metric_samples partitions
+// (store.ApplyRetention, coarse — SPEC §2.2) and prunes ingest_dedup rows
+// older than ARGUS_DEDUP_WINDOW (store.PruneDedup), in that order. Unlike
+// PartitionJob/RollupJob it does not tick on a fixed interval: Run computes
+// the next occurrence of the configured local hour and sleeps until then,
+// so "daily at 04:00" is honoured exactly rather than approximated by a
+// short-interval poll. The `--precise` batched-delete mode (SPEC §2.2/§2.4)
+// is deliberately NOT part of this automatic daily pass — it is an
+// operator-invoked `argusd retention --precise` action (postgres.Store.
+// ApplyRetentionPrecise, a Store-only method outside store.Maintenance),
+// since SPEC's config table (§3.7) has no key that would make it a job
+// default and a boundary-partition batched DELETE is heavier than the
+// coarse drop this job runs unattended every day.
+type RetentionJob struct {
+	store       *postgres.Store
+	logger      *slog.Logger
+	retention   time.Duration // ARGUS_RETENTION_RAW_DAYS as a duration
+	dedupWindow time.Duration // ARGUS_DEDUP_WINDOW
+	hour        int           // ARGUS_RETENTION_HOUR, local wall-clock hour
+	now         func() time.Time
+
+	running sync.Mutex // held for the duration of a tick; TryLock single-flights
+}
+
+// NewRetentionJob constructs a RetentionJob. store and logger must be
+// non-nil. retentionRawDays is ARGUS_RETENTION_RAW_DAYS, dedupWindow is
+// ARGUS_DEDUP_WINDOW, and hour is ARGUS_RETENTION_HOUR (config.Config),
+// passed as plain values rather than *config.Config for the same
+// config-free-at-the-leaf reason NewPartitionJob's doc comment gives.
+func NewRetentionJob(store *postgres.Store, logger *slog.Logger, retentionRawDays int, dedupWindow time.Duration, hour int) *RetentionJob {
+	return &RetentionJob{
+		store:       store,
+		logger:      logger,
+		retention:   time.Duration(retentionRawDays) * 24 * time.Hour,
+		dedupWindow: dedupWindow,
+		hour:        hour,
+		now:         time.Now,
+	}
+}
+
+// nextRun returns the next local wall-clock occurrence of j.hour:00:00 that
+// is strictly after `after` — today's occurrence if `after` is still before
+// it, otherwise tomorrow's.
+func (j *RetentionJob) nextRun(after time.Time) time.Time {
+	loc := after.Location()
+	next := time.Date(after.Year(), after.Month(), after.Day(), j.hour, 0, 0, 0, loc)
+	if !next.After(after) {
+		next = next.AddDate(0, 0, 1)
+	}
+	return next
+}
+
+// Run sleeps until the next ARGUS_RETENTION_HOUR occurrence, runs one tick,
+// and repeats, until ctx is cancelled. Unlike PartitionJob.Run/RollupJob.Run
+// it does NOT run a tick immediately on entry: SPEC §2.4 names an exact
+// daily time, and dropping partitions/pruning the dedup ledger the instant
+// any argusd process starts (including a developer's `serve` restarted
+// mid-afternoon) would be a surprising side effect a maintenance job run
+// once a day should not have.
+func (j *RetentionJob) Run(ctx context.Context) {
+	for {
+		now := j.now()
+		wait := j.nextRun(now).Sub(now)
+
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+			j.tick(ctx)
+		}
+	}
+}
+
+// tick runs one retention pass, single-flighted in-process against
+// overlapping ticks (see PartitionJob/RollupJob's identical rationale).
+// ApplyRetention runs before PruneDedup, matching SPEC §2.4's "Retention
+// job" bullet order; a failure in either is logged, never fatal — a
+// transient DB blip should not crash the process, and the next scheduled
+// run (24h later) retries.
+func (j *RetentionJob) tick(ctx context.Context) {
+	if !j.running.TryLock() {
+		j.logger.Warn("retention job: previous tick still running, skipping")
+		return
+	}
+	defer j.running.Unlock()
+
+	now := j.now()
+
+	dropped, err := j.store.ApplyRetention(ctx, now.Add(-j.retention), false)
+	if err != nil {
+		j.logger.Error("retention job: apply retention failed", "error", err)
+	} else if len(dropped) > 0 {
+		j.logger.Info("retention job: dropped expired partitions", "count", len(dropped), "partitions", dropped)
+	}
+
+	pruned, err := j.store.PruneDedup(ctx, now.Add(-j.dedupWindow))
+	if err != nil {
+		j.logger.Error("retention job: prune dedup failed", "error", err)
+	} else if pruned > 0 {
+		j.logger.Info("retention job: pruned ingest_dedup rows", "count", pruned)
+	}
+}

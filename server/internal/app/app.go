@@ -55,6 +55,7 @@ type App struct {
 
 	partitions *PartitionJob    // started by Serve
 	rollups    *RollupJob       // started by Serve (P3-05)
+	retention  *RetentionJob    // started by Serve (P3-10)
 	ingest     *ingest.Pipeline // drained by Serve's shutdown sequence (drainIngest)
 	hooks      *hooks.Mounter   // P2-11: POST /ingest/hook, wired into httpapi.Deps.HookMounter by Serve
 	otlp       *otlp.Handler    // P2-10: POST /v1/{logs,metrics,traces}, wired into httpapi.Deps.OTLPMounter by Serve
@@ -168,6 +169,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, opts ...O
 		ready:      httpapi.NewReadyState(),
 		partitions: NewPartitionJob(st, logger, cfg.RetentionRawDays),
 		rollups:    rollupJob,
+		retention:  NewRetentionJob(st, logger, cfg.RetentionRawDays, cfg.DedupWindow, cfg.RetentionHour),
 		ingest:     ing,
 		hooks:      hookMounter,
 		otlp:       otlpHandler,

@@ -96,6 +96,16 @@ func (a *App) Serve(ctx context.Context) error {
 	// design).
 	go a.rollups.Run(ctx)
 
+	// The retention job (SPEC §2.4, P3-10) follows the same shutdown story
+	// as the partition/rollup jobs: it watches ctx and needs no shutdown()
+	// step. Unlike them it does not tick immediately (see RetentionJob.Run's
+	// doc), so a tick in flight when ctx is cancelled is rarer, but the same
+	// reasoning applies: ApplyRetention/PruneDedup are safe to interrupt
+	// (one drops a partition per statement inside its own transaction;
+	// PruneDedup deletes in independent bounded batches), so an in-flight
+	// tick at shutdown just logs one error, never corrupts state.
+	go a.retention.Run(ctx)
+
 	select {
 	case err := <-serveErr:
 		// The server exited on its own (e.g. a bind failure) before ctx was

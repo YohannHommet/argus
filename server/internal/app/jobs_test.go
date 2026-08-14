@@ -58,3 +58,60 @@ func TestPartitionJob_TickReachesBackToRetentionHorizon(t *testing.T) {
 		`SELECT to_regclass($1) IS NOT NULL`, name).Scan(&exists))
 	require.False(t, exists, "partition %s is older than the retention horizon and must not be created", name)
 }
+
+// TestRetentionJob_NextRun pins RetentionJob.Run's "daily at
+// ARGUS_RETENTION_HOUR" scheduling (SPEC §2.4): the next occurrence of the
+// configured local hour, today if still ahead, tomorrow otherwise.
+func TestRetentionJob_NextRun(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	job := NewRetentionJob(nil, logger, 90, 7*24*time.Hour, 4)
+
+	beforeHour := time.Date(2026, 6, 15, 1, 0, 0, 0, time.UTC)
+	want := time.Date(2026, 6, 15, 4, 0, 0, 0, time.UTC)
+	require.True(t, job.nextRun(beforeHour).Equal(want), "before 04:00 must schedule later today")
+
+	afterHour := time.Date(2026, 6, 15, 9, 30, 0, 0, time.UTC)
+	wantTomorrow := time.Date(2026, 6, 16, 4, 0, 0, 0, time.UTC)
+	require.True(t, job.nextRun(afterHour).Equal(wantTomorrow), "after 04:00 must schedule tomorrow")
+
+	exactHour := time.Date(2026, 6, 15, 4, 0, 0, 0, time.UTC)
+	require.True(t, job.nextRun(exactHour).Equal(wantTomorrow), "exactly at the hour must schedule tomorrow, not immediately")
+}
+
+// TestRetentionJob_TickDropsExpiredPartitionAndPrunesDedup is the AC that
+// RetentionJob.tick (the daily job's actual pass) both drops a fully-expired
+// partition (store.ApplyRetention) and prunes ingest_dedup
+// (store.PruneDedup) in one call — exercised directly, the same way
+// TestPartitionJob_TickReachesBackToRetentionHorizon calls job.tick rather
+// than waiting on Run's real-time scheduling loop.
+func TestRetentionJob_TickDropsExpiredPartitionAndPrunesDedup(t *testing.T) {
+	pool := storetesting.NewPool(t)
+	st := postgres.New(pool)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	ctx := context.Background()
+
+	const retentionRawDays = 90
+	const dedupWindow = 7 * 24 * time.Hour
+	job := NewRetentionJob(st, logger, retentionRawDays, dedupWindow, 4)
+
+	now := time.Now().UTC()
+	job.now = func() time.Time { return now }
+
+	old := now.AddDate(0, -6, 0)
+	require.NoError(t, st.EnsurePartitions(ctx, old, old))
+	partitionName := fmt.Sprintf("events_%04d_%02d", old.Year(), int(old.Month()))
+
+	_, err := pool.Exec(ctx, `INSERT INTO ingest_dedup (dedup_key, first_seen_at) VALUES ($1, $2)`,
+		"retention-job-old-dedup", now.Add(-dedupWindow-time.Hour))
+	require.NoError(t, err)
+
+	job.tick(ctx)
+
+	var partitionExists bool
+	require.NoError(t, pool.QueryRow(ctx, `SELECT to_regclass($1) IS NOT NULL`, partitionName).Scan(&partitionExists))
+	require.False(t, partitionExists, "tick must drop the fully-expired partition")
+
+	var dedupExists bool
+	require.NoError(t, pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM ingest_dedup WHERE dedup_key = 'retention-job-old-dedup')`).Scan(&dedupExists))
+	require.False(t, dedupExists, "tick must prune the expired ingest_dedup row")
+}
