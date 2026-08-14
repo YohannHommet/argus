@@ -267,7 +267,23 @@ func promptKeyPart(p *string) string {
 // upsertToolCalls is the P2-07 fill-in of write.go's named seam (SPEC
 // §1.6, §2.3). Its slot in the lock order is right after events, before
 // subagents — unchanged from the seam's placeholder.
-func upsertToolCalls(ctx context.Context, tx pgx.Tx, candidates []model.Event) error {
+//
+// It returns the post-upsert started_at of every tool_calls row touched
+// this batch (P3-05 defect 1's dirty-marking fix): rollup_hourly's
+// tool_calls/tool_rejects counters are now bucketed on
+// date_trunc('hour', tool_calls.started_at) (AggregateToolCallRollup,
+// db/queries/rollups.sql), not on the ts of whichever event happened to
+// touch the row. Marking only that triggering event's own ts hour dirty
+// (as write.go's main marks loop already does for every candidate event)
+// is not enough on its own: a tool.decision event can land in a different
+// hour than the call's started_at (e.g. a PreToolUse hook in hour H1
+// followed by a slow tool_decision OTel event delivered in hour H2), and
+// only that decision changes tool_rejects for H1's bucket, which nothing
+// else would re-mark. Returning started_at here lets write.go additionally
+// dirty-mark started_at's own hour for every touched call, so the bucket
+// that actually needs recomputing is never missed regardless of which hour
+// the triggering event's ts falls in.
+func upsertToolCalls(ctx context.Context, tx pgx.Tx, candidates []model.Event) ([]time.Time, error) {
 	var keyed, keyless []normalize.ToolCallContribution
 	for _, e := range candidates {
 		c, ok := normalize.ExtractContribution(e)
@@ -281,7 +297,7 @@ func upsertToolCalls(ctx context.Context, tx pgx.Tx, candidates []model.Event) e
 		}
 	}
 	if len(keyed) == 0 && len(keyless) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	aggs := map[uuid.UUID]*toolCallAgg{}
@@ -301,12 +317,13 @@ func upsertToolCalls(ctx context.Context, tx pgx.Tx, candidates []model.Event) e
 
 	if len(keyless) > 0 {
 		if err := resolveKeylessContributions(ctx, tx, keyless, aggs, getOrCreate); err != nil {
-			return err
+			return nil, err
 		}
 	}
 
-	if err := execToolCallUpsert(ctx, tx, aggs); err != nil {
-		return err
+	startedAts, err := execToolCallUpsert(ctx, tx, aggs)
+	if err != nil {
+		return nil, err
 	}
 
 	sessionIDs := make(map[string]bool, len(aggs))
@@ -320,12 +337,12 @@ func upsertToolCalls(ctx context.Context, tx pgx.Tx, candidates []model.Event) e
 	sort.Strings(ids)
 	q := gen.New(tx)
 	if err := q.RecomputeSessionToolCallCounts(ctx, ids); err != nil {
-		return fmt.Errorf("postgres: recompute session tool_call_count: %w", err)
+		return nil, fmt.Errorf("postgres: recompute session tool_call_count: %w", err)
 	}
 	if err := q.RecomputeTurnToolCallCounts(ctx, ids); err != nil {
-		return fmt.Errorf("postgres: recompute turn tool_call_count: %w", err)
+		return nil, fmt.Errorf("postgres: recompute turn tool_call_count: %w", err)
 	}
-	return nil
+	return startedAts, nil
 }
 
 // resolveKeylessContributions runs the SPEC §1.6 heuristic: it queries the
@@ -437,10 +454,13 @@ func uuidFromPgtype(v pgtype.UUID) (uuid.UUID, error) {
 
 // execToolCallUpsert runs the bulk unnest upsert for every id touched this
 // batch, sorted ascending (the lock-ordering invariant, SPEC §1.6:
-// "tool_calls (by id)").
-func execToolCallUpsert(ctx context.Context, tx pgx.Tx, aggs map[uuid.UUID]*toolCallAgg) error {
+// "tool_calls (by id)"), and returns each touched row's post-upsert
+// started_at (RETURNING started_at) for upsertToolCalls's caller to fold
+// into rollup_dirty marks (P3-05 defect 1 — see upsertToolCalls's doc
+// comment).
+func execToolCallUpsert(ctx context.Context, tx pgx.Tx, aggs map[uuid.UUID]*toolCallAgg) ([]time.Time, error) {
 	if len(aggs) == 0 {
-		return nil
+		return nil, nil
 	}
 	ids := make([]uuid.UUID, 0, len(aggs))
 	for id := range aggs {
@@ -534,7 +554,7 @@ func execToolCallUpsert(ctx context.Context, tx pgx.Tx, aggs map[uuid.UUID]*tool
 		heuristicSeen[i] = boolToInt(a.heuristicSeen)
 	}
 
-	_, err := tx.Exec(ctx, toolCallUpsertSQL,
+	rows, err := tx.Query(ctx, toolCallUpsertSQL,
 		idStr, sessionID, promptID, toolUseID, toolName,
 		startedAt, endedAt, decidedAtVal, decidedAtRank,
 		decisionVal, decisionRankArr, decisionSourceVal, decisionSourceRank, toolSourceVal, toolSourceRank,
@@ -544,9 +564,22 @@ func execToolCallUpsert(ctx context.Context, tx pgx.Tx, aggs map[uuid.UUID]*tool
 		eventCountDelta, otelSeen, hookSeen, heuristicSeen,
 	)
 	if err != nil {
-		return fmt.Errorf("postgres: upsert tool_calls: %w", err)
+		return nil, fmt.Errorf("postgres: upsert tool_calls: %w", err)
 	}
-	return nil
+	defer rows.Close()
+
+	out := make([]time.Time, 0, len(aggs))
+	for rows.Next() {
+		var ts time.Time
+		if err := rows.Scan(&ts); err != nil {
+			return nil, fmt.Errorf("postgres: upsert tool_calls: scan started_at: %w", err)
+		}
+		out = append(out, ts)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("postgres: upsert tool_calls: %w", err)
+	}
+	return out, nil
 }
 
 func rvPtr(r rankedValue) (*string, int) {
@@ -686,4 +719,5 @@ ON CONFLICT (id) DO UPDATE SET
              WHEN GREATEST(COALESCE((tool_calls.field_ranks->>'otel_seen')::int,0),(EXCLUDED.field_ranks->>'otel_seen')::int) = 1 THEN 'otel_only'
              ELSE 'hook_only' END
     ELSE 'hook_only' END
+RETURNING started_at
 `

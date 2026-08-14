@@ -5,6 +5,24 @@
 // internal/store, no internal/httpapi import — so its tests run without a
 // live Postgres. internal/store/postgres/prices.go owns reading rows out
 // of model_prices and hands them to Estimate as a []Price.
+//
+// # Why internal/pricing, not internal/query/pricing (deviation from SPEC §3.1)
+//
+// This package originally lived at internal/query/pricing. It moved here
+// (P3-05 defect 2) because .golangci.yml's depguard "store" rule denies
+// internal/store the whole internal/query subtree (SPEC §3.1: "store never
+// imports … query"), yet the rollup job in internal/store/postgres needs
+// this exact algorithm to compute cost_estimated_usd, and had a
+// byte-for-byte duplicate of it (estimateCost/resolvePriceRow/
+// bestCandidatePriceModel in rollups.go) as the only alternative. A leaf
+// package that imports nothing of Argus's own (like internal/model)
+// satisfies depguard's store rule, which only denies internal/httpapi and
+// internal/query specifically — so internal/pricing is importable from both
+// internal/query (the read API) and internal/store (the rollup job)
+// without duplicating the lookup. SPEC §3.1's layout listing does not
+// mention internal/pricing; this is a deliberate, minimal, documented
+// deviation, not an oversight — the alternative (two independent
+// implementations of money arithmetic) is worse.
 package pricing
 
 import (

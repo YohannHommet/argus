@@ -178,10 +178,7 @@ func (s *Store) HookLatency(_ context.Context, _ store.AnalyticsFilter) (model.H
 // --- Maintenance (Migrate, EnsurePartitions, MigrationsCurrent excepted;
 // see migrate.go and partitions.go) ---------------------------------------
 
-// RunRollups implements store.Maintenance; not yet implemented (P1-04 stub).
-func (s *Store) RunRollups(_ context.Context, _ int) (store.RollupStats, error) {
-	return store.RollupStats{}, store.ErrNotImplemented
-}
+// RunRollups implements store.Maintenance; implemented in rollups.go (P3-05).
 
 // SweepAbandoned implements store.Maintenance (SPEC §1.7, §1.9, §2.4): moves
 // every session whose status is active|unknown, has no ended_at, and has

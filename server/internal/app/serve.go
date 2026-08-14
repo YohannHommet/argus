@@ -88,6 +88,14 @@ func (a *App) Serve(ctx context.Context) error {
 	// EnsurePartitions is idempotent.
 	go a.partitions.Run(ctx)
 
+	// The rollup job (SPEC §2.4, P3-05) follows the exact same shutdown
+	// story as the partition job: it watches ctx, needs no shutdown() step,
+	// and a tick in flight when the pool closes just logs one error — its
+	// single transaction rolls back cleanly, leaving rollup_dirty intact
+	// for the next process's first tick (rollups.go's whole-transaction
+	// design).
+	go a.rollups.Run(ctx)
+
 	select {
 	case err := <-serveErr:
 		// The server exited on its own (e.g. a bind failure) before ctx was

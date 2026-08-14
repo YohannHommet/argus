@@ -3,11 +3,17 @@
 // table idempotently (the `argusd prices import` subcommand, SPEC §3.8),
 // and reading the full table back out as []PriceRow for the rollup job
 // (P3-05) and any other caller that needs to resolve a price. PriceRow
-// mirrors internal/query/pricing.Price field-for-field but is declared
-// here, not imported from there: SPEC §3.1's dependency direction is
-// strictly inward, so internal/store must not depend on internal/query
-// (enforced by depguard) — the caller that has both in scope (the rollup
-// job, P3-05) converts a PriceRow into a pricing.Price at the call site.
+// mirrors internal/pricing.Price field-for-field but is declared here
+// rather than being internal/pricing.Price itself: this package's job is
+// isolating every pgtype/numeric/date conversion the DB driver needs behind
+// plain Go types, the same reason gen.ModelPrice (sqlc's own pgtype-typed
+// row) is never handed to a caller directly. internal/pricing is a leaf
+// package depguard's "store" rule permits internal/store to import (it
+// denies only internal/httpapi and internal/query — see internal/pricing's
+// package doc for why the algorithm lives there and not in
+// internal/query/pricing), so the rollup job (rollups.go) converts a
+// []PriceRow into a []pricing.Price once per run and calls pricing.Estimate
+// directly instead of reimplementing its lookup.
 package postgres
 
 import (
@@ -27,7 +33,7 @@ import (
 )
 
 // PriceRow is one model_prices row, reduced to plain Go types (mirroring
-// internal/query/pricing.Price — see the package doc comment for why this
+// internal/pricing.Price — see the package doc comment for why this
 // package cannot simply return that type).
 type PriceRow struct {
 	Model             string
@@ -102,7 +108,7 @@ func (s *Store) ImportPrices(ctx context.Context) (PriceImportSummary, error) {
 
 // ListModelPrices returns every model_prices row as []PriceRow, ready for
 // the caller (the rollup job, P3-05) to convert into
-// internal/query/pricing.Price and hand to pricing.Estimate. Ordering is
+// internal/pricing.Price and hand to pricing.Estimate. Ordering is
 // not significant to pricing.Estimate, which scans the whole slice, but
 // ListModelPrices (the sqlc query) orders by (model, effective_from) for
 // deterministic output.
@@ -240,7 +246,7 @@ func numericFromFloat(v float64) (pgtype.Numeric, error) {
 
 // numericToFloat converts a pgtype.Numeric read back from model_prices
 // into a plain float64 for pricing.Price/pricing.Estimate, which never
-// touches pgtype directly (internal/query/pricing must not import a
+// touches pgtype directly (internal/pricing must not import a
 // pgx-shaped type — see that package's doc comment).
 func numericToFloat(n pgtype.Numeric) (float64, error) {
 	f, err := n.Float64Value()

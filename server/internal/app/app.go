@@ -54,6 +54,7 @@ type App struct {
 	ready  *httpapi.ReadyState
 
 	partitions *PartitionJob    // started by Serve
+	rollups    *RollupJob       // started by Serve (P3-05)
 	ingest     *ingest.Pipeline // drained by Serve's shutdown sequence (drainIngest)
 	hooks      *hooks.Mounter   // P2-11: POST /ingest/hook, wired into httpapi.Deps.HookMounter by Serve
 	otlp       *otlp.Handler    // P2-10: POST /v1/{logs,metrics,traces}, wired into httpapi.Deps.OTLPMounter by Serve
@@ -109,6 +110,17 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, opts ...O
 		return nil, fmt.Errorf("app: ensuring startup partitions: %w", err)
 	}
 
+	// P3-05: the rollup job (SPEC §2.4). Its metrics follow the same
+	// o.registerer plumbing as the ingest pipeline/hooks handler below, for
+	// the identical reason (a test process constructing a second App must
+	// not panic registering the same metric names on the default registry
+	// twice).
+	var rollupMetrics *RollupJobMetrics
+	if o.registerer != nil {
+		rollupMetrics = NewRollupJobMetrics(o.registerer)
+	}
+	rollupJob := NewRollupJob(st, logger, rollupMetrics, cfg.RollupInterval, cfg.RollupMaxBuckets)
+
 	ingestOpts := []ingest.Option{ingest.WithLogger(logger)}
 	if o.registerer != nil {
 		ingestOpts = append(ingestOpts, ingest.WithRegisterer(o.registerer))
@@ -155,6 +167,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, opts ...O
 		store:      st,
 		ready:      httpapi.NewReadyState(),
 		partitions: NewPartitionJob(st, logger, cfg.RetentionRawDays),
+		rollups:    rollupJob,
 		ingest:     ing,
 		hooks:      hookMounter,
 		otlp:       otlpHandler,

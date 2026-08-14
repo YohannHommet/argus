@@ -157,11 +157,12 @@ func (s *Store) WriteBatch(ctx context.Context, b []model.Event) (store.BatchRes
 		result.Deduped += len(candidates) - len(inserted)
 	}
 
-	// P2-07/P2-08 seams: named, no-op today, in their invariant slot between
-	// events and rollup_dirty. Their session-level counters
-	// (tool_call_count, tool_reject_count, subagent_count) are theirs to
-	// maintain, not half-implemented here.
-	if err = upsertToolCalls(ctx, tx, candidates); err != nil {
+	// P2-07/P2-08 seams: filled in by upsertToolCalls/upsertSubagents, in
+	// their invariant slot between events and rollup_dirty. Their
+	// session-level counters (tool_call_count, tool_reject_count,
+	// subagent_count) are theirs to maintain.
+	toolCallStartedAts, err := upsertToolCalls(ctx, tx, candidates)
+	if err != nil {
 		return store.BatchResult{}, err
 	}
 	if err = upsertSubagents(ctx, tx, candidates); err != nil {
@@ -172,9 +173,19 @@ func (s *Store) WriteBatch(ctx context.Context, b []model.Event) (store.BatchRes
 		return store.BatchResult{}, err
 	}
 
-	marks := make([]dirtyMark, 0, len(inserted))
+	marks := make([]dirtyMark, 0, len(inserted)+len(toolCallStartedAts))
 	for _, ev := range inserted {
 		marks = append(marks, dirtyMark{Bucket: hourBucket(ev.TS), Source: sourceEvent})
+	}
+	// P3-05 defect 1: rollup_hourly.tool_calls/tool_rejects is now bucketed
+	// on tool_calls.started_at (AggregateToolCallRollup), which can fall in
+	// a different hour than the ts of the event that just touched the row
+	// (e.g. a late tool_decision arriving an hour after the PreToolUse hook
+	// that set started_at) — so every touched call's started_at hour is
+	// marked dirty too, not just the triggering events' own ts hours. See
+	// upsertToolCalls's doc comment for the full reasoning.
+	for _, ts := range toolCallStartedAts {
+		marks = append(marks, dirtyMark{Bucket: hourBucket(ts), Source: sourceEvent})
 	}
 	changed, span := projectChangeInputs(sessionResults)
 	marks = append(marks, s.projectChangeRemarks(changed, span)...)
