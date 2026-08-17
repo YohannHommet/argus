@@ -180,6 +180,54 @@ func (s *Store) ApplyRetentionPrecise(ctx context.Context, cutoff time.Time) (in
 	return total, nil
 }
 
+// sessionRetentionBatchSize bounds each DeleteExpiredSessions DELETE (m11
+// fix), the same bounded-batch idiom PruneDedup/ApplyRetentionPrecise use:
+// one long-running unbounded DELETE against `sessions` could hold locks (and
+// cascade through turns/tool_calls/subagents) for a long time against a
+// large backlog.
+const sessionRetentionBatchSize = 5000
+
+// DeleteExpiredSessions implements the ARGUS_RETENTION_SESSION_DAYS half of
+// SPEC §2.4's "Retention job" bullet ("optionally deletes `sessions` older
+// than ARGUS_RETENTION_SESSION_DAYS … cascading to turns/tool_calls/
+// subagents"). It deletes, in bounded batches of sessionRetentionBatchSize,
+// every `sessions` row whose last_event_at is older than cutoff; the
+// `REFERENCES sessions(id) ON DELETE CASCADE` FKs on turns/tool_calls/
+// subagents (SPEC §2.1/§2.3) do the rest inside the same statement.
+//
+// rollup_hourly/rollup_daily are never touched — they carry no session_id
+// (SPEC §2.4's rollup_hourly schema keys on bucket/project/vendor/model/
+// source only) — matching SPEC §2.4's "rollups and projections are never
+// deleted by raw retention" for the exact same reason ApplyRetention's own
+// doc comment gives: a deleted session's cost stays in its bucket forever,
+// which is the documented trade-off (a UI showing an aggregate with no
+// corresponding session row), not a bug this method could introduce.
+//
+// This key is separate from ARGUS_RETENTION_RAW_DAYS/ApplyRetention: a
+// session can easily outlive its raw events (default 0 = never delete
+// sessions at all, only their events age out via the coarse partition
+// drop), so cutoff is computed independently by the caller from
+// ARGUS_RETENTION_SESSION_DAYS, not from the raw-events cutoff.
+func (s *Store) DeleteExpiredSessions(ctx context.Context, cutoff time.Time) (int64, error) {
+	var total int64
+	for {
+		tag, err := s.pool.Exec(ctx, `
+			DELETE FROM sessions
+			WHERE id IN (
+				SELECT id FROM sessions WHERE last_event_at < $1 ORDER BY last_event_at LIMIT $2
+			)`, cutoff, sessionRetentionBatchSize)
+		if err != nil {
+			return total, fmt.Errorf("postgres: delete expired sessions: %w", err)
+		}
+		n := tag.RowsAffected()
+		total += n
+		if n < sessionRetentionBatchSize {
+			break
+		}
+	}
+	return total, nil
+}
+
 // PruneDedup implements store.Maintenance (SPEC §1.7 rule 2, §2.4): deletes
 // ingest_dedup rows whose first_seen_at is older than cutoff
 // (now - ARGUS_DEDUP_WINDOW) in bounded batches of pruneDedupBatchSize,
