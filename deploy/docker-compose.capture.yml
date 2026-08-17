@@ -1,0 +1,27 @@
+# Overlay used only by scripts/ui-capture.sh (the Phase-4 screenshot harness).
+#
+#   docker compose -p argus-capture \
+#     -f deploy/docker-compose.yml -f deploy/docker-compose.capture.yml up -d
+#
+# Two differences from the base stack:
+#
+#   1. Its own image tag. The base stack (and scripts/smoke.sh) use
+#      ghcr.io/yohannhommet/argus:latest; a capture run builds from the
+#      working tree, so it must not overwrite the tag a developer's live
+#      stack is running from.
+#   2. It builds. `server/Dockerfile` compiles the Vue SPA and embeds it in
+#      argusd, so building here is also what makes the harness capture the
+#      *embedded* assets rather than a dev server — the artifact the exit
+#      criteria are about.
+#
+# No postgres port is published: nothing on the host talks to the database
+# during a capture, and host 5432 is commonly already taken.
+services:
+  argusd:
+    image: argus:ui-capture
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
+      args:
+        VERSION: ${VERSION:-ui-capture}
+        COMMIT: ${COMMIT:-unknown}
