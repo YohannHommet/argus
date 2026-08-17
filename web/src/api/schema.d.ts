@@ -488,6 +488,8 @@ export interface components {
             status: number;
             detail?: string;
             instance?: string;
+            /** @description chi's per-request id (m2 audit finding, server/internal/httpapi/problem.go). Present on every problem+json body so an operator can join a client-visible error back to the log line carrying the real error text; empty/absent where chi's RequestID middleware is not installed on the router in front of the handler (e.g. the ingest mount seams' own duplicated problem+json encoder, which predates this field and does not set it). */
+            request_id?: string;
             errors?: {
                 [key: string]: unknown;
             }[];
@@ -496,9 +498,16 @@ export interface components {
             next_cursor: string | null;
             has_more: boolean;
         };
-        IngestAck: {
-            /** @enum {string} */
-            status: "accepted";
+        /** @description SPEC §3.5's 202 body (server/internal/ingest/hooks/handler.go's acceptedResponse). Argus is observe-only, so this body never carries a permission/decision verdict — only `ok` and the echoed event name. */
+        HookAccepted: {
+            ok: boolean;
+            event: string;
+        };
+        /** @description google.rpc.Status (https://cloud.google.com/apis/design/errors#error_model), the OTLP/HTTP error contract (SPEC §3.4). Hand-encoded in Go (server/internal/ingest/otlp/codec.go) but wire-verified byte-identical to the real generated type — `details` (field 3) is never populated, so it is not modeled here. Answered in application/x-protobuf or application/json matching the request's negotiated wire format, except the 415 response (see ingestLogs/ingestMetrics/ingestTraces), where negotiation itself failed and the body is always JSON. */
+        RpcStatus: {
+            /** @description Canonical gRPC status code: 3 (INVALID_ARGUMENT) on 400/415, 8 (RESOURCE_EXHAUSTED) on 413, 14 (UNAVAILABLE) on 503. */
+            code: number;
+            message: string;
         };
         /**
          * @description Argus's own closed event taxonomy (SPEC §1.4) — one of the four closed vocabularies SPEC §0 permits.
@@ -1016,6 +1025,47 @@ export interface components {
             };
             content: {
                 "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description Malformed envelope or one malformed element (google.rpc.Status, code=3 INVALID_ARGUMENT), answered in the request's negotiated wire format (server/internal/ingest/otlp/codec.go). */
+        OTLPBadRequest: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["RpcStatus"];
+                "application/x-protobuf": string;
+            };
+        };
+        /** @description Request body exceeds ARGUS_INGEST_MAX_BODY_BYTES, raw or after gzip decompression (google.rpc.Status, code=8 RESOURCE_EXHAUSTED), answered in the request's negotiated wire format. */
+        OTLPPayloadTooLarge: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["RpcStatus"];
+                "application/x-protobuf": string;
+            };
+        };
+        /** @description Missing or unsupported Content-Type (google.rpc.Status, code=3 INVALID_ARGUMENT). Always application/json — unlike every other OTLP error response, this one never echoes the request's format, because the request's format was never successfully negotiated in the first place. */
+        OTLPUnsupportedMediaType: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["RpcStatus"];
+            };
+        };
+        /** @description Ingest queue is full (SPEC §3.4 backpressure; google.rpc.Status, code=14 UNAVAILABLE), answered in the request's negotiated wire format, with Retry-After: 1 so a compliant OTel SDK backs off and retries exactly once a second later. */
+        OTLPUnavailable: {
+            headers: {
+                /** @description Always "1" (seconds). */
+                "Retry-After"?: string;
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["RpcStatus"];
+                "application/x-protobuf": string;
             };
         };
     };
@@ -1813,9 +1863,12 @@ export interface operations {
                     };
                 };
             };
-            400: components["responses"]["BadRequest"];
+            400: components["responses"]["OTLPBadRequest"];
             401: components["responses"]["Unauthorized"];
             405: components["responses"]["MethodNotAllowed"];
+            413: components["responses"]["OTLPPayloadTooLarge"];
+            415: components["responses"]["OTLPUnsupportedMediaType"];
+            503: components["responses"]["OTLPUnavailable"];
         };
     };
     ingestMetrics: {
@@ -1845,9 +1898,12 @@ export interface operations {
                     };
                 };
             };
-            400: components["responses"]["BadRequest"];
+            400: components["responses"]["OTLPBadRequest"];
             401: components["responses"]["Unauthorized"];
             405: components["responses"]["MethodNotAllowed"];
+            413: components["responses"]["OTLPPayloadTooLarge"];
+            415: components["responses"]["OTLPUnsupportedMediaType"];
+            503: components["responses"]["OTLPUnavailable"];
         };
     };
     ingestTraces: {
@@ -1877,9 +1933,12 @@ export interface operations {
                     };
                 };
             };
-            400: components["responses"]["BadRequest"];
+            400: components["responses"]["OTLPBadRequest"];
             401: components["responses"]["Unauthorized"];
             405: components["responses"]["MethodNotAllowed"];
+            413: components["responses"]["OTLPPayloadTooLarge"];
+            415: components["responses"]["OTLPUnsupportedMediaType"];
+            503: components["responses"]["OTLPUnavailable"];
         };
     };
     ingestHook: {
@@ -1897,18 +1956,38 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Accepted for asynchronous ingestion. */
+            /** @description Accepted for asynchronous ingestion (SPEC §3.5). `event` echoes the request's hook_event_name(s) back verbatim (server/internal/ingest/hooks/handler.go's writeAccepted) — comma-joined when the body is a batch-replay array. */
             202: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["IngestAck"];
+                    "application/json": components["schemas"]["HookAccepted"];
                 };
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             405: components["responses"]["MethodNotAllowed"];
+            /** @description Hook payload exceeds ARGUS_INGEST_MAX_BODY_BYTES (server/internal/ingest/hooks/handler.go). */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Ingest queue is full. Claude Code does not retry hooks, so the event(s) in this request are counted data loss (server/internal/ingest/hooks/handler.go). */
+            429: {
+                headers: {
+                    /** @description Always "1" (seconds). */
+                    "Retry-After"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
         };
     };
 }
