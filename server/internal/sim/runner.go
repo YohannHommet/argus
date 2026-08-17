@@ -119,9 +119,35 @@ func backfillOffset(ordinal, sessions int, backfill time.Duration) time.Duration
 // every other §7.1 categorical field uses (models, startTypes, ...) —
 // makes legacy-app assignment an ordinary ~1-in-5 draw like any other,
 // uncorrelated with sessions or with ordinal's position in the run.
+// Ordinal 0 is the one deliberate exception to the uniform draw: it never
+// gets legacy-app. Two things depend on the run's first session being a real
+// logs session. session.go anchors --chaos-clock-skew's beyond-retention
+// event on `logsOnly && sessionOrdinal == 0` — "emitted once for the whole
+// run" — so an ordinal 0 that drew the metrics-only project would silently
+// emit no repro at all for that seed, with nothing failing to say so. And a
+// demo whose very first session contains no events reads as a broken install
+// to whoever is watching it arrive.
+//
+// Pinning ordinal 0, and only away from one project, is not a re-run of the
+// defect this function replaced: that was the *last* ordinal being
+// metrics-only for every seed by arithmetic accident, unnoticed. This is one
+// documented session at a known position, with the other N-1 still drawn
+// uniformly.
 func pickProject(seed uint64, ordinal int) string {
 	r := sessionRand(seed, ordinal)
-	return projects[r.IntN(len(projects))]
+	project := projects[r.IntN(len(projects))]
+	if ordinal == 0 && project == legacyAppProject {
+		// Re-draw from the logs-capable projects only, still off this
+		// ordinal's own RNG so the result stays purely seed-determined.
+		logsCapable := make([]string, 0, len(projects)-1)
+		for _, p := range projects {
+			if p != legacyAppProject {
+				logsCapable = append(logsCapable, p)
+			}
+		}
+		return logsCapable[r.IntN(len(logsCapable))]
+	}
+	return project
 }
 
 // RunLoad implements SPEC §7.2's "--mode=load (--rate=<events/s>

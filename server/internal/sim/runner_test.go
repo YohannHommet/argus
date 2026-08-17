@@ -106,3 +106,35 @@ func TestDemo_NSessionsYieldNDistinctRealisticSessions(t *testing.T) {
 		require.Lessf(t, thin, nonLegacy/2+1, "seed %d: %d/%d non-metrics-only sessions came back near-empty", seed, thin, nonLegacy)
 	}
 }
+
+// TestPickProject_OrdinalZeroIsAlwaysLogsCapable pins the contract
+// session.go's --chaos-clock-skew anchor depends on. That event is emitted
+// only when `logsOnly && sessionOrdinal == 0`, so if ordinal 0 ever draws
+// the metrics-only legacy-app project, the run's single beyond-retention
+// repro is silently not emitted at all — no error, no warning, just a
+// counter that never moves. That is exactly how it was found: the
+// end-to-end chaos assertion went red for seed 303 the moment project
+// selection became a per-ordinal draw.
+//
+// Asserted across many seeds rather than one, because a single seed passing
+// is what made the ordinal-modulo version look fine for so long.
+func TestPickProject_OrdinalZeroIsAlwaysLogsCapable(t *testing.T) {
+	t.Parallel()
+
+	for seed := uint64(1); seed <= 500; seed++ {
+		require.NotEqual(t, legacyAppProject, pickProject(seed, 0),
+			"seed %d: ordinal 0 must be a logs-capable project, or --chaos-clock-skew's once-per-run beyond-retention event is never emitted", seed)
+	}
+
+	// The pin must not flatten the distribution for everyone else: later
+	// ordinals still have to be able to draw legacy-app, or the
+	// "logs exporter appears off" demo case (SPEC §7.1) has no data.
+	sawLegacyApp := false
+	for ordinal := 1; ordinal < 200 && !sawLegacyApp; ordinal++ {
+		if pickProject(7, ordinal) == legacyAppProject {
+			sawLegacyApp = true
+		}
+	}
+	require.True(t, sawLegacyApp,
+		"legacy-app must still be reachable for ordinals past 0, or SPEC §7.1's metrics-only demo case never appears")
+}
