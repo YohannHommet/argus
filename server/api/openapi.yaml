@@ -136,7 +136,7 @@ paths:
                     version: "1.4.0"
                     commit: "a1b2c3d"
                     retention_days: 90
-                    feature_flags: { estimated_cost: true }
+                    feature_flags: {}
                     vendors: ["claude_code", "codex"]
                     logs_exporter_seen: true
                     metrics_exporter_seen: true
@@ -1148,11 +1148,17 @@ paths:
                 default:
                   value: {}
         "400":
-          $ref: "#/components/responses/BadRequest"
+          $ref: "#/components/responses/OTLPBadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
+        "413":
+          $ref: "#/components/responses/OTLPPayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/OTLPUnsupportedMediaType"
+        "503":
+          $ref: "#/components/responses/OTLPUnavailable"
 
   /v1/metrics:
     post:
@@ -1188,11 +1194,17 @@ paths:
                 default:
                   value: {}
         "400":
-          $ref: "#/components/responses/BadRequest"
+          $ref: "#/components/responses/OTLPBadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
+        "413":
+          $ref: "#/components/responses/OTLPPayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/OTLPUnsupportedMediaType"
+        "503":
+          $ref: "#/components/responses/OTLPUnavailable"
 
   /v1/traces:
     post:
@@ -1230,11 +1242,17 @@ paths:
                 default:
                   value: {}
         "400":
-          $ref: "#/components/responses/BadRequest"
+          $ref: "#/components/responses/OTLPBadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
+        "413":
+          $ref: "#/components/responses/OTLPPayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/OTLPUnsupportedMediaType"
+        "503":
+          $ref: "#/components/responses/OTLPUnavailable"
 
   /ingest/hook:
     post:
@@ -1260,20 +1278,62 @@ paths:
                   tool_name: "Edit"
       responses:
         "202":
-          description: Accepted for asynchronous ingestion.
+          description: >-
+            Accepted for asynchronous ingestion (SPEC §3.5). `event` echoes
+            the request's hook_event_name(s) back verbatim
+            (server/internal/ingest/hooks/handler.go's writeAccepted) —
+            comma-joined when the body is a batch-replay array.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/IngestAck"
+                $ref: "#/components/schemas/HookAccepted"
               examples:
                 default:
-                  value: { status: "accepted" }
+                  value: { ok: true, event: "PostToolUse" }
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
+        "413":
+          description: >-
+            Hook payload exceeds ARGUS_INGEST_MAX_BODY_BYTES
+            (server/internal/ingest/hooks/handler.go).
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+              examples:
+                default:
+                  value:
+                    type: "urn:argus:error:payload-too-large"
+                    title: "Request Entity Too Large"
+                    status: 413
+                    detail: "hook payload exceeds the configured ARGUS_INGEST_MAX_BODY_BYTES limit"
+                    instance: "/ingest/hook"
+        "429":
+          description: >-
+            Ingest queue is full. Claude Code does not retry hooks, so the
+            event(s) in this request are counted data loss
+            (server/internal/ingest/hooks/handler.go).
+          headers:
+            Retry-After:
+              description: Always "1" (seconds).
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+              examples:
+                default:
+                  value:
+                    type: "urn:argus:error:queue-full"
+                    title: "Too Many Requests"
+                    status: 429
+                    detail: "ingest queue is full; hooks are not retried by Claude Code, so this request's events were dropped"
+                    instance: "/ingest/hook"
 
 components:
   parameters:
@@ -1490,6 +1550,75 @@ components:
                 detail: "method not allowed on this resource"
                 instance: "/api/v1/sessions"
 
+    OTLPBadRequest:
+      description: >-
+        Malformed envelope or one malformed element (google.rpc.Status,
+        code=3 INVALID_ARGUMENT), answered in the request's negotiated wire
+        format (server/internal/ingest/otlp/codec.go).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RpcStatus"
+          examples:
+            default:
+              value: { code: 3, message: "invalid ExportLogsServiceRequest: unexpected EOF" }
+        application/x-protobuf:
+          schema:
+            type: string
+            contentEncoding: binary
+    OTLPPayloadTooLarge:
+      description: >-
+        Request body exceeds ARGUS_INGEST_MAX_BODY_BYTES, raw or after gzip
+        decompression (google.rpc.Status, code=8 RESOURCE_EXHAUSTED),
+        answered in the request's negotiated wire format.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RpcStatus"
+          examples:
+            default:
+              value: { code: 8, message: "request body exceeds the configured limit" }
+        application/x-protobuf:
+          schema:
+            type: string
+            contentEncoding: binary
+    OTLPUnsupportedMediaType:
+      description: >-
+        Missing or unsupported Content-Type (google.rpc.Status, code=3
+        INVALID_ARGUMENT). Always application/json — unlike every other OTLP
+        error response, this one never echoes the request's format, because
+        the request's format was never successfully negotiated in the first
+        place.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RpcStatus"
+          examples:
+            default:
+              value: { code: 3, message: "unsupported content-type \"text/plain\" (want application/x-protobuf or application/json)" }
+    OTLPUnavailable:
+      description: >-
+        Ingest queue is full (SPEC §3.4 backpressure; google.rpc.Status,
+        code=14 UNAVAILABLE), answered in the request's negotiated wire
+        format, with Retry-After: 1 so a compliant OTel SDK backs off and
+        retries exactly once a second later.
+      headers:
+        Retry-After:
+          description: Always "1" (seconds).
+          schema:
+            type: string
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RpcStatus"
+          examples:
+            default:
+              value: { code: 14, message: "ingest queue is full" }
+        application/x-protobuf:
+          schema:
+            type: string
+            contentEncoding: binary
+
   examples:
     ToolCallsListExample:
       value:
@@ -1559,6 +1688,16 @@ components:
           type: string
         instance:
           type: string
+        request_id:
+          type: string
+          description: >-
+            chi's per-request id (m2 audit finding, server/internal/httpapi/problem.go).
+            Present on every problem+json body so an operator can join a
+            client-visible error back to the log line carrying the real error
+            text; empty/absent where chi's RequestID middleware is not
+            installed on the router in front of the handler (e.g. the ingest
+            mount seams' own duplicated problem+json encoder, which predates
+            this field and does not set it).
         errors:
           type: array
           items:
@@ -1574,13 +1713,40 @@ components:
         has_more:
           type: boolean
 
-    IngestAck:
+    HookAccepted:
       type: object
-      required: [status]
+      description: >-
+        SPEC §3.5's 202 body (server/internal/ingest/hooks/handler.go's
+        acceptedResponse). Argus is observe-only, so this body never carries
+        a permission/decision verdict — only `ok` and the echoed event name.
+      required: [ok, event]
       properties:
-        status:
+        ok:
+          type: boolean
+        event:
           type: string
-          enum: [accepted]
+
+    RpcStatus:
+      type: object
+      description: >-
+        google.rpc.Status (https://cloud.google.com/apis/design/errors#error_model),
+        the OTLP/HTTP error contract (SPEC §3.4). Hand-encoded in Go
+        (server/internal/ingest/otlp/codec.go) but wire-verified
+        byte-identical to the real generated type — `details` (field 3) is
+        never populated, so it is not modeled here. Answered in
+        application/x-protobuf or application/json matching the request's
+        negotiated wire format, except the 415 response (see
+        ingestLogs/ingestMetrics/ingestTraces), where negotiation itself
+        failed and the body is always JSON.
+      required: [code, message]
+      properties:
+        code:
+          type: integer
+          description: >-
+            Canonical gRPC status code: 3 (INVALID_ARGUMENT) on 400/415, 8
+            (RESOURCE_EXHAUSTED) on 413, 14 (UNAVAILABLE) on 503.
+        message:
+          type: string
 
     Kind:
       type: string
