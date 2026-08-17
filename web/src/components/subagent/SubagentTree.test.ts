@@ -1,0 +1,91 @@
+import { flushPromises, mount } from '@vue/test-utils'
+import { createPinia, setActivePinia } from 'pinia'
+import { createMemoryHistory, createRouter, type Router } from 'vue-router'
+import { beforeEach, describe, expect, it } from 'vitest'
+
+import SubagentTree from './SubagentTree.vue'
+import { useSessionDetailStore } from '@/stores/sessionDetail'
+import {
+  getSessionSubagentsDepth2Live,
+  getSessionSubagentsFiftyNodes,
+} from '@/test/fixtures.extra'
+
+async function mountTree(props: Record<string, unknown>): Promise<{ router: Router; wrapper: ReturnType<typeof mount> }> {
+  const router = createRouter({
+    history: createMemoryHistory(),
+    routes: [{ path: '/sessions/:id', name: 'session-detail', component: { template: '<div />' } }],
+  })
+  await router.push('/sessions/3f7a3b1e-0000-0000-0000-000000000001')
+  await router.isReady()
+
+  const wrapper = mount(SubagentTree, {
+    props,
+    global: { plugins: [router] },
+  })
+  return { router, wrapper }
+}
+
+describe('SubagentTree', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+  })
+
+  it('renders a loading skeleton, not the tree or an empty state, while loading', async () => {
+    const { wrapper } = await mountTree({ nodes: [], loading: true })
+
+    expect(wrapper.find('[data-testid="subagent-tree-loading"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="empty-state"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="subagent-node"]').exists()).toBe(false)
+  })
+
+  it('renders ErrorState on error and re-emits retry', async () => {
+    const { wrapper } = await mountTree({ nodes: [], error: new Error('boom') })
+
+    expect(wrapper.find('[data-testid="error-state"]').exists()).toBe(true)
+    await wrapper.find('[data-testid="error-state"] button').trigger('click')
+    expect(wrapper.emitted('retry')).toHaveLength(1)
+  })
+
+  it('renders EmptyState for a session with no subagents (the common case)', async () => {
+    const { wrapper } = await mountTree({ nodes: [] })
+
+    expect(wrapper.find('[data-testid="empty-state"]').exists()).toBe(true)
+  })
+
+  it('renders the live depth-2 fixture: root + 2 children', async () => {
+    const { wrapper } = await mountTree({ nodes: getSessionSubagentsDepth2Live.data })
+
+    expect(wrapper.findAll('[data-testid="subagent-node"]')).toHaveLength(3)
+  })
+
+  it('renders a 50-node fixture in full via the tree entrypoint', async () => {
+    const { wrapper } = await mountTree({ nodes: getSessionSubagentsFiftyNodes.data })
+
+    expect(wrapper.findAll('[data-testid="subagent-node"]')).toHaveLength(50)
+  })
+
+  it('clicking a node navigates to ?tab=timeline&agent_id=… and the store applies the filter', async () => {
+    const store = useSessionDetailStore()
+    expect(store.agentId).toBeNull()
+
+    const { router, wrapper } = await mountTree({ nodes: getSessionSubagentsDepth2Live.data })
+
+    await wrapper.get('[data-agent-id="agent-107d2cba-explore-1"] [data-testid="subagent-node-row"]').trigger('click')
+    await flushPromises()
+
+    expect(router.currentRoute.value.query.tab).toBe('timeline')
+    expect(router.currentRoute.value.query.agent_id).toBe('agent-107d2cba-explore-1')
+    expect(store.agentId).toBe('agent-107d2cba-explore-1')
+    expect(wrapper.emitted('select-agent')).toEqual([['agent-107d2cba-explore-1']])
+  })
+
+  it('passes cost_attribution.note through to node cost tooltips', async () => {
+    const { wrapper } = await mountTree({
+      nodes: getSessionSubagentsDepth2Live.data,
+      costNote: getSessionSubagentsDepth2Live.cost_attribution.note,
+    })
+
+    const trigger = wrapper.get('[data-testid="subagent-node-cost"] [title]')
+    expect(trigger.attributes('title')).toBe(getSessionSubagentsDepth2Live.cost_attribution.note)
+  })
+})
