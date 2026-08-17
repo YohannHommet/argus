@@ -881,3 +881,39 @@ func decodePartialSuccess(t *testing.T, body []byte) (rejected int64, message st
 	}
 	return rejected, message
 }
+
+// TestHandleMetrics_PartialSuccess_CountsEveryRejectedDataPoint pins the
+// handler half of audit finding m14. FromOTLPMetrics emits exactly ONE
+// Rejection for a metric whose aggregation type is unsupported, discarding
+// all of that metric's data points with it — so reporting len(rejections)
+// as rejectedDataPoints told an operator "1 point rejected" while three
+// were thrown away. A Summary with three data points is the smallest case
+// that distinguishes summing Rejection.Count from counting rejections.
+func TestHandleMetrics_PartialSuccess_CountsEveryRejectedDataPoint(t *testing.T) {
+	t.Parallel()
+
+	h, _ := newTestHandler(t, nil)
+	srv := newTestServer(t, h)
+
+	data := &metricspb.MetricsData{ResourceMetrics: []*metricspb.ResourceMetrics{{
+		ScopeMetrics: []*metricspb.ScopeMetrics{{Metrics: []*metricspb.Metric{{
+			Name: "argus.test.summary",
+			// Summary is not an aggregation Argus stores, so the whole
+			// metric is rejected as a single Rejection carrying all three
+			// of its data points.
+			Data: &metricspb.Metric_Summary{Summary: &metricspb.Summary{
+				DataPoints: []*metricspb.SummaryDataPoint{{}, {}, {}},
+			}},
+		}}}},
+	}}}
+	body, err := proto.Marshal(data)
+	require.NoError(t, err)
+
+	resp := doRequest(t, srv, "/v1/metrics", contentTypeProtobuf, body, nil)
+	require.Equal(t, http.StatusOK, resp.status)
+
+	rejected, message := decodePartialSuccess(t, resp.body)
+	require.Equal(t, int64(3), rejected,
+		"rejectedDataPoints must sum Rejection.Count, not count Rejection values: one unsupported-aggregation rejection stands for every data point it discarded")
+	require.NotEmpty(t, message)
+}
