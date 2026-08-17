@@ -66,7 +66,7 @@ func (rn *Runner) RunDemo(ctx context.Context) error {
 
 	for ordinal := 0; ordinal < sessions; ordinal++ {
 		startOffset := backfillOffset(ordinal, sessions, rn.Cfg.Backfill)
-		project := projects[ordinal%len(projects)]
+		project := pickProject(rn.Cfg.Seed, ordinal)
 		result := generateSession(rn.Cfg, clock, ordinal, startOffset, project)
 
 		if isFile {
@@ -93,6 +93,35 @@ func backfillOffset(ordinal, sessions int, backfill time.Duration) time.Duration
 		return 0
 	}
 	return time.Duration(float64(ordinal) / float64(sessions-1) * float64(backfill))
+}
+
+// pickProject draws ordinal's project from the fixed set (projects.go)
+// using a dedicated *rand.Rand built from the same (seed, ordinal)
+// derivation newSessionRNG uses for the session's own content generator
+// (rng.go's sessionRand) — but a separate instance, so consuming this
+// draw here never perturbs the sequence of draws generateSession makes
+// for that same ordinal (two independently-constructed rand.Rand values
+// seeded identically advance independently; drawing from one does not
+// touch the other's state).
+//
+// This replaces the previous `projects[ordinal%len(projects)]` round
+// robin (ticket W15, "argusd sim --sessions=N undercount"). That cycle put
+// legacy-app — the one project SPEC §7.1 makes metrics-only, so its
+// sessions correctly produce no `sessions` row — at a *fixed* residue
+// (index 4 of 5) that depended only on ordinal, never on sessions or
+// seed. Whenever --sessions was a multiple of len(projects), ordinal
+// sessions-1 (the run's last session, whose events are otherwise no
+// thinner than any other session's — verified: this package's demo path
+// has no time-based emission cutoff, so the ledger's `backfillOffset`
+// theory for this symptom does not hold) landed on that residue 100% of
+// the time, for every seed, guaranteeing the last session of the run was
+// always metrics-only. A uniform per-ordinal draw — the same mechanism
+// every other §7.1 categorical field uses (models, startTypes, ...) —
+// makes legacy-app assignment an ordinary ~1-in-5 draw like any other,
+// uncorrelated with sessions or with ordinal's position in the run.
+func pickProject(seed uint64, ordinal int) string {
+	r := sessionRand(seed, ordinal)
+	return projects[r.IntN(len(projects))]
 }
 
 // RunLoad implements SPEC §7.2's "--mode=load (--rate=<events/s>
