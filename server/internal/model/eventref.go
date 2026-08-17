@@ -16,6 +16,15 @@ import (
 type EventRef struct {
 	TS  time.Time
 	Seq int64
+
+	// DedupKey is populated only on the EventRef values store.Writer.
+	// WriteBatch returns in BatchResult.EventRefs (internal/ingest's
+	// matchPersisted keys off it to map a persisted ref back to the
+	// submitted batch event it belongs to — SPEC §3.6/§5.3, audit finding
+	// M1). It plays no part in Encode/DecodeEventRef: the wire `event_ref`
+	// stays exactly (ts, seq), and every other EventRef consumer (GetEvent,
+	// pagination cursors, conformance fixtures) leaves this field zero.
+	DedupKey string
 }
 
 // eventRefEncoding is base64url with no padding: SPEC §1.2 says "base64url
