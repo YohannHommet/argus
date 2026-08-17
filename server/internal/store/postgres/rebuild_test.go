@@ -271,9 +271,119 @@ func TestRebuildProjections_NeverTouchesRollups(t *testing.T) {
 	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM rollup_hourly`).Scan(&before))
 	require.Positive(t, before)
 
+	// base is midnight on the 1st, so base.Add(-time.Hour) (the same
+	// safety-margin fromTS the sibling tests in this file use) falls in the
+	// PREVIOUS month — ensure that month's events partition exists too, or
+	// M12's "refuse a fromTS predating the oldest surviving partition" guard
+	// (rebuild.go's RebuildProjectionsForce) fires here for a reason entirely
+	// unrelated to what this test checks (rollup_hourly survival).
+	ensureRange(t, st, base.Add(-time.Hour), base)
+
 	require.NoError(t, st.RebuildProjections(ctx, base.Add(-time.Hour)))
 
 	var after int64
 	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM rollup_hourly`).Scan(&after))
 	require.Equal(t, before, after, "RebuildProjections must never touch rollup_hourly")
+}
+
+// --- M12: a session that straddles --from-ts (started before it, still ----
+// --- active at/after it) must be rebuilt from its own true start, not a --
+// --- partial post-fromTS slice — otherwise its aggregates (event_count, ---
+// --- started_at, cwd, token/cost sums, …) come out wrong instead of missing.
+
+// rebuildLockKeyForTest mirrors rebuild.go's unexported rebuildLockKey
+// (0x41_52_47_55_53_30_33, "ARGUS03"): TestRebuildProjectionsForce_RefusesWhenAnotherRebuildHoldsTheLock
+// holds this same key from a separate connection to simulate a concurrent
+// rebuild, so it must stay in sync with that constant.
+const rebuildLockKeyForTest = int64(0x41_52_47_55_53_30_33)
+
+func TestRebuildProjections_StraddlingSessionRebuiltInFull(t *testing.T) {
+	st, pool := newStore(t)
+	ctx := context.Background()
+	base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	sessionID := "session-rebuild-straddle"
+	buildRebuildFixture(t, st, base, sessionID)
+	ensureRange(t, st, base, base.Add(24*time.Hour))
+
+	before := checksumProjections(t, pool)
+	idsBefore := toolCallIDs(t, pool)
+
+	// buildRebuildFixture's session starts at `base` (session.start) and its
+	// llm.request lands at base+1s; its tool/subagent events run from base+2s
+	// through base+9s. fromTS = base+1.5s therefore straddles this ONE
+	// session: some of its events are before fromTS, some after.
+	fromTS := base.Add(1500 * time.Millisecond)
+
+	require.NoError(t, st.RebuildProjections(ctx, fromTS))
+
+	after := checksumProjections(t, pool)
+	require.Equal(t, before, after,
+		"a straddling session must be rebuilt from its own true start (all its events), not just the events at/after --from-ts")
+	require.Equal(t, idsBefore, toolCallIDs(t, pool))
+}
+
+// --- M12: a --from-ts predating the oldest surviving events partition -----
+// --- is refused unless --force is set, since raw events before that point --
+// --- may already be gone (SPEC §2.4 retention) and a rebuild could only ---
+// --- reconstruct an incomplete history for sessions rooted there. ---------
+
+func TestRebuildProjectionsForce_RefusesFromTSOlderThanOldestPartitionUnlessForced(t *testing.T) {
+	st, pool := newStore(t)
+	ctx := context.Background()
+	// base's month (July) is the ONLY partition buildRebuildFixture's
+	// internal ensureRange(base, base) creates, so a fromTS in June predates
+	// the oldest surviving events partition.
+	base := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	sessionID := "session-rebuild-guard"
+	buildRebuildFixture(t, st, base, sessionID)
+
+	fromTS := base.Add(-24 * time.Hour)
+
+	_, err := st.RebuildProjectionsForce(ctx, fromTS, false)
+	require.Error(t, err, "a --from-ts predating the oldest surviving events partition must be refused without --force")
+	require.Contains(t, err.Error(), "--force")
+
+	var sessions int64
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM sessions`).Scan(&sessions))
+	require.Equal(t, int64(1), sessions, "a refused rebuild must not have touched anything")
+
+	report, err := st.RebuildProjectionsForce(ctx, fromTS, true)
+	require.NoError(t, err, "--force must let the same --from-ts proceed")
+	require.Equal(t, int64(1), report.Sessions, "the destruction report must count the session about to be rebuilt")
+}
+
+// --- M13: an exclusive ARGUS03 advisory lock rejects a concurrent ---------
+// --- rebuild-projections instead of silently letting two passes race and --
+// --- double-count (SPEC §1.6's "rebuild produces identical rows"). --------
+
+func TestRebuildProjectionsForce_RefusesWhenAnotherRebuildHoldsTheLock(t *testing.T) {
+	st, pool := newStore(t)
+	ctx := context.Background()
+
+	holder, err := pool.Acquire(ctx)
+	require.NoError(t, err)
+	defer holder.Release()
+
+	var locked bool
+	require.NoError(t, holder.QueryRow(ctx, `SELECT pg_try_advisory_lock($1)`, rebuildLockKeyForTest).Scan(&locked))
+	require.True(t, locked, "test setup must hold the lock for this assertion to mean anything")
+	defer func() {
+		_, _ = holder.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, rebuildLockKeyForTest)
+	}()
+
+	_, err = st.RebuildProjectionsForce(ctx, time.Time{}, false)
+	require.Error(t, err, "RebuildProjectionsForce must refuse to run while another connection holds ARGUS03")
+	require.Contains(t, err.Error(), "ARGUS03")
+
+	var sessions int64
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM sessions`).Scan(&sessions))
+	require.Zero(t, sessions, "a refused rebuild must not have touched anything (nothing was ever written in this test)")
+
+	// Sanity: release the lock and confirm a normal call now succeeds,
+	// proving the error above was the lock and not a broken RebuildProjectionsForce.
+	_, err = holder.Exec(ctx, `SELECT pg_advisory_unlock($1)`, rebuildLockKeyForTest)
+	require.NoError(t, err)
+
+	_, err = st.RebuildProjectionsForce(ctx, time.Time{}, false)
+	require.NoError(t, err)
 }
