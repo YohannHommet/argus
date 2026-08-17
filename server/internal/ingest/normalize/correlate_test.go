@@ -208,6 +208,91 @@ func TestAssignKeylessContributions_ProcessesInTSSeqOrder(t *testing.T) {
 	require.Len(t, callOrderTS, 3)
 }
 
+// TestAssignKeylessContributions_TiebreaksOnVendorSeqNotDedupKey is audit
+// finding m13's required test: two same-ts contributions whose vendor_seq
+// order is the OPPOSITE of their dedup_key's lexicographic order. Before the
+// fix, the tiebreak read Event.Seq — always 0 on this pre-insert slice — and
+// silently fell through to (ts, dedup_key) order, processing vendor_seq 10
+// before vendor_seq 9. The fix must process 9 before 10.
+func TestAssignKeylessContributions_TiebreaksOnVendorSeqNotDedupKey(t *testing.T) {
+	t.Parallel()
+	sessionID, promptID, ts := "s", "p", baseTS(0)
+	vendorSeq9 := int64(9)
+	vendorSeq10 := int64(10)
+
+	// dedup_key is deliberately the reverse of vendor_seq order: "a..." <
+	// "z...", so a (ts, dedup_key) tiebreak would process the vendor_seq-10
+	// contribution first — exactly the bug this finding reports.
+	c10 := ToolCallContribution{
+		Event:     model.Event{SessionID: sessionID, TS: ts, VendorSeq: &vendorSeq10, DedupKey: "a-sorts-first-by-dedup-key"},
+		SessionID: sessionID,
+		PromptID:  &promptID,
+		ToolName:  "vendor-seq-10",
+		TS:        ts,
+	}
+	c9 := ToolCallContribution{
+		Event:     model.Event{SessionID: sessionID, TS: ts, VendorSeq: &vendorSeq9, DedupKey: "z-sorts-last-by-dedup-key"},
+		SessionID: sessionID,
+		PromptID:  &promptID,
+		ToolName:  "vendor-seq-9",
+		TS:        ts,
+	}
+
+	var order []string
+	AssignKeylessContributions([]ToolCallContribution{c10, c9}, nil, func(_ string, _ *string, toolName string) int {
+		order = append(order, toolName)
+		return len(order) - 1
+	})
+
+	require.Equal(t, []string{"vendor-seq-9", "vendor-seq-10"}, order,
+		"processing order must follow vendor_seq ascending (NULLS LAST), never dedup_key lexicographic order")
+}
+
+// TestAssignKeylessContributions_TiebreaksOnDedupKeyWhenVendorSeqAbsent
+// covers the two remaining branches of the m13 tiebreak: a nil VendorSeq
+// sorts after any present one ("NULLS LAST"), and when both are nil the
+// order falls back to DedupKey so the result stays fully deterministic —
+// SPEC §1.7 rule 2's hash-fallback dedup form applies to every hook event
+// (VendorSeq is always nil for hooks), so this is the common case for
+// hook-sourced contributions, not an edge case.
+func TestAssignKeylessContributions_TiebreaksOnDedupKeyWhenVendorSeqAbsent(t *testing.T) {
+	t.Parallel()
+	sessionID, promptID, ts := "s", "p", baseTS(0)
+	vendorSeq5 := int64(5)
+
+	withVendorSeq := ToolCallContribution{
+		Event:     model.Event{SessionID: sessionID, TS: ts, VendorSeq: &vendorSeq5, DedupKey: "z-would-sort-last-by-dedup-key"},
+		SessionID: sessionID,
+		PromptID:  &promptID,
+		ToolName:  "has-vendor-seq",
+		TS:        ts,
+	}
+	withoutVendorSeq := ToolCallContribution{
+		Event:     model.Event{SessionID: sessionID, TS: ts, VendorSeq: nil, DedupKey: "a-would-sort-first-by-dedup-key"},
+		SessionID: sessionID,
+		PromptID:  &promptID,
+		ToolName:  "no-vendor-seq",
+		TS:        ts,
+	}
+
+	var order []string
+	recordOrder := func(_ string, _ *string, toolName string) int {
+		order = append(order, toolName)
+		return len(order) - 1
+	}
+
+	AssignKeylessContributions([]ToolCallContribution{withoutVendorSeq, withVendorSeq}, nil, recordOrder)
+	require.Equal(t, []string{"has-vendor-seq", "no-vendor-seq"}, order,
+		"a present VendorSeq must sort before an absent one, regardless of dedup_key")
+
+	// Both nil: falls back to DedupKey, ascending.
+	order = nil
+	a := ToolCallContribution{Event: model.Event{SessionID: sessionID, TS: ts, DedupKey: "a-first"}, SessionID: sessionID, PromptID: &promptID, ToolName: "a", TS: ts}
+	z := ToolCallContribution{Event: model.Event{SessionID: sessionID, TS: ts, DedupKey: "z-last"}, SessionID: sessionID, PromptID: &promptID, ToolName: "z", TS: ts}
+	AssignKeylessContributions([]ToolCallContribution{z, a}, nil, recordOrder)
+	require.Equal(t, []string{"a", "z"}, order, "both VendorSeq absent must fall back to DedupKey ascending")
+}
+
 func mustUUID(n byte) uuid.UUID {
 	var u uuid.UUID
 	u[15] = n

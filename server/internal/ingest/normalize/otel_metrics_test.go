@@ -9,6 +9,7 @@ import (
 
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
 	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
+	resourcepb "go.opentelemetry.io/proto/otlp/resource/v1"
 	"google.golang.org/protobuf/encoding/protojson"
 
 	"github.com/stretchr/testify/require"
@@ -236,6 +237,10 @@ func TestFromOTLPMetrics_Rejections(t *testing.T) {
 		require.Len(t, rejections, 1)
 		require.Contains(t, rejections[0].Reason, "unsupported metric aggregation type")
 		require.Equal(t, "claude_code.some_future_metric.summary", rejections[0].Record["metric.name"])
+		// audit finding m14: Count must reflect the actual number of
+		// discarded data points (this fixture's Summary carries exactly
+		// one), not an implicit 1-rejection-per-metric assumption.
+		require.Equal(t, 1, rejections[0].Count)
 	})
 
 	t.Run("mixed batch: rejection never discards the rest of the batch", func(t *testing.T) {
@@ -270,20 +275,25 @@ func TestFromOTLPMetrics_NilData(t *testing.T) {
 	require.Empty(t, rejections)
 }
 
-// TestFromOTLPMetrics_UnmarshalableAttrs exercises buildSample's and
-// seriesHash's fallback branches: a DoubleValue attribute holding NaN is
-// legal on the wire (OTLP places no constraint on a double attribute value)
-// but encoding/json refuses to marshal NaN/Inf, so both
-// model.DedupKeyMetric and seriesHash must fall back to their documented
-// deterministic, name-scoped substitutes rather than erroring or panicking.
-func TestFromOTLPMetrics_UnmarshalableAttrs(t *testing.T) {
+// TestFromOTLPMetrics_NaNAttrIsSanitizedNotUnhashable is the post-M5
+// version of what was TestFromOTLPMetrics_UnmarshalableAttrs: a DoubleValue
+// attribute holding NaN is legal on the wire (OTLP places no constraint on
+// a double attribute value), and used to make encoding/json refuse to
+// marshal the attrs map, forcing buildSample's/seriesHash's
+// "metric:unhashable:"/name-only fallback branches. otlpAnyValueToGo now
+// sanitizes a non-finite DoubleValue to its string form
+// (sanitizeAttrFloat) at decode time (audit finding M5), so the attrs map
+// always marshals: this asserts the dedup key and series hash are the
+// normal computed ones (never the unhashable fallback), and that the
+// sanitized value is queryable as the literal string "NaN".
+func TestFromOTLPMetrics_NaNAttrIsSanitizedNotUnhashable(t *testing.T) {
 	t.Parallel()
 
 	data := &metricspb.MetricsData{
 		ResourceMetrics: []*metricspb.ResourceMetrics{{
 			ScopeMetrics: []*metricspb.ScopeMetrics{{
 				Metrics: []*metricspb.Metric{{
-					Name: "claude_code.unmarshalable_attrs",
+					Name: "claude_code.nan_attr",
 					Data: &metricspb.Metric_Gauge{Gauge: &metricspb.Gauge{
 						DataPoints: []*metricspb.NumberDataPoint{{
 							TimeUnixNano: uint64(fixedNow.UnixNano()),
@@ -303,8 +313,127 @@ func TestFromOTLPMetrics_UnmarshalableAttrs(t *testing.T) {
 	samples, rejections := n.FromOTLPMetrics(data)
 	require.Empty(t, rejections)
 	require.Len(t, samples, 1)
-	require.Equal(t, "metric:unhashable:claude_code.unmarshalable_attrs", samples[0].DedupKey)
+	require.NotEqual(t, "metric:unhashable:claude_code.nan_attr", samples[0].DedupKey)
 	require.NotEmpty(t, samples[0].SeriesHash)
+	require.Equal(t, "NaN", samples[0].Attrs["weird"])
+}
+
+// TestFromOTLPMetrics_UnsupportedTypeRejectionCountsAllDataPoints is audit
+// finding m14's required repro (your half of the split with ticket W7): an
+// ExponentialHistogram with 50 data points must produce one Rejection whose
+// Count is 50, not 1 — otel_metrics_test.go's own
+// TestFromOTLPMetrics_Rejections/unsupported_Summary_aggregation_type case
+// only exercises a single-point Summary, which cannot distinguish "count
+// the points" from "count the rejections".
+func TestFromOTLPMetrics_UnsupportedTypeRejectionCountsAllDataPoints(t *testing.T) {
+	t.Parallel()
+
+	const pointCount = 50
+	dataPoints := make([]*metricspb.ExponentialHistogramDataPoint, pointCount)
+	for i := range dataPoints {
+		dataPoints[i] = &metricspb.ExponentialHistogramDataPoint{TimeUnixNano: uint64(fixedNow.UnixNano())}
+	}
+
+	data := &metricspb.MetricsData{
+		ResourceMetrics: []*metricspb.ResourceMetrics{{
+			ScopeMetrics: []*metricspb.ScopeMetrics{{
+				Metrics: []*metricspb.Metric{{
+					Name: "claude_code.exp_histogram_test",
+					Data: &metricspb.Metric_ExponentialHistogram{ExponentialHistogram: &metricspb.ExponentialHistogram{
+						DataPoints: dataPoints,
+					}},
+				}},
+			}},
+		}},
+	}
+
+	n := newTestNormalizer()
+	samples, rejections := n.FromOTLPMetrics(data)
+	require.Empty(t, samples)
+	require.Len(t, rejections, 1)
+	require.Equal(t, pointCount, rejections[0].Count,
+		"an ExponentialHistogram's 50 points must not be reported as 1 rejected data point")
+}
+
+// TestFromOTLPMetrics_UnsupportedTypeRejectionZeroPointsWhenOneofEmpty
+// covers the other end of unsupportedMetricDataPointCount: a Metric whose
+// aggregation-type oneof is entirely unset carries no data points to
+// discard, so Count is legitimately 0 (Rejection.Count's documented
+// exception), not a fabricated 1.
+func TestFromOTLPMetrics_UnsupportedTypeRejectionZeroPointsWhenOneofEmpty(t *testing.T) {
+	t.Parallel()
+
+	data := &metricspb.MetricsData{
+		ResourceMetrics: []*metricspb.ResourceMetrics{{
+			ScopeMetrics: []*metricspb.ScopeMetrics{{
+				Metrics: []*metricspb.Metric{{Name: "claude_code.empty_oneof_test"}},
+			}},
+		}},
+	}
+
+	n := newTestNormalizer()
+	samples, rejections := n.FromOTLPMetrics(data)
+	require.Empty(t, samples)
+	require.Len(t, rejections, 1)
+	require.Equal(t, 0, rejections[0].Count)
+}
+
+// m12MetricWithResourceSessionID builds a single-gauge-datapoint
+// MetricsData, with resourceSessionID (if non-empty) as the *only*
+// session.id anywhere — never on the data point itself — so the test below
+// exercises exactly the m12 fallback path.
+func m12MetricWithResourceSessionID(resourceSessionID string) *metricspb.MetricsData {
+	var resourceAttrs []*commonpb.KeyValue
+	if resourceSessionID != "" {
+		resourceAttrs = []*commonpb.KeyValue{
+			{Key: "session.id", Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: resourceSessionID}}},
+		}
+	}
+	return &metricspb.MetricsData{
+		ResourceMetrics: []*metricspb.ResourceMetrics{{
+			Resource: &resourcepb.Resource{Attributes: resourceAttrs},
+			ScopeMetrics: []*metricspb.ScopeMetrics{{
+				Metrics: []*metricspb.Metric{{
+					Name: "claude_code.m12_test",
+					Data: &metricspb.Metric_Gauge{Gauge: &metricspb.Gauge{
+						DataPoints: []*metricspb.NumberDataPoint{{
+							TimeUnixNano: uint64(fixedNow.UnixNano()),
+							Attributes: []*commonpb.KeyValue{
+								{Key: "k", Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: "v"}}},
+							},
+							Value: &metricspb.NumberDataPoint_AsInt{AsInt: 1},
+						}},
+					}},
+				}},
+			}},
+		}},
+	}
+}
+
+// TestFromOTLPMetrics_FallsBackToResourceOnlySessionIDWithoutAffectingSeriesHash
+// is audit finding m12's metric-side test: a session.id present only on the
+// resource (otel_metrics.go:265-270's resourceAttrs, previously fed only to
+// resolveVendor) must still attribute the sample, and — the finding's
+// explicit caveat — doing so must never change series_hash, since
+// series_hash's inputs "must stay exactly the stored [data-point] attrs"
+// and a change there would silently re-key an existing metric series.
+func TestFromOTLPMetrics_FallsBackToResourceOnlySessionIDWithoutAffectingSeriesHash(t *testing.T) {
+	t.Parallel()
+	n := newTestNormalizer()
+
+	withResourceSession, rejA := n.FromOTLPMetrics(m12MetricWithResourceSessionID("sess-resource-only"))
+	require.Empty(t, rejA)
+	require.Len(t, withResourceSession, 1)
+	require.Equal(t, strp("sess-resource-only"), withResourceSession[0].SessionID,
+		"m12: a resource-only session.id must be attributed, not left NULL")
+
+	withoutResourceSession, rejB := n.FromOTLPMetrics(m12MetricWithResourceSessionID(""))
+	require.Empty(t, rejB)
+	require.Len(t, withoutResourceSession, 1)
+	require.Nil(t, withoutResourceSession[0].SessionID)
+
+	require.Equal(t, withoutResourceSession[0].SeriesHash, withResourceSession[0].SeriesHash,
+		"series_hash must be unaffected by a resource-only session.id fallback (m12's load-bearing caveat)")
 }
 
 // TestFromOTLPMetrics_Clamping asserts a badly-skewed metric point still

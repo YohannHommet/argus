@@ -98,6 +98,10 @@ func (n *HookNormalizer) FromHookPayload(body []byte) ([]model.Event, error) {
 		if err := json.Unmarshal(raw, &attrs); err != nil {
 			return nil, fmt.Errorf("normalize: decode hook payload element %d: %w", i, err)
 		}
+		// Audit finding M5: sanitize before this map is stored as either
+		// evt.Attrs or hashed into the dedup key (otlpattrs.go's
+		// sanitizeHookAttrs doc comment).
+		attrs = sanitizeHookAttrs(attrs)
 
 		evt, keep, err := n.buildHookEvent(attrs, nowFn())
 		if err != nil {

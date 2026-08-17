@@ -1,6 +1,7 @@
 package normalize
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -526,4 +527,46 @@ func TestFromHookPayload_NilNowDefensesToTimeNow(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, events, 1)
 	require.False(t, events[0].IngestedAt.IsZero())
+}
+
+// TestFromHookPayload_SanitizesNULByteInNestedAttr is M5's round-trip test
+// for the hook path: a NUL byte inside a JSON string is legal wire JSON --
+// it decodes to a legitimate, if unusual, Go string -- but the same NUL
+// byte would make the `attrs jsonb` cast fail once written (events.go,
+// SQLSTATE 22P05). The body is built with json.Marshal (rather than a
+// hand-written literal) so the NUL byte survives the JSON encode/decode
+// round trip exactly as a real hook payload's would, and is deliberately
+// nested inside `tool_input` to prove sanitizeHookAttrs walks the whole
+// decoded tree, not just its top level. A JSON payload cannot itself carry
+// genuinely invalid UTF-8 (encoding/json requires valid Unicode text, and
+// silently repairs an invalid \u escape on decode) -- that general case is
+// covered directly at the sanitizeAttrString unit level
+// (otlpattrs_test.go), which both this path and the OTLP path share.
+func TestFromHookPayload_SanitizesNULByteInNestedAttr(t *testing.T) {
+	t.Parallel()
+	n := newTestHookNormalizer(false)
+
+	body, err := json.Marshal(map[string]any{
+		"session_id":      "sess-nul",
+		"hook_event_name": "Notification",
+		"tool_input": map[string]any{
+			"note": "line one" + string(rune(0)) + "line two",
+		},
+	})
+	require.NoError(t, err)
+
+	events, err := n.FromHookPayload(body)
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+
+	toolInput, ok := events[0].Attrs["tool_input"].(map[string]any)
+	require.True(t, ok, "tool_input must still be present, just sanitized")
+	note, _ := toolInput["note"].(string)
+	require.NotContains(t, note, string(rune(0)))
+	require.Equal(t, "line one\ufffdline two", note)
+
+	// The dedup key hash (model.DedupKeyHook) must still succeed over the
+	// sanitized attrs, and produce a real, non-fallback key.
+	require.NotEmpty(t, events[0].DedupKey)
+	require.NotContains(t, events[0].DedupKey, "unhashable")
 }

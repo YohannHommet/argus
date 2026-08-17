@@ -1,12 +1,17 @@
 package normalize
 
 import (
+	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+	"unicode/utf8"
 
+	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
 	logspb "go.opentelemetry.io/proto/otlp/logs/v1"
+	resourcepb "go.opentelemetry.io/proto/otlp/resource/v1"
 	"google.golang.org/protobuf/encoding/protojson"
 
 	"github.com/stretchr/testify/require"
@@ -357,4 +362,153 @@ func TestFromOTLPLogs_NilInputIsSafe(t *testing.T) {
 	events, rejections := n.FromOTLPLogs(nil)
 	require.Empty(t, events)
 	require.Empty(t, rejections)
+}
+
+// otelLogRecordWithAttr builds a minimal one-record LogsData with
+// session.id set and one extra record attribute, for the M5 round-trip
+// tests below — a synthetic payload rather than a testdata/otel/*.json
+// fixture, since the whole point is to inject a value no real capture
+// happens to contain.
+func otelLogRecordWithAttr(sessionID string, extra *commonpb.KeyValue) *logspb.LogsData {
+	return &logspb.LogsData{
+		ResourceLogs: []*logspb.ResourceLogs{{
+			ScopeLogs: []*logspb.ScopeLogs{{
+				LogRecords: []*logspb.LogRecord{{
+					EventName: "test_event",
+					Attributes: []*commonpb.KeyValue{
+						{Key: "session.id", Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: sessionID}}},
+						extra,
+					},
+				}},
+			}},
+		}},
+	}
+}
+
+// TestFromOTLPLogs_SanitizesNULByteInStringAttr is M5's OTLP-log round-trip
+// test for a NUL byte: the record survives (no rejection), the poisoned
+// attribute is present but sanitized, and the dedup key is a normal
+// content hash, never the "unhashable" fallback (otel_logs.go's buildEvent,
+// M5 audit note).
+func TestFromOTLPLogs_SanitizesNULByteInStringAttr(t *testing.T) {
+	t.Parallel()
+	n := newTestNormalizer()
+
+	data := otelLogRecordWithAttr("sess-nul", &commonpb.KeyValue{
+		Key:   "tool.output",
+		Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: "line one\x00line two"}},
+	})
+	events, rejections := n.FromOTLPLogs(data)
+	require.Empty(t, rejections)
+	require.Len(t, events, 1)
+
+	out, ok := events[0].Attrs["tool.output"].(string)
+	require.True(t, ok)
+	require.NotContains(t, out, "\x00")
+	require.Equal(t, "line one�line two", out)
+	require.NotContains(t, events[0].DedupKey, "unhashable")
+}
+
+// TestFromOTLPLogs_SanitizesNaNDoubleAttr is M5's OTLP-log round-trip test
+// for a NaN OTLP DoubleValue attribute: same shape of assertion as the NUL
+// test above, but for the transient json.Marshal failure mode rather than
+// the permanent jsonb-cast one.
+func TestFromOTLPLogs_SanitizesNaNDoubleAttr(t *testing.T) {
+	t.Parallel()
+	n := newTestNormalizer()
+
+	data := otelLogRecordWithAttr("sess-nan", &commonpb.KeyValue{
+		Key:   "cost_usd_micros",
+		Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_DoubleValue{DoubleValue: math.NaN()}},
+	})
+	events, rejections := n.FromOTLPLogs(data)
+	require.Empty(t, rejections)
+	require.Len(t, events, 1)
+
+	require.Equal(t, "NaN", events[0].Attrs["cost_usd_micros"])
+	require.NotContains(t, events[0].DedupKey, "unhashable")
+
+	// The whole point: the sanitized attrs map must always be
+	// json.Marshal-able, since that is exactly what events.go does to
+	// build the jsonb column.
+	_, err := json.Marshal(events[0].Attrs)
+	require.NoError(t, err)
+}
+
+// TestFromOTLPLogs_SanitizesInvalidUTF8Attr covers M5's "cover invalid
+// UTF-8 generally, not just \x00" instruction: a lone, unpaired UTF-8
+// continuation byte (0x80) is not valid text but is a legal byte sequence
+// for an OTLP StringValue to carry (OTLP places no UTF-8 constraint on a
+// string attribute value).
+func TestFromOTLPLogs_SanitizesInvalidUTF8Attr(t *testing.T) {
+	t.Parallel()
+	n := newTestNormalizer()
+
+	data := otelLogRecordWithAttr("sess-badutf8", &commonpb.KeyValue{
+		Key:   "tool.output",
+		Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: "before\x80after"}},
+	})
+	events, rejections := n.FromOTLPLogs(data)
+	require.Empty(t, rejections)
+	require.Len(t, events, 1)
+
+	out, ok := events[0].Attrs["tool.output"].(string)
+	require.True(t, ok)
+	require.True(t, utf8.ValidString(out))
+	require.Equal(t, "before�after", out)
+}
+
+// TestFromOTLPLogs_FallsBackToResourceOnlySessionID is audit finding m12:
+// a record whose only session.id is on the resource (not scope/record) —
+// the live-capture-observed shape — must still be attributed to that
+// session rather than rejected. Because resource attrs are merged into
+// `merged` under the resource. prefix (otel_logs.go's resourceAttrPrefix)
+// before the session.id lookup runs, the fallback reads
+// merged["resource.session.id"].
+func TestFromOTLPLogs_FallsBackToResourceOnlySessionID(t *testing.T) {
+	t.Parallel()
+	n := newTestNormalizer()
+
+	data := &logspb.LogsData{
+		ResourceLogs: []*logspb.ResourceLogs{{
+			Resource: &resourcepb.Resource{
+				Attributes: []*commonpb.KeyValue{
+					{Key: "session.id", Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: "sess-resource-only"}}},
+				},
+			},
+			ScopeLogs: []*logspb.ScopeLogs{{
+				LogRecords: []*logspb.LogRecord{{
+					EventName: "test_event",
+				}},
+			}},
+		}},
+	}
+
+	events, rejections := n.FromOTLPLogs(data)
+	require.Empty(t, rejections, "a resource-only session.id must not be rejected")
+	require.Len(t, events, 1)
+	require.Equal(t, "sess-resource-only", events[0].SessionID)
+}
+
+// TestFromOTLPLogs_StillRejectsWhenNoSessionIDAnywhere is the
+// non-regression companion: a record with no session.id at all — not on
+// record, scope, or resource — must still be rejected exactly as before.
+func TestFromOTLPLogs_StillRejectsWhenNoSessionIDAnywhere(t *testing.T) {
+	t.Parallel()
+	n := newTestNormalizer()
+
+	data := &logspb.LogsData{
+		ResourceLogs: []*logspb.ResourceLogs{{
+			ScopeLogs: []*logspb.ScopeLogs{{
+				LogRecords: []*logspb.LogRecord{{
+					EventName: "test_event",
+				}},
+			}},
+		}},
+	}
+
+	events, rejections := n.FromOTLPLogs(data)
+	require.Empty(t, events)
+	require.Len(t, rejections, 1)
+	require.Equal(t, "missing session.id", rejections[0].Reason)
 }

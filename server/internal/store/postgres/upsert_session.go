@@ -226,7 +226,9 @@ func (a *sessionAgg) foldEvent(e model.Event) {
 		} else if v := attrStr(e.Attrs, "resource.service.version"); v != "" {
 			a.appVersion.offer(v, rankOTelLog, e.TS)
 		}
-		if v := attrStr(e.Attrs, "entrypoint"); v != "" {
+		if v := attrStr(e.Attrs, "app.entrypoint"); v != "" {
+			a.entrypoint.offer(v, rankOTelLog, e.TS)
+		} else if v := attrStr(e.Attrs, "resource.app.entrypoint"); v != "" {
 			a.entrypoint.offer(v, rankOTelLog, e.TS)
 		}
 		if v := attrStr(e.Attrs, "terminal.type"); v != "" {
