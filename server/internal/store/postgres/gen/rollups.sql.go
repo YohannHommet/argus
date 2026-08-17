@@ -13,7 +13,7 @@ import (
 
 const aggregateEventRollup = `-- name: AggregateEventRollup :many
 SELECT
-    date_trunc('hour', e.ts)::timestamptz                        AS bucket,
+    date_trunc('hour', e.ts, 'UTC')::timestamptz                 AS bucket,
     COALESCE(s.project, '')::text                                AS project,
     e.vendor::text                                                AS vendor,
     COALESCE(e.model, '')::text                                  AS model,
@@ -32,9 +32,16 @@ SELECT
     COALESCE(sum(e.cache_creation_tokens) FILTER (WHERE e.kind = 'llm.request' AND e.cost_usd IS NULL), 0)::bigint AS uncosted_cache_creation_tokens
 FROM events e
 LEFT JOIN sessions s ON s.id = e.session_id
-WHERE date_trunc('hour', e.ts) = ANY($1::timestamptz[])
+WHERE e.ts >= $1::timestamptz AND e.ts < $2::timestamptz
+  AND date_trunc('hour', e.ts, 'UTC') = ANY($3::timestamptz[])
 GROUP BY 1, 2, 3, 4
 `
+
+type AggregateEventRollupParams struct {
+	FromTs  pgtype.Timestamptz
+	ToTs    pgtype.Timestamptz
+	Buckets []pgtype.Timestamptz
+}
 
 type AggregateEventRollupRow struct {
 	Bucket                      pgtype.Timestamptz
@@ -91,8 +98,8 @@ type AggregateEventRollupRow struct {
 // pricing.Estimate turns them into cost_estimated_usd per group; a group
 // with no uncosted tokens gets estimated cost 0 without ever calling
 // Estimate.
-func (q *Queries) AggregateEventRollup(ctx context.Context, buckets []pgtype.Timestamptz) ([]AggregateEventRollupRow, error) {
-	rows, err := q.db.Query(ctx, aggregateEventRollup, buckets)
+func (q *Queries) AggregateEventRollup(ctx context.Context, arg AggregateEventRollupParams) ([]AggregateEventRollupRow, error) {
+	rows, err := q.db.Query(ctx, aggregateEventRollup, arg.FromTs, arg.ToTs, arg.Buckets)
 	if err != nil {
 		return nil, err
 	}
@@ -131,16 +138,23 @@ func (q *Queries) AggregateEventRollup(ctx context.Context, buckets []pgtype.Tim
 
 const aggregateToolCallRollup = `-- name: AggregateToolCallRollup :many
 SELECT
-    date_trunc('hour', tc.started_at)::timestamptz AS bucket,
+    date_trunc('hour', tc.started_at, 'UTC')::timestamptz AS bucket,
     COALESCE(s.project, '')::text                  AS project,
     COALESCE(s.vendor, 'unknown')::text             AS vendor,
     count(*)::int                                   AS tool_calls,
     count(*) FILTER (WHERE tc.decision = 'reject')::int AS tool_rejects
 FROM tool_calls tc
 LEFT JOIN sessions s ON s.id = tc.session_id
-WHERE date_trunc('hour', tc.started_at) = ANY($1::timestamptz[])
+WHERE tc.started_at >= $1::timestamptz AND tc.started_at < $2::timestamptz
+  AND date_trunc('hour', tc.started_at, 'UTC') = ANY($3::timestamptz[])
 GROUP BY 1, 2, 3
 `
+
+type AggregateToolCallRollupParams struct {
+	FromTs  pgtype.Timestamptz
+	ToTs    pgtype.Timestamptz
+	Buckets []pgtype.Timestamptz
+}
 
 type AggregateToolCallRollupRow struct {
 	Bucket      pgtype.Timestamptz
@@ -188,8 +202,8 @@ type AggregateToolCallRollupRow struct {
 // rather than issuing a second INSERT, since both aggregates can produce a
 // row for the very same primary key and rollup_hourly's delete-then-insert
 // recompute has no ON CONFLICT to merge two separate inserts with.
-func (q *Queries) AggregateToolCallRollup(ctx context.Context, buckets []pgtype.Timestamptz) ([]AggregateToolCallRollupRow, error) {
-	rows, err := q.db.Query(ctx, aggregateToolCallRollup, buckets)
+func (q *Queries) AggregateToolCallRollup(ctx context.Context, arg AggregateToolCallRollupParams) ([]AggregateToolCallRollupRow, error) {
+	rows, err := q.db.Query(ctx, aggregateToolCallRollup, arg.FromTs, arg.ToTs, arg.Buckets)
 	if err != nil {
 		return nil, err
 	}
@@ -310,9 +324,16 @@ SELECT
     COALESCE(ms.attrs->>'model', '')::text     AS attr_model
 FROM metric_samples ms
 LEFT JOIN sessions s ON s.id = ms.session_id
-WHERE date_trunc('hour', ms.ts) = ANY($1::timestamptz[])
+WHERE ms.ts >= $1::timestamptz AND ms.ts < $2::timestamptz
+  AND date_trunc('hour', ms.ts, 'UTC') = ANY($3::timestamptz[])
 ORDER BY ms.series_hash, ms.ts
 `
+
+type FetchMetricRowsForRollupParams struct {
+	FromTs  pgtype.Timestamptz
+	ToTs    pgtype.Timestamptz
+	Buckets []pgtype.Timestamptz
+}
 
 type FetchMetricRowsForRollupRow struct {
 	Ts           pgtype.Timestamptz
@@ -337,8 +358,8 @@ type FetchMetricRowsForRollupRow struct {
 // (series_hash, ts) so the caller can walk each series in chronological
 // order in one pass for the cumulative-diffing step (SPEC §1.8's
 // metric_series_state).
-func (q *Queries) FetchMetricRowsForRollup(ctx context.Context, buckets []pgtype.Timestamptz) ([]FetchMetricRowsForRollupRow, error) {
-	rows, err := q.db.Query(ctx, fetchMetricRowsForRollup, buckets)
+func (q *Queries) FetchMetricRowsForRollup(ctx context.Context, arg FetchMetricRowsForRollupParams) ([]FetchMetricRowsForRollupRow, error) {
+	rows, err := q.db.Query(ctx, fetchMetricRowsForRollup, arg.FromTs, arg.ToTs, arg.Buckets)
 	if err != nil {
 		return nil, err
 	}
@@ -412,7 +433,7 @@ INSERT INTO rollup_daily (
     edit_decisions_accept, edit_decisions_reject
 )
 SELECT
-    date_trunc('day', bucket), project, vendor, model, source,
+    date_trunc('day', bucket, 'UTC'), project, vendor, model, source,
     sum(sessions_started)::int, sum(turns)::int, sum(api_requests)::int, sum(api_errors)::int,
     sum(tool_calls)::int, sum(tool_rejects)::int,
     sum(input_tokens)::bigint, sum(output_tokens)::bigint, sum(cache_read_tokens)::bigint, sum(cache_creation_tokens)::bigint,
@@ -421,7 +442,7 @@ SELECT
     sum(commits)::int, sum(pull_requests)::int,
     sum(edit_decisions_accept)::int, sum(edit_decisions_reject)::int
 FROM rollup_hourly
-WHERE date_trunc('day', bucket) = ANY($1::timestamptz[]) AND source = $2::text
+WHERE date_trunc('day', bucket, 'UTC') = ANY($1::timestamptz[]) AND source = $2::text
 GROUP BY 1, 2, 3, 4, 5
 `
 
@@ -452,6 +473,36 @@ SELECT pg_try_advisory_xact_lock($1::bigint)
 // per-row loop that would benefit from batching the way WriteBatch's
 // per-event projections do (write.go's package doc), so there is nothing
 // sqlc can't express here the way there was for that file.
+//
+// M8 fix (pre-Phase-4 audit wave, ticket W3): every date_trunc(...) call in
+// this file pins its zone explicitly to 'UTC' via the third argument. Go
+// builds every bucket key in hard UTC (dirty.go's hourBucket,
+// rollups.go's daysOf, read_analytics.go's dayBucket); date_trunc's
+// two-argument form evaluates in the connection's TimeZone GUC instead, so
+// without the explicit zone a non-UTC session (pool.go's NewPool now also
+// pins TimeZone=UTC as belt-and-braces) truncates to the wrong instant —
+// silently for a whole-hour-offset zone at the 'day' grain (every
+// InsertRollupDailyFromHourly/DeleteRollupDaily WHERE stops matching any
+// Go-built day key, so rollup_daily goes permanently empty) and even at the
+// 'hour' grain for a half-hour-offset zone (Asia/Kolkata's UTC+5:30 shifts
+// every hour bucket by 30 minutes). See rollups_test.go's
+// TestRunRollups_NonUTCSessionTimeZone{Paris,Kolkata} for the reproduction.
+//
+// M9 fix (same wave): AggregateEventRollup, AggregateToolCallRollup and
+// FetchMetricRowsForRollup each gained a plain `ts >= from_ts AND ts <
+// to_ts` range predicate over the claimed bucket set's own timestamp column
+// (events.ts / tool_calls.started_at / metric_samples.ts), computed by the
+// Go caller as [min(buckets), max(buckets)+1h). Unlike the pre-existing
+// `date_trunc(...) = ANY(buckets)` filter, this predicate is sargable
+// against the RANGE-partitioned tables' own partition key, so the planner
+// can prune every partition outside the claimed window instead of Append-
+// scanning all of retention on every 60s tick (verified via EXPLAIN,
+// explain_test.go's TestAggregateEventRollup_PrunesPartitions). The range
+// is additive, not a replacement: the exact date_trunc equality still does
+// all the real bucket selection, so a non-contiguous claimed set (e.g.
+// hours 1 and 5 dirty, 2-4 clean) still excludes 2-4 correctly — the range
+// predicate only widens or narrows which partitions get opened, never which
+// rows within them match.
 // pg_try_advisory_xact_lock (NOT the blocking pg_advisory_lock migrate.go
 // uses): single-flights the whole job. Transaction-scoped, so it releases
 // itself automatically on COMMIT or ROLLBACK — no matching unlock call

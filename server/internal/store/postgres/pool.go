@@ -61,6 +61,61 @@ func WithRollupSessionRemarkMax(n int) Option {
 	}
 }
 
+// poolLockTimeout is the SPEC-silent M6 audit fix (pre-Phase-4 audit wave,
+// ticket W3): every connection in the pool gets a session-level
+// `lock_timeout`, so a statement blocked waiting to acquire a lock — most
+// concretely, an ingest write or an analytics read queued behind
+// RetentionJob's in-process `DROP TABLE <events partition>`, which takes
+// ACCESS EXCLUSIVE on the partitioned parent and so blocks (and is blocked
+// by) any other statement touching it — errors out instead of parking the
+// connection, and the caller's goroutine, forever.
+//
+// 15s is chosen against how this one pool is shared across four very
+// different workloads (ingest writes, long analytics reads, the 60s-tick
+// rollup job, and retention's DROP TABLE):
+//   - it is comfortably longer than any of this codebase's real lock waits
+//     under normal load — WriteBatch's transactions are short (SPEC §1.6's
+//     fixed lock order exists precisely so they don't hold locks across
+//     round trips), and the rollup job's one transaction (rollups.go) holds
+//     row/table locks only as long as its own statements take, not as long
+//     as an operator's ad-hoc long-running read;
+//   - it is short enough that an ingest worker or the rollup job's single-
+//     flighted pass fails fast (surfacing as a retryable error, see below)
+//     rather than exhausting ARGUS_INGEST_RETRY_TRANSIENT's whole backoff
+//     schedule sitting on one blocked statement;
+//   - it deliberately does NOT starve RetentionJob's DROP TABLE: that
+//     statement is the one most likely to queue behind a long-lived
+//     analytics read holding an ACCESS SHARE lock, and 15s gives such a
+//     read (SPEC's analytics queries are all rollup_hourly/rollup_daily
+//     scans bounded to a requested window, never full-table) time to finish
+//     normally before retention's own attempt is aborted and retried on its
+//     next daily run.
+//
+// A single global value cannot be exactly right for all four call sites
+// (retention's DROP TABLE arguably wants to wait longer than an ingest
+// write should ever be asked to), but pgxpool has one shared RuntimeParams
+// set for every connection it opens, and there is no per-call-site
+// override point in this codebase today (WriteBatch/RunRollups/retention.go
+// all pull connections from the same s.pool). A tighter per-statement bound
+// is possible via `SET LOCAL lock_timeout = ...` at the top of the specific
+// transactions that want one, but that is a retention.go/rollups.go/write.go
+// change this ticket's file ownership does not extend to — reported to the
+// fix-wave lead as the shape a follow-up should take if 15s proves wrong in
+// practice for retention specifically.
+//
+// SQLSTATE 55P03 (lock_not_available) is what a lock_timeout expiry raises.
+// internal/ingest/retry.go's ClassifyError has no case naming class 55; it
+// falls through to the ClassTransient default (the same path 08xxx/57P01
+// take), which is the right outcome — a lock wait timing out is exactly the
+// kind of transient contention SPEC §3.6 wants retried with backoff, not
+// dropped as ClassPermanent (23xxx/42xxx, "the same bytes fail identically
+// every time" — an expired lock wait is not that) nor treated as
+// ClassConflict (40001/40P01 are Postgres's own deadlock/serialization
+// detectors, a narrower and differently-caused signal). retry.go is not in
+// this ticket's owned files, so no change was made there; this is reported
+// to the fix-wave lead as confirmation, not a defect.
+const poolLockTimeout = "15s"
+
 // NewPool builds a pgxpool.Pool from a database URL, applying the pool
 // sizing SPEC §3.2/§3.7 call for: a bounded max-connection count, an
 // application_name so connections are identifiable in pg_stat_activity, and
@@ -83,6 +138,17 @@ func NewPool(ctx context.Context, databaseURL string, maxConns int) (*pgxpool.Po
 		cfg.ConnConfig.RuntimeParams = map[string]string{}
 	}
 	cfg.ConnConfig.RuntimeParams["application_name"] = applicationName
+	// M8 fix (pre-Phase-4 audit wave, ticket W3): pin every connection's
+	// session TimeZone to UTC, overriding whatever the database URL or
+	// server default requests. Every rollup bucket key Go computes
+	// (dirty.go's hourBucket, rollups.go's daysOf, read_analytics.go's
+	// dayBucket) is hard UTC; rollups.sql's date_trunc(...) calls are now
+	// explicit about 'UTC' too (defence in depth), but this is the pin that
+	// makes every OTHER statement this pool ever issues — including ones a
+	// future query adds without remembering the explicit-zone rule — safe
+	// by construction rather than by each query author's discipline.
+	cfg.ConnConfig.RuntimeParams["TimeZone"] = "UTC"
+	cfg.ConnConfig.RuntimeParams["lock_timeout"] = poolLockTimeout
 
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
