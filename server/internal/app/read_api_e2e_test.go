@@ -42,6 +42,14 @@ func TestServe_ReadAPIRoutesAreMounted(t *testing.T) {
 	// registered on the default registerer twice, which panics.
 	a, baseURL, pool := newE2EApp(t, WithRegisterer(prometheus.NewRegistry()))
 
+	// app.go's New imports the embedded model price table on every startup
+	// (the fix for the sibling defect: an empty model_prices table leaves
+	// cost_estimated_usd/estimated_share silently 0 forever). Nothing else
+	// in this suite seeds model_prices or asserts on it, so removing or
+	// reordering that startup import would leave the whole suite green.
+	require.Positive(t, scalarInt(t, pool, `SELECT count(*) FROM model_prices`),
+		"App.New must import the embedded price table on startup, or cost_estimated_usd/estimated_share silently stay 0 (SPEC)")
+
 	// A session row so the session-scoped routes have a real id to address:
 	// otherwise a legitimate "no such session" 404 is indistinguishable from
 	// the unmounted-route 404 this test exists to catch.

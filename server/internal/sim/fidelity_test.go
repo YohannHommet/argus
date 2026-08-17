@@ -148,6 +148,24 @@ func TestFidelity_ToolUseIDFlagsRoundTrip(t *testing.T) {
 		}
 	}
 	require.False(t, decisionHasToolUseID, "--tool-use-id-in-decision=false should omit tool_use_id from every tool_decision record")
+
+	// The default (ToolUseIDInDecision: true, config.go's DefaultConfig) is
+	// never otherwise exercised by this test: rWith only turns on the hooks
+	// flag, and rWithoutDecision only turns the decision flag off. Without
+	// this session, a regression where tool_decision never carries
+	// tool_use_id at all would still pass both assertions above, since both
+	// only look for its documented off states.
+	rDefault := generateSession(DefaultConfig(), clock, 0, 0, "argus")
+	defaultDecisionHasToolUseID := false
+	for _, e := range rDefault.Logs {
+		if eventNameOf(e.Rec) != "tool_decision" {
+			continue
+		}
+		if attrString(e.Rec, "tool_use_id") != "" {
+			defaultDecisionHasToolUseID = true
+		}
+	}
+	require.True(t, defaultDecisionHasToolUseID, "the default ToolUseIDInDecision=true should include tool_use_id on at least one tool_decision record")
 }
 
 // eventNameOf/attrString/bodyOf are small OTLP accessor helpers local to

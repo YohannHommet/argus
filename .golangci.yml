@@ -77,6 +77,38 @@ linters:
               desc: "internal/store must not depend on internal/httpapi (SPEC §3.1: dependency direction is strictly inward)"
             - pkg: github.com/YohannHommet/argus/server/internal/query
               desc: "internal/store must not depend on internal/query (SPEC §3.1: dependency direction is strictly inward)"
+        # httpapi never imports the concrete postgres impl or ingest directly
+        # (SPEC §3.1: httpapi -> query -> store). internal/store itself (the
+        # seam: filter/enum types shared by query and httpapi, e.g.
+        # store.EventFilter/store.AnalyticsFilter/store.OrderAsc) is
+        # deliberately NOT denied here — httpapi already imports it for
+        # exactly that vocabulary (analytics.go, events.go, meta.go), the
+        # same shared-seam pattern D-22 ratified for internal/query.
+        httpapi:
+          list-mode: original
+          files:
+            - "**/internal/httpapi/**"
+          deny:
+            - pkg: github.com/YohannHommet/argus/server/internal/store/postgres
+              desc: "internal/httpapi must not depend on the concrete internal/store/postgres impl (SPEC §3.1: httpapi -> query -> store; only internal/store's seam types are shared)"
+            - pkg: github.com/YohannHommet/argus/server/internal/ingest
+              desc: "internal/httpapi must not depend on internal/ingest (SPEC §3.1: dependency direction is strictly inward)"
+        # query never imports httpapi, ingest, or the concrete postgres impl
+        # (SPEC §3.1: query sits between store and httpapi). internal/store
+        # itself is deliberately NOT denied here: D-22 moved the not-found
+        # sentinels onto internal/store precisely so query could depend on
+        # the seam without reaching into postgres.
+        query:
+          list-mode: original
+          files:
+            - "**/internal/query/**"
+          deny:
+            - pkg: github.com/YohannHommet/argus/server/internal/httpapi
+              desc: "internal/query must not depend on internal/httpapi (SPEC §3.1: dependency direction is strictly inward)"
+            - pkg: github.com/YohannHommet/argus/server/internal/ingest
+              desc: "internal/query must not depend on internal/ingest (SPEC §3.1: dependency direction is strictly inward)"
+            - pkg: github.com/YohannHommet/argus/server/internal/store/postgres
+              desc: "internal/query must not depend on the concrete internal/store/postgres impl (SPEC §3.1, D-22: query reaches storage only through internal/store's seam, never the postgres implementation)"
         # ingest depends only on normalize, store and stream (SPEC §3.1).
         ingest:
           list-mode: original
