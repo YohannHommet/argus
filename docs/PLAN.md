@@ -693,10 +693,11 @@ Files: `server/internal/store/postgres/{retention.go,retention_test.go,rebuild.g
 explain_test.go}`, `server/internal/app/jobs.go`, `server/cmd/argusd/main.go`.
 AC: integration tests — with a fabricated 6-month-old partition, `--dry-run` lists it and changes
 nothing, the real run drops it, and `rollup_hourly` plus `sessions` rows for that period survive;
-**an event with `ts` older than the retention cutoff is rejected at write with
-`argus_ingest_too_old_total` incremented** (review M6 — restated from the old, unreachable
-"partition was dropped" phrasing, and reachable now that the clamp is retention-tied and no
-`DEFAULT` partition exists); `PruneDedup` removes rows older than `ARGUS_DEDUP_WINDOW` in bounded
+**an in-window event whose covering partition is absent is rejected at write with
+`argus_ingest_too_old_total` incremented** (review M6, D-19 — an event older than the retention
+cutoff is clamped to `now` and flagged `clock_skewed` before the write path sees it, not counted
+`too_old`; the reachable case is a genuinely missing partition — partition manager behind, or an
+operator dropped one); `PruneDedup` removes rows older than `ARGUS_DEDUP_WINDOW` in bounded
 batches and leaves newer ones; **`RebuildProjections` after truncating the four projection tables
 reproduces identical rows compared by a full-row checksum including `tool_calls.id`** — possible
 because those ids are deterministic UUIDv5 (review m6); the `EXPLAIN` guard fails if any analytics

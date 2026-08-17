@@ -41,7 +41,19 @@ func (h *Handler) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeExportResult(w, format, "rejectedDataPoints", int64(len(rejections)), metricRejectionSummary(rejections))
+	// Sum Rejection.Count, not len(rejections) (audit finding m14): a single
+	// Rejection can stand for an entire Metric's worth of discarded data
+	// points — FromOTLPMetrics emits one value for an unsupported
+	// aggregation type regardless of how many points it carried — so
+	// counting rejections reported an ExponentialHistogram with 50 points as
+	// 1 rejected point. That under-reports exactly the number an operator
+	// uses to notice a whole metric family is being thrown away.
+	var rejectedDataPoints int64
+	for _, rej := range rejections {
+		rejectedDataPoints += int64(rej.Count)
+	}
+
+	writeExportResult(w, format, "rejectedDataPoints", rejectedDataPoints, metricRejectionSummary(rejections))
 }
 
 // metricRejectionSummary is rejectionSummary's counterpart for

@@ -2,6 +2,7 @@ package postgres_test
 
 import (
 	"context"
+	"net/url"
 	"sync"
 	"testing"
 
@@ -11,6 +12,34 @@ import (
 	"github.com/YohannHommet/argus/server/internal/store/postgres"
 	storetesting "github.com/YohannHommet/argus/server/internal/store/testing"
 )
+
+// --- M6/M8 (pre-Phase-4 audit wave, ticket W3): NewPool must pin every
+// connection's TimeZone to UTC and set a lock_timeout, regardless of what
+// the database URL itself requests. -----------------------------------
+
+// TestNewPool_PinsUTCTimeZoneAndLockTimeoutRegardlessOfDSN is the pool-level
+// unit test for both fixes: it opens a pool via the real postgres.NewPool
+// against a DSN that explicitly asks for a different TimeZone and a
+// disabled lock_timeout, then asserts the live session GUCs show NewPool's
+// values, not the DSN's. rollups_test.go's
+// TestRunRollups_NonUTCSessionTimeZone_{Kolkata,Paris} additionally prove
+// this pin is what makes the real rollup passes correct end-to-end; this
+// test isolates the pool-construction behaviour on its own.
+func TestNewPool_PinsUTCTimeZoneAndLockTimeoutRegardlessOfDSN(t *testing.T) {
+	ctx := context.Background()
+	dsn := storetesting.NewDSN(t) + "&TimeZone=" + url.QueryEscape("America/New_York") + "&lock_timeout=0"
+
+	pool, err := postgres.NewPool(ctx, dsn, 5)
+	require.NoError(t, err)
+	t.Cleanup(pool.Close)
+
+	var tz, lockTimeout string
+	require.NoError(t, pool.QueryRow(ctx, `SHOW TimeZone`).Scan(&tz))
+	require.NoError(t, pool.QueryRow(ctx, `SHOW lock_timeout`).Scan(&lockTimeout))
+
+	require.Equal(t, "UTC", tz, "NewPool must pin TimeZone to UTC even when the DSN requests a different zone")
+	require.Equal(t, "15s", lockTimeout, "NewPool must set lock_timeout even when the DSN explicitly disables it")
+}
 
 // wantSessionsIndexes are the eight indexes SPEC §2.1 names on sessions.
 var wantSessionsIndexes = []string{

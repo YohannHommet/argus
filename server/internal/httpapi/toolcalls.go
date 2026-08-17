@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -97,18 +98,18 @@ func mapToolCalls(calls []model.ToolCall) []toolCall {
 // mountToolCallRoutes attaches both tool-call list routes: the
 // session-scoped drill-down and the cross-session one, sharing
 // query.ListToolCalls via store.ToolCallFilter.SessionID.
-func mountToolCallRoutes(r chi.Router, reader Reader) {
-	r.Get("/sessions/{id}/tool-calls", listSessionToolCallsHandler(reader))
-	r.Get("/tool-calls", listToolCallsHandler(reader))
+func mountToolCallRoutes(r chi.Router, reader Reader, logger *slog.Logger) {
+	r.Get("/sessions/{id}/tool-calls", listSessionToolCallsHandler(reader, logger))
+	r.Get("/tool-calls", listToolCallsHandler(reader, logger))
 }
 
 // listSessionToolCallsHandler implements GET
 // /api/v1/sessions/{id}/tool-calls (SPEC §4.2).
-func listSessionToolCallsHandler(reader Reader) http.HandlerFunc {
+func listSessionToolCallsHandler(reader Reader, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
 		if _, err := query.GetSession(r.Context(), reader, id); err != nil {
-			writeSessionLookupError(w, r, err)
+			writeSessionLookupError(w, r, logger, err)
 			return
 		}
 
@@ -126,7 +127,7 @@ func listSessionToolCallsHandler(reader Reader) http.HandlerFunc {
 
 		res, err := query.ListToolCalls(r.Context(), reader, f, page)
 		if err != nil {
-			writeProblem(w, r, http.StatusInternalServerError, "internal", err.Error())
+			writeListStoreError(w, r, logger, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, toolCallsListResponse{Data: mapToolCalls(res.ToolCalls), Page: pageInfoFrom(res.Page)})
@@ -135,7 +136,7 @@ func listSessionToolCallsHandler(reader Reader) http.HandlerFunc {
 
 // listToolCallsHandler implements GET /api/v1/tool-calls (SPEC §4.2): the
 // cross-session decision-provenance drill-down.
-func listToolCallsHandler(reader Reader) http.HandlerFunc {
+func listToolCallsHandler(reader Reader, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		page, err := bindLimitAndCursor(r, toolCallSortKey)
 		if err != nil {
@@ -158,7 +159,7 @@ func listToolCallsHandler(reader Reader) http.HandlerFunc {
 
 		res, err := query.ListToolCalls(r.Context(), reader, f, page)
 		if err != nil {
-			writeProblem(w, r, http.StatusInternalServerError, "internal", err.Error())
+			writeListStoreError(w, r, logger, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, toolCallsListResponse{Data: mapToolCalls(res.ToolCalls), Page: pageInfoFrom(res.Page)})

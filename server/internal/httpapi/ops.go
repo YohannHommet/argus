@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"sync/atomic"
 )
@@ -56,7 +57,7 @@ func healthzHandler(w http.ResponseWriter, _ *http.Request) {
 // existing test contract, and a nil QueueSaturationChecker never fails
 // readiness on that ground — both are the P1-05 default until internal/app
 // wires the real store and pipeline in.
-func readyzHandler(hc HealthChecker, mc MigrationsChecker, qc QueueSaturationChecker, rs *ReadyState) http.HandlerFunc {
+func readyzHandler(hc HealthChecker, mc MigrationsChecker, qc QueueSaturationChecker, rs *ReadyState, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !rs.Ready() {
 			writeProblem(w, r, http.StatusServiceUnavailable, "not-ready", "server is shutting down")
@@ -64,14 +65,22 @@ func readyzHandler(hc HealthChecker, mc MigrationsChecker, qc QueueSaturationChe
 		}
 		if hc != nil {
 			if err := hc.Health(r.Context()); err != nil {
-				writeProblem(w, r, http.StatusServiceUnavailable, "not-ready", "database health check failed: "+err.Error())
+				// m2 audit finding: pool.Ping's own error text can be pgx's
+				// `failed to connect to `user=%s database=%s`:` — and
+				// /readyz sits outside RequireAPIToken (SPEC §3.5's read
+				// API is unauthenticated by default), so that text must
+				// never reach the client. Logged instead (logStoreError),
+				// tagged with the request id this response also carries.
+				logStoreError(r, logger, err)
+				writeProblem(w, r, http.StatusServiceUnavailable, "not-ready", "database health check failed")
 				return
 			}
 		}
 		if mc != nil {
 			current, err := mc.MigrationsCurrent(r.Context())
 			if err != nil {
-				writeProblem(w, r, http.StatusServiceUnavailable, "not-ready", "migrations check failed: "+err.Error())
+				logStoreError(r, logger, err)
+				writeProblem(w, r, http.StatusServiceUnavailable, "not-ready", "migrations check failed")
 				return
 			}
 			if !current {

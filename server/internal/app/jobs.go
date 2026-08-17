@@ -109,6 +109,86 @@ func (j *PartitionJob) tick(ctx context.Context) {
 	}
 }
 
+// SweepJob is the SPEC §2.4/§3.8 "Abandoned-session sweep": on every tick it
+// calls store.SweepAbandoned(ctx, idle) (postgres/pool.go), which moves every
+// session whose status is active|unknown, has no ended_at, and has been idle
+// (no new event) longer than idle to status='abandoned', via the partial
+// sessions_sweep_idx (SPEC §2.1, §1.7). Before this job existed,
+// SweepAbandoned had zero non-test callers, so 'abandoned' was a status a
+// session could reach from nothing (SPEC §1.7's terminal states) but never
+// arrived at in a running server.
+//
+// Shaped identically to PartitionJob/RollupJob (ticker + context,
+// single-flighted by a held sync.Mutex so an overlapping tick is skipped
+// rather than queued): SweepAbandoned's UPDATE is naturally idempotent — a
+// session a previous tick already moved to 'abandoned' no longer matches the
+// WHERE status IN ('active','unknown') clause, so a skipped tick just means
+// the next one (ARGUS_SWEEP_INTERVAL later) catches whatever went idle since.
+// Errors are logged, never fatal, for the same reason as the other jobs: a
+// transient DB blip should not crash the process.
+type SweepJob struct {
+	store    *postgres.Store
+	logger   *slog.Logger
+	interval time.Duration
+	idle     time.Duration
+	now      func() time.Time
+
+	running sync.Mutex // held for the duration of a tick; TryLock single-flights
+}
+
+// NewSweepJob constructs a SweepJob. store and logger must be non-nil.
+// interval is ARGUS_SWEEP_INTERVAL and idle is ARGUS_SESSION_IDLE_TIMEOUT
+// (config.Config), passed as plain values rather than *config.Config for the
+// same config-free-at-the-leaf reason NewPartitionJob's doc comment gives.
+func NewSweepJob(store *postgres.Store, logger *slog.Logger, interval, idle time.Duration) *SweepJob {
+	return &SweepJob{
+		store:    store,
+		logger:   logger,
+		interval: interval,
+		idle:     idle,
+		now:      time.Now,
+	}
+}
+
+// Run ticks the job on j.interval until ctx is cancelled, running one tick
+// immediately on entry — same rationale as PartitionJob.Run/RollupJob.Run: a
+// long-lived process should not wait a full interval before its first sweep.
+func (j *SweepJob) Run(ctx context.Context) {
+	j.tick(ctx)
+
+	ticker := time.NewTicker(j.interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			j.tick(ctx)
+		}
+	}
+}
+
+// tick runs one SweepAbandoned pass, single-flighted in-process against
+// overlapping ticks (see the SweepJob doc comment). A failure is logged,
+// never fatal — the next tick (j.interval later) retries automatically.
+func (j *SweepJob) tick(ctx context.Context) {
+	if !j.running.TryLock() {
+		j.logger.Warn("sweep job: previous tick still running, skipping")
+		return
+	}
+	defer j.running.Unlock()
+
+	n, err := j.store.SweepAbandoned(ctx, j.idle)
+	if err != nil {
+		j.logger.Error("sweep job: sweep abandoned failed", "error", err)
+		return
+	}
+	if n > 0 {
+		j.logger.Info("sweep job: marked sessions abandoned", "count", n)
+	}
+}
+
 // rollupMetricsNamespace/rollupMetricsSubsystem give every rollup-job
 // metric the "argus_rollup_*" prefix, matching internal/ingest/metrics.go's
 // "argus_ingest_*" convention for the pipeline's own self-observability
@@ -282,8 +362,12 @@ func (j *RollupJob) tick(ctx context.Context) {
 
 // RetentionJob is the SPEC §2.4 "Retention job": daily at ARGUS_RETENTION_HOUR
 // (local time), it drops fully-expired events/metric_samples partitions
-// (store.ApplyRetention, coarse — SPEC §2.2) and prunes ingest_dedup rows
-// older than ARGUS_DEDUP_WINDOW (store.PruneDedup), in that order. Unlike
+// (store.ApplyRetention, coarse — SPEC §2.2), prunes ingest_dedup rows older
+// than ARGUS_DEDUP_WINDOW (store.PruneDedup), and — only when
+// ARGUS_RETENTION_SESSION_DAYS > 0 (default 0 = never, m11 fix) — deletes
+// sessions whose last_event_at is older than that horizon
+// (store.DeleteExpiredSessions, cascading to turns/tool_calls/subagents),
+// in that order. Unlike
 // PartitionJob/RollupJob it does not tick on a fixed interval: Run computes
 // the next occurrence of the configured local hour and sleeps until then,
 // so "daily at 04:00" is honoured exactly rather than approximated by a
@@ -295,29 +379,33 @@ func (j *RollupJob) tick(ctx context.Context) {
 // default and a boundary-partition batched DELETE is heavier than the
 // coarse drop this job runs unattended every day.
 type RetentionJob struct {
-	store       *postgres.Store
-	logger      *slog.Logger
-	retention   time.Duration // ARGUS_RETENTION_RAW_DAYS as a duration
-	dedupWindow time.Duration // ARGUS_DEDUP_WINDOW
-	hour        int           // ARGUS_RETENTION_HOUR, local wall-clock hour
-	now         func() time.Time
+	store            *postgres.Store
+	logger           *slog.Logger
+	retention        time.Duration // ARGUS_RETENTION_RAW_DAYS as a duration
+	dedupWindow      time.Duration // ARGUS_DEDUP_WINDOW
+	sessionRetention time.Duration // ARGUS_RETENTION_SESSION_DAYS as a duration; 0 = never (m11 fix)
+	hour             int           // ARGUS_RETENTION_HOUR, local wall-clock hour
+	now              func() time.Time
 
 	running sync.Mutex // held for the duration of a tick; TryLock single-flights
 }
 
 // NewRetentionJob constructs a RetentionJob. store and logger must be
 // non-nil. retentionRawDays is ARGUS_RETENTION_RAW_DAYS, dedupWindow is
-// ARGUS_DEDUP_WINDOW, and hour is ARGUS_RETENTION_HOUR (config.Config),
-// passed as plain values rather than *config.Config for the same
-// config-free-at-the-leaf reason NewPartitionJob's doc comment gives.
-func NewRetentionJob(store *postgres.Store, logger *slog.Logger, retentionRawDays int, dedupWindow time.Duration, hour int) *RetentionJob {
+// ARGUS_DEDUP_WINDOW, sessionRetentionDays is ARGUS_RETENTION_SESSION_DAYS
+// (0 = never delete sessions, SPEC §2.4/§3.7's documented meaning), and hour
+// is ARGUS_RETENTION_HOUR (config.Config), passed as plain values rather
+// than *config.Config for the same config-free-at-the-leaf reason
+// NewPartitionJob's doc comment gives.
+func NewRetentionJob(store *postgres.Store, logger *slog.Logger, retentionRawDays int, dedupWindow time.Duration, sessionRetentionDays, hour int) *RetentionJob {
 	return &RetentionJob{
-		store:       store,
-		logger:      logger,
-		retention:   time.Duration(retentionRawDays) * 24 * time.Hour,
-		dedupWindow: dedupWindow,
-		hour:        hour,
-		now:         time.Now,
+		store:            store,
+		logger:           logger,
+		retention:        time.Duration(retentionRawDays) * 24 * time.Hour,
+		dedupWindow:      dedupWindow,
+		sessionRetention: time.Duration(sessionRetentionDays) * 24 * time.Hour,
+		hour:             hour,
+		now:              time.Now,
 	}
 }
 
@@ -383,5 +471,20 @@ func (j *RetentionJob) tick(ctx context.Context) {
 		j.logger.Error("retention job: prune dedup failed", "error", err)
 	} else if pruned > 0 {
 		j.logger.Info("retention job: pruned ingest_dedup rows", "count", pruned)
+	}
+
+	// ARGUS_RETENTION_SESSION_DAYS defaults to 0, meaning "never" (SPEC
+	// §3.7) — sessionRetention is the zero duration in that case, and this
+	// step is skipped entirely rather than calling DeleteExpiredSessions
+	// with a cutoff of "now", which would delete every session immediately
+	// (m11 fix: this key used to be parsed, validated, and documented but
+	// read by no code at all).
+	if j.sessionRetention > 0 {
+		deleted, err := j.store.DeleteExpiredSessions(ctx, now.Add(-j.sessionRetention))
+		if err != nil {
+			j.logger.Error("retention job: delete expired sessions failed", "error", err)
+		} else if deleted > 0 {
+			j.logger.Info("retention job: deleted expired sessions", "count", deleted)
+		}
 	}
 }

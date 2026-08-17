@@ -22,4 +22,18 @@ type Rejection struct {
 	// — so a rejection is debuggable from the API/UI without re-decoding
 	// the original wire payload.
 	Record map[string]any
+
+	// Count is how many underlying wire-level units this one Rejection
+	// actually represents — 1 for every existing caller (an OTel log
+	// record, or an OTLP NumberDataPoint), but more than 1 for
+	// FromOTLPMetrics's "unsupported aggregation type" rejection
+	// (otel_metrics.go), which discards an entire Metric's worth of data
+	// points as a single Rejection value (audit finding m14: reporting
+	// len(rejections) there undercounts an ExponentialHistogram's 50
+	// points as 1). 0 is legitimate only when the rejected unit itself
+	// carried no data points at all (an OTLP aggregation-type oneof with
+	// no variant set) — every other constructor in this package sets it to
+	// the real, non-zero count. A caller summing `rejectedDataPoints`
+	// should sum Count, not len(rejections).
+	Count int
 }

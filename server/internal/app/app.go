@@ -56,6 +56,7 @@ type App struct {
 	partitions *PartitionJob    // started by Serve
 	rollups    *RollupJob       // started by Serve (P3-05)
 	retention  *RetentionJob    // started by Serve (P3-10)
+	sweep      *SweepJob        // started by Serve (SPEC §2.4 abandoned-session sweep)
 	ingest     *ingest.Pipeline // drained by Serve's shutdown sequence (drainIngest)
 	hooks      *hooks.Mounter   // P2-11: POST /ingest/hook, wired into httpapi.Deps.HookMounter by Serve
 	otlp       *otlp.Handler    // P2-10: POST /v1/{logs,metrics,traces}, wired into httpapi.Deps.OTLPMounter by Serve
@@ -155,14 +156,19 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, opts ...O
 	if o.registerer != nil {
 		ingestOpts = append(ingestOpts, ingest.WithRegisterer(o.registerer))
 	}
-	ing := ingest.New(st, ingest.PipelineConfig{
-		QueueCap:       cfg.IngestQueue,
-		Workers:        cfg.IngestWorkers,
-		BatchSize:      cfg.IngestBatchSize,
-		FlushInterval:  cfg.IngestFlush,
-		RetryConflict:  cfg.IngestRetryConflict,
-		RetryTransient: cfg.IngestRetryTransient,
-	}, ingestOpts...)
+	// The pipeline deliberately does NOT take New's ctx. Its context is
+	// Background-derived and owned by Pipeline.Close (see Pipeline.ctx's doc
+	// in internal/ingest/pipeline.go): Close cancels it only if the drain
+	// deadline is exceeded, which is what unblocks a worker parked inside a
+	// store call instead of leaking it. Tying the pipeline's lifetime to this
+	// startup context would defeat the shutdown sequence outright — Serve's
+	// shutdown() derives its HTTP and drain budgets from Background for the
+	// same reason, precisely so a cancelled parent context cannot make the
+	// drain discard queued batches with a healthy database (SPEC §3.8, audit
+	// finding M4). contextcheck cannot see that ownership boundary; it began
+	// flagging this call once the drain gained a per-attempt WithTimeout.
+	//nolint:contextcheck // the pipeline's lifetime is owned by Close, not by New's caller — see above
+	ing := ingest.New(st, ingestPipelineConfig(cfg), ingestOpts...)
 
 	// P2-11: the hooks webhook (SPEC §3.5). hookNormalizer is built here
 	// (not inside internal/ingest/hooks) because it needs
@@ -198,12 +204,34 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, opts ...O
 		ready:      httpapi.NewReadyState(),
 		partitions: NewPartitionJob(st, logger, cfg.RetentionRawDays),
 		rollups:    rollupJob,
-		retention:  NewRetentionJob(st, logger, cfg.RetentionRawDays, cfg.DedupWindow, cfg.RetentionHour),
+		retention:  NewRetentionJob(st, logger, cfg.RetentionRawDays, cfg.DedupWindow, cfg.RetentionSessionDays, cfg.RetentionHour),
+		sweep:      NewSweepJob(st, logger, cfg.SweepInterval, cfg.SessionIdleTimeout),
 		ingest:     ing,
 		hooks:      hookMounter,
 		otlp:       otlpHandler,
 		addrReady:  make(chan struct{}),
 	}, nil
+}
+
+// ingestPipelineConfig maps the ARGUS_INGEST_* config keys onto the ingest
+// pipeline's own config struct. It exists as a named function purely so the
+// mapping is directly testable: every field here is a config key that
+// reaches production only through this one assignment, and an omitted field
+// silently falls back to the pipeline's internal default rather than
+// failing anything. That is the exact shape of the two integration defects
+// Phase 3 shipped (docs/review/phase-3-deviations.md) — two components each
+// individually correct and individually tested, with nothing covering the
+// seam between them.
+func ingestPipelineConfig(cfg *config.Config) ingest.PipelineConfig {
+	return ingest.PipelineConfig{
+		QueueCap:       cfg.IngestQueue,
+		Workers:        cfg.IngestWorkers,
+		BatchSize:      cfg.IngestBatchSize,
+		FlushInterval:  cfg.IngestFlush,
+		RetryConflict:  cfg.IngestRetryConflict,
+		RetryTransient: cfg.IngestRetryTransient,
+		WriteTimeout:   cfg.IngestWriteTimeout,
+	}
 }
 
 // Addr returns the address Serve actually bound to, resolving an

@@ -202,3 +202,29 @@ func TestShutdown_InFlightRequestCompletes(t *testing.T) {
 	<-reqDone
 	require.NoError(t, reqErr)
 }
+
+// TestRootMountedRoute_WrongMethod_ProblemJSON405 is the m18 audit
+// finding's regression test: the problem+json NotFound/MethodNotAllowed
+// handlers used to be installed only on the /api and /api/v1 subrouters, so
+// a wrong-method request against a root-mounted route (here standing in for
+// the real OTLP receivers' POST-only /v1/logs|metrics|traces, or the hooks
+// webhook's POST-only /ingest/hook) fell through to chi's bodyless default
+// 405 — while openapi.yaml declares problem+json for all four.
+func TestRootMountedRoute_WrongMethod_ProblemJSON405(t *testing.T) {
+	t.Parallel()
+
+	otlp := mounterFunc(func(r chi.Router) {
+		r.Post("/v1/logs", func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		})
+	})
+	r := httpapi.New(httpapi.Deps{OTLPMounter: otlp, Assets: testAssets(t)})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/logs", nil)
+	r.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusMethodNotAllowed, rec.Code, "body: %s", rec.Body.String())
+	require.Equal(t, "application/problem+json", rec.Header().Get("Content-Type"))
+	require.Contains(t, rec.Body.String(), `"type":"urn:argus:error:method-not-allowed"`)
+}

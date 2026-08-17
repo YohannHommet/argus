@@ -45,6 +45,7 @@ type sessionIdentity struct {
 	userAccountID   string
 	terminalType    string
 	appVersion      string
+	entrypoint      string
 	osType          string
 	osVersion       string
 	hostArch        string
@@ -64,6 +65,7 @@ func newSessionIdentity(r *sessionRNG) sessionIdentity {
 		userAccountID:   "user_" + r.uuid().String(),
 		terminalType:    pick(r.Rand, terminalTypesWeighted),
 		appVersion:      "2.1.228", // live capture resource attrs: service.version observed value
+		entrypoint:      "cli",     // research doc §telemetry-surfaces: app.entrypoint observed value (cli|sdk-cli|sdk-ts|sdk-py|claude-vscode)
 		osType:          "linux",   // live capture resource attrs: os.type observed value
 		osVersion:       "6.18.33.2-microsoft-standard-WSL2",
 		hostArch:        "amd64",
@@ -105,7 +107,11 @@ func (id sessionIdentity) resource() *resourcepb.Resource {
 // commonRecordAttrs returns the per-record identity attributes the live
 // capture shows on every log record regardless of event.name (research doc
 // §2's observed key list), in the same order the fixtures use so
-// byte-for-byte comparisons against them stay easy to eyeball.
+// byte-for-byte comparisons against them stay easy to eyeball. app.entrypoint
+// is included per telemetry-surfaces.md:44's "standard attributes on
+// everything" list — SPEC §1.5.3 promotes it to sessions.entrypoint, and
+// without a producer here no fixture could exercise that mapping (audit
+// finding M3).
 func (id sessionIdentity) commonRecordAttrs() []*commonpb.KeyValue {
 	return []*commonpb.KeyValue{
 		kvString("user.id", id.userID),
@@ -115,6 +121,7 @@ func (id sessionIdentity) commonRecordAttrs() []*commonpb.KeyValue {
 		kvString("user.account_uuid", id.userAccountUUID),
 		kvString("user.account_id", id.userAccountID),
 		kvString("terminal.type", id.terminalType),
+		kvString("app.entrypoint", id.entrypoint),
 	}
 }
 

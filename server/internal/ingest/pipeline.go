@@ -64,6 +64,21 @@ type PipelineConfig struct {
 	FlushInterval  time.Duration // ARGUS_INGEST_FLUSH
 	RetryConflict  int           // ARGUS_INGEST_RETRY_CONFLICT
 	RetryTransient int           // ARGUS_INGEST_RETRY_TRANSIENT
+
+	// WriteTimeout bounds a single store.Writer.WriteBatch/WriteMetrics
+	// attempt (audit finding M6's ingest half; the companion lock_timeout
+	// half lives in store/postgres/pool.go, owned by a different ticket).
+	// Without it every attempt ran on p.ctx — a plain WithCancel(Background)
+	// with no deadline — so a statement blocked on a lock parked a worker
+	// indefinitely and retry classification never ran, because the call
+	// never returned. retryLoop wraps each attempt in
+	// context.WithTimeout(p.ctx, WriteTimeout); DeadlineExceeded is already
+	// classified transient by ClassifyError, so a timed-out attempt retries
+	// exactly like any other transient failure. ARGUS_INGEST_WRITE_TIMEOUT
+	// and wiring cfg.IngestWriteTimeout onto this field are a separate
+	// ticket's job (internal/config, internal/app) — this field's only
+	// contract is "zero value means applyDefaults' 30s".
+	WriteTimeout time.Duration
 }
 
 func (c *PipelineConfig) applyDefaults() {
@@ -85,13 +100,52 @@ func (c *PipelineConfig) applyDefaults() {
 	if c.RetryTransient <= 0 {
 		c.RetryTransient = 3
 	}
+	if c.WriteTimeout <= 0 {
+		c.WriteTimeout = 30 * time.Second
+	}
 }
 
-// Publisher is the seam Phase 4's SSE hub fills in (SPEC §5.3): Publish is
+// Publisher is the seam Phase 4/5's SSE hub fills in (SPEC §5.3): Publish is
 // called once per successful flush, after the write transaction has
 // committed, with only the events store.Writer actually persisted — never
 // deduped ones, never on a dropped batch. The pipeline ships NoopPublisher
 // as the default so P2-09 has no forward dependency on the hub.
+//
+// # Contract Publish must uphold (audit finding m7-minor)
+//
+// The pipeline hands every persisted flush to Publish through a small
+// buffered goroutine (handoffPublish/runPublishWorker), not inline on the
+// flushing worker — so the guarantees below are two-sided: what the
+// pipeline promises the hub, and what Publish must promise the pipeline in
+// return.
+//
+//   - Ordering: within one flush's []model.Event, order is preserved
+//     end-to-end (Publish sees the same order matchPersisted produced,
+//     which is (ts, seq) order — see its doc). Across flushes, calls are
+//     handed off in the order flushes complete, but multiple event workers
+//     flush concurrently (SPEC §3.6: "parallel workers interleave"), so
+//     Publish must not assume cross-flush ordering, only within-flush
+//     ordering.
+//   - Non-blocking, mandatory: Publish must return quickly and must never
+//     block on a slow subscriber. The pipeline's handoff channel is
+//     bounded; if it is full, the pipeline drops the publish job (logged,
+//     accounted) rather than let a slow hub become ingest back-pressure.
+//     But that only protects the *handoff* — once a job is handed to the
+//     publish goroutine, a Publish call that itself blocks forever stalls
+//     every publish behind it and leaks that one goroutine permanently
+//     (Close cannot force a foreign call to return). The hub owns its own
+//     internal fan-out/timeout to its subscribers; it must never make that
+//     the pipeline's problem.
+//   - Panic safety: the pipeline recovers a panic from each Publish call
+//     and logs it — a hub bug can drop a batch of published events, it
+//     cannot kill the pipeline's worker or crash the process.
+//   - Lifetime relative to Close(): Publish may still be called after
+//     Close(ctx) has returned (Close does not wait for the publish
+//     goroutine to drain), because Close's job is draining the write path,
+//     not the stream. A hub must tolerate being called after it considers
+//     itself shut down, or must simply outlive the pipeline in practice
+//     (Phase 5's expected wiring: the hub owns a longer lifetime than any
+//     one Pipeline).
 type Publisher interface {
 	Publish(events []model.Event)
 }
@@ -182,6 +236,14 @@ type Pipeline struct {
 	events    chan []model.Event
 	metricsCh chan []model.MetricSample
 
+	// publishCh is the m7-minor hand-off queue between a flush and
+	// Publisher.Publish: flushEvents no longer calls Publish inline on the
+	// worker goroutine (see Publisher's doc for the contract this
+	// implements). Bounded at cfg.QueueCap, same shock-absorber reasoning
+	// as the events/metricsCh lanes; a full channel drops the job (logged,
+	// accounted) rather than block the flushing worker.
+	publishCh chan []model.Event
+
 	// ctx/cancel scope every store.Writer call a worker makes. cancel is
 	// invoked exactly once, by Close, only if the drain deadline is
 	// exceeded — this is what lets a worker blocked inside a
@@ -194,6 +256,29 @@ type Pipeline struct {
 	stopCh  chan struct{}
 	closing atomic.Bool
 	wg      sync.WaitGroup
+
+	// closeMu is m5's fix for the enqueue/drain race: EnqueueEvents/
+	// EnqueueMetrics check p.closing and then send on the buffered channel
+	// as two steps that used to be unsynchronised, so a producer that read
+	// closing==false right before Close ran could still land its batch on
+	// the channel *after* every worker had already exited its final drain
+	// loop — silently lost (never written, never counted), with a nil
+	// error returned to the caller and Close having already returned nil.
+	// Enqueue* holds closeMu for reading across its whole check+send;
+	// Close acquires it for writing (blocking until any in-flight Enqueue
+	// finishes its send) before closing stopCh, so a send that commits
+	// always does so strictly before the final drain begins, and any
+	// Enqueue that starts after stopCh closes always observes
+	// closing==true.
+	closeMu sync.RWMutex
+
+	// testAfterClosingCheck, when non-nil, runs inside EnqueueEvents/
+	// EnqueueMetrics immediately after the closing check, while still
+	// holding closeMu for reading — solely so pipeline_internal_test.go
+	// (m5's regression test) can force the check-then-send interleaving
+	// deterministically instead of relying on a real race to reproduce.
+	// Production code never sets it.
+	testAfterClosingCheck func()
 }
 
 // New constructs a Pipeline over w and starts its worker goroutines
@@ -229,6 +314,7 @@ func New(w store.Writer, cfg PipelineConfig, opts ...Option) *Pipeline {
 		sleep:     o.sleep,
 		events:    make(chan []model.Event, cfg.QueueCap),
 		metricsCh: make(chan []model.MetricSample, cfg.QueueCap),
+		publishCh: make(chan []model.Event, cfg.QueueCap),
 		ctx:       ctx,
 		cancel:    cancel,
 		stopCh:    make(chan struct{}),
@@ -266,9 +352,14 @@ func (p *Pipeline) EnqueueEvents(batch []model.Event) error {
 	if len(batch) == 0 {
 		return nil
 	}
+	p.closeMu.RLock()
+	defer p.closeMu.RUnlock()
 	if p.closing.Load() {
 		p.dropEvents(batch, "pipeline closing")
 		return ErrQueueFull
+	}
+	if p.testAfterClosingCheck != nil {
+		p.testAfterClosingCheck()
 	}
 	select {
 	case p.events <- batch:
@@ -295,9 +386,14 @@ func (p *Pipeline) EnqueueMetrics(batch []model.MetricSample) error {
 	if len(batch) == 0 {
 		return nil
 	}
+	p.closeMu.RLock()
+	defer p.closeMu.RUnlock()
 	if p.closing.Load() {
 		p.dropMetrics(batch, "pipeline closing")
 		return ErrQueueFull
+	}
+	if p.testAfterClosingCheck != nil {
+		p.testAfterClosingCheck()
 	}
 	select {
 	case p.metricsCh <- batch:
@@ -320,11 +416,25 @@ func (p *Pipeline) Close(ctx context.Context) error {
 	if !p.closing.CompareAndSwap(false, true) {
 		return nil
 	}
+	// m5: block until any Enqueue* that already passed the closing check
+	// finishes landing its send, so stopCh never closes mid-send — see
+	// closeMu's doc on Pipeline and awaitEnqueueBarrier's doc.
+	p.awaitEnqueueBarrier()
 	close(p.stopCh)
 
 	done := make(chan struct{})
 	go func() {
 		p.wg.Wait()
+		// Safe here and only here: p.wg covers every goroutine that can
+		// call handoffPublish (the event/metric workers), so once it's
+		// done no send to publishCh can still be in flight — closing it
+		// cannot race a send, regardless of whether Close itself already
+		// returned via the ctx.Done() branch below. runPublishWorker's
+		// range loop drains whatever is already buffered, then exits: no
+		// goroutine leak on the common path, and no leak on the
+		// deadline-exceeded path either, once the cancelled workers
+		// actually unwind (m7-minor).
+		close(p.publishCh)
 		close(done)
 	}()
 
@@ -341,6 +451,17 @@ func (p *Pipeline) Close(ctx context.Context) error {
 	}
 }
 
+// awaitEnqueueBarrier blocks until every EnqueueEvents/EnqueueMetrics call
+// that already passed its closing check has finished landing its send (m5):
+// Enqueue* holds closeMu for reading across its whole check+send, so
+// acquiring it for writing here returns only once none of them are
+// in-flight, at which point stopCh is safe to close — any Enqueue* that
+// starts afterwards will see p.closing already true.
+func (p *Pipeline) awaitEnqueueBarrier() {
+	p.closeMu.Lock()
+	defer p.closeMu.Unlock()
+}
+
 func (p *Pipeline) start() {
 	p.wg.Add(p.cfg.Workers)
 	for i := 0; i < p.cfg.Workers; i++ {
@@ -352,6 +473,13 @@ func (p *Pipeline) start() {
 	// simplest thing that is still honestly correct (lead decision #2).
 	p.wg.Add(1)
 	go p.runMetricWorker()
+
+	// Not added to p.wg (m7-minor): it must outlive the event/metric
+	// workers, since Close's drain-done goroutine closes publishCh only
+	// after p.wg.Wait() returns — adding this goroutine to the same
+	// WaitGroup would deadlock that close against itself. It terminates on
+	// its own once publishCh is closed and drained.
+	go p.runPublishWorker()
 }
 
 // runEventWorker accumulates batches off the shared event channel until
@@ -363,6 +491,7 @@ func (p *Pipeline) start() {
 func (p *Pipeline) runEventWorker() {
 	defer p.wg.Done()
 
+	ctx := p.ctx
 	buf := make([]model.Event, 0, p.cfg.BatchSize)
 	timer := time.NewTimer(p.cfg.FlushInterval)
 	defer timer.Stop()
@@ -371,7 +500,7 @@ func (p *Pipeline) runEventWorker() {
 		if len(buf) == 0 {
 			return
 		}
-		p.flushEvents(buf)
+		p.flushEvents(ctx, buf)
 		buf = buf[:0]
 	}
 
@@ -390,11 +519,19 @@ func (p *Pipeline) runEventWorker() {
 		case <-p.stopCh:
 			// EnqueueEvents already refuses new sends once closing is set,
 			// so draining whatever is already sitting in the channel here
-			// terminates: it cannot grow after this point.
+			// terminates: it cannot grow after this point. M7: chunk on
+			// BatchSize exactly like the steady-state case above — without
+			// this, a full QueueCap backlog coalesces into one unbounded
+			// WriteBatch transaction, so a single failure or an overrun
+			// drain deadline loses the *entire* backlog instead of just the
+			// last partial batch.
 			for {
 				select {
 				case batch := <-p.events:
 					buf = append(buf, batch...)
+					if len(buf) >= p.cfg.BatchSize {
+						flush()
+					}
 				default:
 					flush()
 					return
@@ -409,6 +546,7 @@ func (p *Pipeline) runEventWorker() {
 func (p *Pipeline) runMetricWorker() {
 	defer p.wg.Done()
 
+	ctx := p.ctx
 	buf := make([]model.MetricSample, 0, p.cfg.BatchSize)
 	timer := time.NewTimer(p.cfg.FlushInterval)
 	defer timer.Stop()
@@ -417,7 +555,7 @@ func (p *Pipeline) runMetricWorker() {
 		if len(buf) == 0 {
 			return
 		}
-		p.flushMetrics(buf)
+		p.flushMetrics(ctx, buf)
 		buf = buf[:0]
 	}
 
@@ -434,10 +572,16 @@ func (p *Pipeline) runMetricWorker() {
 			flush()
 			timer.Reset(p.cfg.FlushInterval)
 		case <-p.stopCh:
+			// M7: same BatchSize chunking as runEventWorker's drain loop —
+			// see its doc for why an unchunked drain risks the whole
+			// backlog on one failed write.
 			for {
 				select {
 				case batch := <-p.metricsCh:
 					buf = append(buf, batch...)
+					if len(buf) >= p.cfg.BatchSize {
+						flush()
+					}
 				default:
 					flush()
 					return
@@ -459,17 +603,62 @@ func resetTimer(t *time.Timer, d time.Duration) {
 	t.Reset(d)
 }
 
+// runPublishWorker is the m7-minor hand-off consumer: it is the only
+// goroutine that ever calls Publisher.Publish, so a slow or misbehaving hub
+// affects publishing latency, never the flushing workers that feed
+// publishCh. It exits once publishCh is closed and drained (see Close's
+// doc on when that happens).
+func (p *Pipeline) runPublishWorker() {
+	for events := range p.publishCh {
+		p.publishOne(events)
+	}
+}
+
+// publishOne calls Publisher.Publish with a recover guarding the call
+// (m7-minor's panic-safety half of the contract): a hub bug can lose the
+// batch of events it panicked on, it cannot take down the publish
+// goroutine (which would otherwise silently stop all future publishing for
+// the life of the process) or the process itself.
+func (p *Pipeline) publishOne(events []model.Event) {
+	defer func() {
+		if r := recover(); r != nil {
+			p.logger.Error("ingest: publisher panicked, dropping this batch from the stream",
+				"count", len(events), "panic", r)
+		}
+	}()
+	p.publisher.Publish(events)
+}
+
+// handoffPublish hands persisted events to the publish goroutine without
+// blocking the flushing worker (m7-minor's non-blocking half of the
+// contract): a full publishCh means the hub (or the goroutine feeding it)
+// is behind, and the fix for that is dropping this batch from the stream,
+// logged and accounted, never stalling ingest — a hub outage must stay a
+// hub outage, not become 503s on the write path.
+func (p *Pipeline) handoffPublish(events []model.Event) {
+	select {
+	case p.publishCh <- events:
+	default:
+		// Not p.metrics.Dropped: that counter's documented meaning is
+		// "never made it to storage" (metrics.go), and these events are
+		// already committed — they only missed the stream. Accounting for
+		// this drop is the log line itself (count, first event's session);
+		// adding a dedicated Prometheus series for it is metrics.go's call,
+		// outside this ticket's file set.
+		first := events[0]
+		p.logger.Warn("ingest: publish handoff full, dropping batch from stream",
+			"count", len(events), "session_id", first.SessionID)
+	}
+}
+
 // flushEvents writes one accumulated event batch through the retry loop and
 // records every metric SPEC §3.6 names for a successful write, or the drop
 // counters if the retry budget was exhausted.
-func (p *Pipeline) flushEvents(batch []model.Event) {
-	firstID := ""
-	if len(batch) > 0 {
-		firstID = batch[0].ID
-	}
+func (p *Pipeline) flushEvents(ctx context.Context, batch []model.Event) {
+	descriptor := eventBatchDescriptor(batch)
 	start := time.Now()
-	res, ok := p.retryLoop(firstID, len(batch), func(ctx context.Context) (store.BatchResult, error) {
-		return p.store.WriteBatch(ctx, batch)
+	res, ok := p.retryLoop(ctx, descriptor, len(batch), func(attemptCtx context.Context) (store.BatchResult, error) {
+		return p.store.WriteBatch(attemptCtx, batch)
 	})
 	if !ok {
 		p.dropEvents(batch, "write failed permanently or exhausted its retry budget")
@@ -498,21 +687,49 @@ func (p *Pipeline) flushEvents(batch []model.Event) {
 	}
 
 	if persisted := matchPersisted(batch, res.EventRefs); len(persisted) > 0 {
-		p.publisher.Publish(persisted)
+		p.handoffPublish(persisted)
 	}
+}
+
+// eventBatchDescriptor summarizes batch for a drop/retry log line (m8 fix).
+// The obvious choice, batch[0].ID, is always "": no normalizer mints
+// Event.ID, it comes from the events table's uuidv7() column default
+// (events.go's package doc), so logging it produced first_id="" in exactly
+// the line an operator needs after a whole-batch loss. This logs
+// identifiers the batch actually carries instead — the first event's
+// session/dedup_key/event_name, plus the ts range across the whole batch —
+// rather than minting ids in a normalizer, which is outside this ticket's
+// file set.
+func eventBatchDescriptor(batch []model.Event) string {
+	if len(batch) == 0 {
+		return "empty batch"
+	}
+	minTS, maxTS := batch[0].TS, batch[0].TS
+	for _, e := range batch[1:] {
+		if e.TS.Before(minTS) {
+			minTS = e.TS
+		}
+		if e.TS.After(maxTS) {
+			maxTS = e.TS
+		}
+	}
+	first := batch[0]
+	return fmt.Sprintf("session_id=%s dedup_key=%s event_name=%s ts=[%s,%s]",
+		first.SessionID, first.DedupKey, first.EventName,
+		minTS.Format(time.RFC3339Nano), maxTS.Format(time.RFC3339Nano))
 }
 
 // flushMetrics is flushEvents' counterpart for the metric-sample lane. It
 // never calls Publisher.Publish: SPEC §5.3's stream hub publishes
 // model.Event only, and metric samples have no SSE representation in v1.
-func (p *Pipeline) flushMetrics(batch []model.MetricSample) {
-	firstName := ""
+func (p *Pipeline) flushMetrics(ctx context.Context, batch []model.MetricSample) {
+	descriptor := ""
 	if len(batch) > 0 {
-		firstName = batch[0].Name
+		descriptor = "name=" + batch[0].Name
 	}
 	start := time.Now()
-	res, ok := p.retryLoop(firstName, len(batch), func(ctx context.Context) (store.BatchResult, error) {
-		return p.store.WriteMetrics(ctx, batch)
+	res, ok := p.retryLoop(ctx, descriptor, len(batch), func(attemptCtx context.Context) (store.BatchResult, error) {
+		return p.store.WriteMetrics(attemptCtx, batch)
 	})
 	if !ok {
 		p.dropMetrics(batch, "write failed permanently or exhausted its retry budget")
@@ -542,13 +759,24 @@ func (p *Pipeline) flushMetrics(batch []model.MetricSample) {
 // every attempt but the 8th means exactly 8 calls to write, the 8th one
 // succeeding, no data lost.
 func (p *Pipeline) retryLoop(
-	firstID string,
+	ctx context.Context,
+	descriptor string,
 	count int,
 	write func(ctx context.Context) (store.BatchResult, error),
 ) (store.BatchResult, bool) {
 	var conflictAttempts, transientAttempts int
 	for {
-		res, err := write(p.ctx)
+		// M6: each attempt gets its own deadline off ctx (the worker's copy
+		// of p.ctx, passed in by flushEvents/flushMetrics) rather than
+		// running on it directly, which never times out on its own — see
+		// Pipeline.ctx's doc. Without this, a write blocked on a lock parked
+		// the worker forever and retry classification never ran, because
+		// write() never returned. context.DeadlineExceeded is already
+		// classified ClassTransient below, so a timed-out attempt retries
+		// exactly like any other transient failure.
+		attemptCtx, cancel := context.WithTimeout(ctx, p.cfg.WriteTimeout)
+		res, err := write(attemptCtx)
+		cancel()
 		if err == nil {
 			return res, true
 		}
@@ -556,7 +784,7 @@ func (p *Pipeline) retryLoop(
 		switch ClassifyError(err) {
 		case ClassPermanent:
 			p.logger.Error("ingest: permanent write error, dropping batch",
-				"first_id", firstID, "count", count, "error", err)
+				"batch", descriptor, "count", count, "error", err)
 			p.metrics.WriteFailed.WithLabelValues(ClassPermanent.String()).Inc()
 			return store.BatchResult{}, false
 
@@ -564,14 +792,14 @@ func (p *Pipeline) retryLoop(
 			conflictAttempts++
 			if conflictAttempts >= p.cfg.RetryConflict {
 				p.logger.Error("ingest: conflict retry budget exhausted, dropping batch",
-					"first_id", firstID, "count", count, "attempts", conflictAttempts, "error", err)
+					"batch", descriptor, "count", count, "attempts", conflictAttempts, "error", err)
 				p.metrics.WriteFailed.WithLabelValues(ClassConflict.String()).Inc()
 				return store.BatchResult{}, false
 			}
 			p.metrics.Retries.WithLabelValues(ClassConflict.String()).Inc()
-			if serr := p.sleep(p.ctx, conflictBackoff(conflictAttempts)); serr != nil {
+			if serr := p.sleep(ctx, conflictBackoff(conflictAttempts)); serr != nil {
 				p.logger.Error("ingest: retry backoff interrupted, dropping batch",
-					"first_id", firstID, "count", count, "error", serr)
+					"batch", descriptor, "count", count, "error", serr)
 				p.metrics.WriteFailed.WithLabelValues(ClassConflict.String()).Inc()
 				return store.BatchResult{}, false
 			}
@@ -580,14 +808,14 @@ func (p *Pipeline) retryLoop(
 			transientAttempts++
 			if transientAttempts >= p.cfg.RetryTransient {
 				p.logger.Error("ingest: transient retry budget exhausted, dropping batch",
-					"first_id", firstID, "count", count, "attempts", transientAttempts, "error", err)
+					"batch", descriptor, "count", count, "attempts", transientAttempts, "error", err)
 				p.metrics.WriteFailed.WithLabelValues(ClassTransient.String()).Inc()
 				return store.BatchResult{}, false
 			}
 			p.metrics.Retries.WithLabelValues(ClassTransient.String()).Inc()
-			if serr := p.sleep(p.ctx, transientBackoff(transientAttempts)); serr != nil {
+			if serr := p.sleep(ctx, transientBackoff(transientAttempts)); serr != nil {
 				p.logger.Error("ingest: retry backoff interrupted, dropping batch",
-					"first_id", firstID, "count", count, "error", serr)
+					"batch", descriptor, "count", count, "error", serr)
 				p.metrics.WriteFailed.WithLabelValues(ClassTransient.String()).Inc()
 				return store.BatchResult{}, false
 			}
@@ -605,34 +833,46 @@ func (p *Pipeline) retryLoop(
 	}
 }
 
-// matchPersisted maps WriteBatch's BatchResult.EventRefs — (ts, seq) pairs,
-// storage-agnostic by design (store.go) — back onto the subset of the
-// submitted batch those refs correspond to, for Publisher.Publish (SPEC
-// §5.3: "only the events that were actually persisted"). It assumes
-// WriteBatch preserves the input batch's relative order for the rows it
-// persists (dedup-suppressed rows are omitted, never reordered) — a single
-// forward walk matching each ref to the next batch event with an equal TS.
-// If a future store implementation broke that ordering assumption, this
-// walk would simply publish fewer events than it should (a Phase-4 SSE
-// gap), never corrupt data on the write path itself, which has already
-// committed by the time this runs.
+// matchPersisted maps WriteBatch's BatchResult.EventRefs back onto the
+// subset of the submitted batch those refs correspond to, for
+// Publisher.Publish (SPEC §5.3: "only the events that were actually
+// persisted").
+//
+// M1 fix: this used to do one monotonic forward walk matching each ref to
+// the next batch event with an equal TS, which is only correct if batch is
+// in non-decreasing TS order — it never is, since batch is the worker's
+// arrival-order accumulation buffer (appended to as EnqueueEvents calls
+// land, pipeline.go's runEventWorker), while WriteBatch sorts its own copy
+// before writing and returns EventRefs sorted by (TS, Seq)
+// (store/postgres/write.go). Fed an out-of-order batch, the old walk either
+// skipped events it should have published or paired a ref with the wrong
+// event's Seq. DedupKey is stable across that reordering (it is copied
+// verbatim from the submitted event into the persisted row, never derived
+// from position), so refs are now matched by DedupKey instead — an identity
+// that survives the write, independent of what order either side is in.
 func matchPersisted(batch []model.Event, refs []model.EventRef) []model.Event {
 	if len(refs) == 0 {
 		return nil
 	}
+	byKey := make(map[string]model.Event, len(batch))
+	for _, e := range batch {
+		// First occurrence wins: a batch can carry the same DedupKey twice
+		// (the same logical event submitted more than once in one request),
+		// and WriteBatch collapses those to a single ledger/candidate row,
+		// so there is exactly one persisted ref per distinct key regardless
+		// of which duplicate it "came from".
+		if _, ok := byKey[e.DedupKey]; !ok {
+			byKey[e.DedupKey] = e
+		}
+	}
 	out := make([]model.Event, 0, len(refs))
-	i := 0
 	for _, ref := range refs {
-		for i < len(batch) && !batch[i].TS.Equal(ref.TS) {
-			i++
+		e, ok := byKey[ref.DedupKey]
+		if !ok {
+			continue
 		}
-		if i >= len(batch) {
-			break
-		}
-		e := batch[i]
 		e.Seq = ref.Seq
 		out = append(out, e)
-		i++
 	}
 	return out
 }

@@ -79,11 +79,11 @@ func seedSessionCostByQuerySource(t *testing.T, pool *pgxpool.Pool, sessionID st
 
 // TestDataQuality_FreshDatabaseReportsAllFalse is the ticket note's AC: a
 // database that never received any of the four signals must report every
-// flag false rather than erroring or omitting them. A brand-new, empty
-// session/tool_calls/turns/subagents/metric_samples set (this session's own
-// fixtures only, via a fresh session id) proves it for that one session's
-// slice of the fleet; TestDataQuality_HooksSeenOnlyFromHookEvidence and its
-// siblings below prove each flag flips independently.
+// flag false rather than erroring or omitting them. newStore gives every
+// test its own freshly created, freshly migrated schema (harness.go's
+// NewDSN does `CREATE SCHEMA test_<nanos>_<n>` + search_path + Migrate per
+// call), so there is no other suite's fixture to share it with — the four
+// flags below are asserted directly, not just diffed against a "before".
 func TestDataQuality_FreshDatabaseReportsAllFalse(t *testing.T) {
 	st, pool := newStore(t)
 	ctx := context.Background()
@@ -92,12 +92,10 @@ func TestDataQuality_FreshDatabaseReportsAllFalse(t *testing.T) {
 
 	got, err := st.DataQuality(ctx)
 	require.NoError(t, err)
-	// Not asserted false outright: other tests in this suite share the same
-	// database and may have seeded true-making rows. Instead this test's
-	// own contribution (a session with no turns/tool_calls/subagents) must
-	// not itself force any flag true, which the per-flag tests below check
-	// directly against a difference, not a fleet-wide snapshot.
-	_ = got
+	require.False(t, got.LogsExporterSeen)
+	require.False(t, got.MetricsExporterSeen)
+	require.False(t, got.HooksSeen)
+	require.False(t, got.ToolDetailsSeen)
 }
 
 // TestDataQuality_LogsExporterSeen_FromTurnAPIRequestCount: only a turn
@@ -134,9 +132,7 @@ func TestDataQuality_MetricsExporterSeen_FromMetricSamples(t *testing.T) {
 
 	before, err := st.DataQuality(ctx)
 	require.NoError(t, err)
-	if before.MetricsExporterSeen {
-		t.Skip("another fixture in this shared database already seeded a metric sample")
-	}
+	require.False(t, before.MetricsExporterSeen)
 
 	now := time.Now().UTC()
 	ensureRange(t, st, now, now)
@@ -162,9 +158,7 @@ func TestDataQuality_HooksSeen_FromToolCallCorrelation(t *testing.T) {
 
 	before, err := st.DataQuality(ctx)
 	require.NoError(t, err)
-	if before.HooksSeen {
-		t.Skip("another fixture in this shared database already seeded hook evidence")
-	}
+	require.False(t, before.HooksSeen)
 
 	seedToolCall(t, pool, toolCallSeed{ID: nextID(), SessionID: sessionID, ToolName: "Edit", Correlation: "hook_only"})
 
@@ -184,9 +178,7 @@ func TestDataQuality_HooksSeen_FromSubagentsTable(t *testing.T) {
 
 	before, err := st.DataQuality(ctx)
 	require.NoError(t, err)
-	if before.HooksSeen {
-		t.Skip("another fixture in this shared database already seeded hook evidence")
-	}
+	require.False(t, before.HooksSeen)
 
 	_, err = pool.Exec(context.Background(), `
 		INSERT INTO subagents (session_id, agent_id, status) VALUES ($1, 'ag-1', 'running')`, sessionID)
@@ -209,9 +201,7 @@ func TestDataQuality_ToolDetailsSeen_FromToolCallFilePath(t *testing.T) {
 
 	before, err := st.DataQuality(ctx)
 	require.NoError(t, err)
-	if before.ToolDetailsSeen {
-		t.Skip("another fixture in this shared database already seeded a tool_calls.file_path")
-	}
+	require.False(t, before.ToolDetailsSeen)
 
 	_, err = pool.Exec(context.Background(), `
 		INSERT INTO tool_calls (id, session_id, tool_name, correlation, started_at, file_path, event_count)

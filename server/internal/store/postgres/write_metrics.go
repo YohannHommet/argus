@@ -42,8 +42,28 @@ func (s *Store) WriteMetrics(ctx context.Context, samples []model.MetricSample) 
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	dedupKeys := make([]string, len(sorted))
-	for i, m := range sorted {
+	covers, err := partitionCoverage(ctx, tx, "metric_samples")
+	if err != nil {
+		return store.BatchResult{}, err
+	}
+
+	// Split by partition coverage *before* the ingest_dedup gate (m3 fix,
+	// mirroring write.go's WriteBatch — see that file's package doc): a
+	// too_old sample's dedup_key must never be admitted to the ledger, or a
+	// legitimate replay after the partition is restored comes back
+	// `deduped` instead of written.
+	covered := make([]model.MetricSample, 0, len(sorted))
+	tooOld := 0
+	for _, m := range sorted {
+		if covers(m.TS) {
+			covered = append(covered, m)
+		} else {
+			tooOld++
+		}
+	}
+
+	dedupKeys := make([]string, len(covered))
+	for i, m := range covered {
 		dedupKeys[i] = m.DedupKey
 	}
 	survived, err := insertIngestDedup(ctx, tx, dedupKeys)
@@ -51,24 +71,15 @@ func (s *Store) WriteMetrics(ctx context.Context, samples []model.MetricSample) 
 		return store.BatchResult{}, err
 	}
 
-	covers, err := partitionCoverage(ctx, tx, "metric_samples")
-	if err != nil {
-		return store.BatchResult{}, err
-	}
-
 	seenKey := map[string]bool{}
 	var candidates []model.MetricSample
-	deduped, tooOld := 0, 0
-	for _, m := range sorted {
+	deduped := 0
+	for _, m := range covered {
 		if !survived[m.DedupKey] || seenKey[m.DedupKey] {
 			deduped++
 			continue
 		}
 		seenKey[m.DedupKey] = true
-		if !covers(m.TS) {
-			tooOld++
-			continue
-		}
 		candidates = append(candidates, m)
 	}
 

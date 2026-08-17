@@ -18,8 +18,36 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// partitionsLockKey is the pg_try_advisory_xact_lock key EnsurePartitions
+// takes to single-flight partition creation across processes (m34 fix).
+// Transaction-scoped, same idiom as rollups.go's rollupLockKey: it releases
+// itself on COMMIT or ROLLBACK, so there is no matching unlock call to get
+// right. Continues this codebase's lock-key registry (migrate.go's
+// migrationLockKey "ARGUS01", rollups.go's rollupLockKey "ARGUS02") —
+// "ARGUS03" is already claimed (ticket W8, rebuild-projections), so this one
+// is "ARGUS04" to avoid a collision.
+//
+// Without this lock, two argusd processes starting together (or a process
+// racing PartitionJob's hourly tick against another replica's) could both
+// observe "table does not exist" from CREATE TABLE IF NOT EXISTS's own
+// existence check before either takes Postgres's internal lock on the
+// parent, and one loses the race with 42P07/23505 — narrow today (single-
+// argusd topology, `restart: unless-stopped` recovers) but real, and fatal
+// at startup (App.New calls this and treats a failure as fatal, per SPEC
+// §2.4's "startup fails loudly"). Serializing via this lock means the loser
+// simply waits, then finds every table/index already created by the winner
+// (still idempotent, still a no-op) instead of erroring.
+const partitionsLockKey int64 = 0x41_52_47_55_53_30_34 // "ARGUS04"
+
+// execer is the subset of pgxpool.Pool/pgx.Tx that ensureMonthlyPartition
+// needs, so EnsurePartitions can run every CREATE TABLE/INDEX statement
+// inside the same advisory-locked transaction rather than against the pool
+// directly.
+type execer interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}
 
 // eventsIndexDDL returns the 6 per-partition indexes SPEC §2.2 names for an
 // events partition. The UNIQUE (ts, dedup_key) index is deliberately absent
@@ -66,6 +94,15 @@ func metricSamplesIndexDDL(partition pgx.Identifier) []string {
 // `CREATE INDEX IF NOT EXISTS` make a repeated call over the same range a
 // no-op. There is no DEFAULT partition to create — SPEC §2.2 requires an
 // out-of-range insert to error (see IsTooOld).
+//
+// The whole pass runs inside one transaction holding partitionsLockKey (m34
+// fix): a non-blocking pg_try_advisory_xact_lock would need a caller-visible
+// "someone else is already doing this" signal this method's signature has
+// no room for, so this uses the blocking pg_advisory_xact_lock instead — a
+// second concurrent caller simply waits for the first to commit, then finds
+// every table/index it needed already created (still idempotent), rather
+// than racing CREATE TABLE IF NOT EXISTS's own existence check against a
+// concurrent process and losing with 42P07/23505.
 func (s *Store) EnsurePartitions(ctx context.Context, from, to time.Time) error {
 	start := time.Date(from.UTC().Year(), from.UTC().Month(), 1, 0, 0, 0, 0, time.UTC)
 	end := time.Date(to.UTC().Year(), to.UTC().Month(), 1, 0, 0, 0, 0, time.UTC)
@@ -73,15 +110,29 @@ func (s *Store) EnsurePartitions(ctx context.Context, from, to time.Time) error 
 		return fmt.Errorf("postgres: ensure partitions: to (%s) precedes from (%s)", to, from)
 	}
 
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("postgres: ensure partitions: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }() // no-op after a successful Commit
+
+	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", partitionsLockKey); err != nil {
+		return fmt.Errorf("postgres: ensure partitions: advisory lock: %w", err)
+	}
+
 	for month := start; !month.After(end); month = month.AddDate(0, 1, 0) {
 		next := month.AddDate(0, 1, 0)
 
-		if err := ensureMonthlyPartition(ctx, s.pool, "events", month, next, eventsIndexDDL); err != nil {
+		if err := ensureMonthlyPartition(ctx, tx, "events", month, next, eventsIndexDDL); err != nil {
 			return err
 		}
-		if err := ensureMonthlyPartition(ctx, s.pool, "metric_samples", month, next, metricSamplesIndexDDL); err != nil {
+		if err := ensureMonthlyPartition(ctx, tx, "metric_samples", month, next, metricSamplesIndexDDL); err != nil {
 			return err
 		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("postgres: ensure partitions: commit: %w", err)
 	}
 	return nil
 }
@@ -95,8 +146,11 @@ func (s *Store) EnsurePartitions(ctx context.Context, from, to time.Time) error 
 // is safe because month/next are computed internally from a time.Time, never
 // from untrusted input. Table and index identifiers, which Postgres gives
 // no placeholder syntax for regardless, are quoted via
-// pgx.Identifier.Sanitize rather than raw interpolation.
-func ensureMonthlyPartition(ctx context.Context, pool *pgxpool.Pool, parent string, month, next time.Time, indexDDL func(pgx.Identifier) []string) error {
+// pgx.Identifier.Sanitize rather than raw interpolation. exec is
+// EnsurePartitions's own locked transaction (see its doc comment, m34 fix),
+// not the bare pool, so every statement this issues is covered by
+// partitionsLockKey.
+func ensureMonthlyPartition(ctx context.Context, exec execer, parent string, month, next time.Time, indexDDL func(pgx.Identifier) []string) error {
 	partitionName := fmt.Sprintf("%s_%04d_%02d", parent, month.Year(), month.Month())
 	partition := pgx.Identifier{partitionName}
 
@@ -105,12 +159,12 @@ func ensureMonthlyPartition(ctx context.Context, pool *pgxpool.Pool, parent stri
 		partition.Sanitize(), pgx.Identifier{parent}.Sanitize(),
 		month.UTC().Format(time.RFC3339), next.UTC().Format(time.RFC3339),
 	)
-	if _, err := pool.Exec(ctx, createSQL); err != nil {
+	if _, err := exec.Exec(ctx, createSQL); err != nil {
 		return fmt.Errorf("postgres: ensure partitions: creating %s: %w", partitionName, err)
 	}
 
 	for _, ddl := range indexDDL(partition) {
-		if _, err := pool.Exec(ctx, ddl); err != nil {
+		if _, err := exec.Exec(ctx, ddl); err != nil {
 			return fmt.Errorf("postgres: ensure partitions: indexing %s: %w", partitionName, err)
 		}
 	}

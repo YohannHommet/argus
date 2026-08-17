@@ -1,5 +1,5 @@
 
-Ç
+à
 š
 
 	host.arch
@@ -16,9 +16,9 @@ os.version#
 claude-code
 
 service.version	
-2.1.228§
+2.1.228À
 +
- com.anthropic.claude_code.events2.1.228÷	@ÆLâTr†* 
+ com.anthropic.claude_code.events2.1.228	@ÆLâTr†* 
 claude_code.assistant_response26
 user.id+
 )user_2d08f881-b576-4c16-9c17-a9fcf4ea22ca24
@@ -35,7 +35,9 @@ $6383f162-1fa3-40ab-8502-fa191193fc802>
 user.account_id+
 )user_74d3f8a2-772d-4bd9-b16c-220015a822242
 terminal.type
-	iTerm.app2"
+	iTerm.app2
+app.entrypoint
+cli2"
 
 event.name
 assistant_response2-

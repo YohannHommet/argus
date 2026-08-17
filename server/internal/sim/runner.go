@@ -64,9 +64,11 @@ func (rn *Runner) RunDemo(ctx context.Context) error {
 		sessions = demoDefaultSessions
 	}
 
+	assignment := demoProjectAssignment(rn.Cfg.Seed, sessions)
+
 	for ordinal := 0; ordinal < sessions; ordinal++ {
 		startOffset := backfillOffset(ordinal, sessions, rn.Cfg.Backfill)
-		project := projects[ordinal%len(projects)]
+		project := assignment[ordinal]
 		result := generateSession(rn.Cfg, clock, ordinal, startOffset, project)
 
 		if isFile {
@@ -93,6 +95,82 @@ func backfillOffset(ordinal, sessions int, backfill time.Duration) time.Duration
 		return 0
 	}
 	return time.Duration(float64(ordinal) / float64(sessions-1) * float64(backfill))
+}
+
+// demoProjectAssignment decides which project each of a demo run's
+// `sessions` ordinals gets: a balanced multiset of the fixed §7.1 project
+// set, permuted by a seed-derived RNG, with ordinal 0 guaranteed
+// logs-capable.
+//
+// It replaces the previous `projects[ordinal%len(projects)]` round robin
+// (ticket W15, "argusd sim --sessions=N undercount"). That cycle put
+// legacy-app — the one project SPEC §7.1 makes metrics-only, so its
+// sessions correctly produce no `sessions` row — at a *fixed* residue
+// (index 4 of 5) depending only on ordinal, never on sessions or seed. So
+// whenever --sessions was a multiple of len(projects), ordinal sessions-1
+// (the run's last session, whose content is otherwise no thinner than any
+// other's — verified: this package's demo path has no time-based emission
+// cutoff, so the ledger's `backfillOffset` theory for the symptom does not
+// hold) landed on that residue 100% of the time, for every seed.
+//
+// Why a permuted balanced multiset rather than an independent per-ordinal
+// draw: an i.i.d. draw fixes the positional bias but replaces it with
+// binomial variance in the *count* of metrics-only sessions, and that count
+// is what decides how many `sessions` rows a demo produces. Measured over
+// 2000 seeds at the previous 25-session default, 34% of seeds yielded fewer
+// than 20 session rows and the worst yielded 15 — against a Phase-4 exit
+// criterion that requires the session list to show at least 20 from a demo
+// run. Raising the default could not close it: even at 36 sessions the tail
+// still dipped to 18. A balanced allocation keeps exactly the share §7.1
+// asks for (one project in five is metrics-only, so a run of N yields
+// ceil(4N/5) session rows) with no variance at all, while the permutation
+// keeps *which* ordinals get it seed-dependent. The demo's data volume
+// becomes a property of N alone, which is what makes it safe to assert on.
+//
+// Ordinal 0 is additionally pinned logs-capable. Two things depend on the
+// run's first session being a real logs session: session.go anchors
+// --chaos-clock-skew's beyond-retention event on `logsOnly &&
+// sessionOrdinal == 0` — "emitted once for the whole run" — so an ordinal 0
+// holding the metrics-only project would silently emit no repro at all for
+// that seed, with nothing failing to say so; and a demo whose very first
+// session contains no events reads as a broken install to whoever is
+// watching it arrive.
+//
+// Determinism: the permutation is driven by sessionRand(seed, 0), a
+// dedicated *rand.Rand instance, so it never perturbs the draw sequence
+// generateSession makes for any ordinal (two independently-constructed
+// rand.Rand values seeded identically advance independently). A single-
+// session run keeps projects[0], so the committed golden fixtures are
+// unaffected.
+func demoProjectAssignment(seed uint64, sessions int) []string {
+	if sessions <= 0 {
+		return nil
+	}
+
+	// Balanced base: exactly the multiset the round robin produced, which is
+	// where the "one in five is metrics-only" share comes from.
+	assignment := make([]string, sessions)
+	for i := range assignment {
+		assignment[i] = projects[i%len(projects)]
+	}
+
+	r := sessionRand(seed, 0)
+	r.Shuffle(len(assignment), func(i, j int) {
+		assignment[i], assignment[j] = assignment[j], assignment[i]
+	})
+
+	if assignment[0] == legacyAppProject {
+		// Swap with the first logs-capable ordinal, preserving the multiset
+		// (and therefore the share) exactly.
+		for i := 1; i < len(assignment); i++ {
+			if assignment[i] != legacyAppProject {
+				assignment[0], assignment[i] = assignment[i], assignment[0]
+				break
+			}
+		}
+	}
+
+	return assignment
 }
 
 // RunLoad implements SPEC §7.2's "--mode=load (--rate=<events/s>

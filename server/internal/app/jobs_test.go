@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 
 	"github.com/YohannHommet/argus/server/internal/store/postgres"
@@ -64,7 +65,7 @@ func TestPartitionJob_TickReachesBackToRetentionHorizon(t *testing.T) {
 // configured local hour, today if still ahead, tomorrow otherwise.
 func TestRetentionJob_NextRun(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	job := NewRetentionJob(nil, logger, 90, 7*24*time.Hour, 4)
+	job := NewRetentionJob(nil, logger, 90, 7*24*time.Hour, 0, 4)
 
 	beforeHour := time.Date(2026, 6, 15, 1, 0, 0, 0, time.UTC)
 	want := time.Date(2026, 6, 15, 4, 0, 0, 0, time.UTC)
@@ -92,7 +93,7 @@ func TestRetentionJob_TickDropsExpiredPartitionAndPrunesDedup(t *testing.T) {
 
 	const retentionRawDays = 90
 	const dedupWindow = 7 * 24 * time.Hour
-	job := NewRetentionJob(st, logger, retentionRawDays, dedupWindow, 4)
+	job := NewRetentionJob(st, logger, retentionRawDays, dedupWindow, 0, 4)
 
 	now := time.Now().UTC()
 	job.now = func() time.Time { return now }
@@ -114,4 +115,67 @@ func TestRetentionJob_TickDropsExpiredPartitionAndPrunesDedup(t *testing.T) {
 	var dedupExists bool
 	require.NoError(t, pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM ingest_dedup WHERE dedup_key = 'retention-job-old-dedup')`).Scan(&dedupExists))
 	require.False(t, dedupExists, "tick must prune the expired ingest_dedup row")
+}
+
+// insertBareSession inserts a minimal `sessions` row directly (no events,
+// no WriteBatch) with the given last_event_at, satisfying only the table's
+// NOT NULL columns — enough for RetentionJob.tick's session-delete step,
+// which only reads last_event_at.
+func insertBareSession(t *testing.T, pool *pgxpool.Pool, id string, lastEventAt time.Time) {
+	t.Helper()
+	_, err := pool.Exec(context.Background(),
+		`INSERT INTO sessions (id, first_seen_at, last_event_at) VALUES ($1, $2, $2)`, id, lastEventAt)
+	require.NoError(t, err)
+}
+
+// TestRetentionJob_TickDeletesExpiredSessionsWhenEnabled pins the m11 fix's
+// wiring into the job: with ARGUS_RETENTION_SESSION_DAYS > 0, tick deletes a
+// session whose last_event_at is older than that horizon and leaves a
+// recent one alone.
+func TestRetentionJob_TickDeletesExpiredSessionsWhenEnabled(t *testing.T) {
+	pool := storetesting.NewPool(t)
+	st := postgres.New(pool)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	ctx := context.Background()
+
+	const sessionRetentionDays = 30
+	job := NewRetentionJob(st, logger, 90, 7*24*time.Hour, sessionRetentionDays, 4)
+
+	now := time.Now().UTC()
+	job.now = func() time.Time { return now }
+
+	insertBareSession(t, pool, "session-retention-job-old", now.AddDate(0, 0, -sessionRetentionDays-1))
+	insertBareSession(t, pool, "session-retention-job-recent", now.AddDate(0, 0, -1))
+
+	job.tick(ctx)
+
+	var oldExists, recentExists bool
+	require.NoError(t, pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM sessions WHERE id = 'session-retention-job-old')`).Scan(&oldExists))
+	require.False(t, oldExists, "tick must delete a session older than ARGUS_RETENTION_SESSION_DAYS")
+	require.NoError(t, pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM sessions WHERE id = 'session-retention-job-recent')`).Scan(&recentExists))
+	require.True(t, recentExists, "tick must leave a session within the horizon untouched")
+}
+
+// TestRetentionJob_TickSkipsSessionDeleteWhenDisabled pins the documented
+// "0 = never" meaning of ARGUS_RETENTION_SESSION_DAYS (SPEC §3.7): with the
+// default 0, tick must not delete even a very old session — 0 must not be
+// silently treated as "cutoff = now" (which would delete everything).
+func TestRetentionJob_TickSkipsSessionDeleteWhenDisabled(t *testing.T) {
+	pool := storetesting.NewPool(t)
+	st := postgres.New(pool)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	ctx := context.Background()
+
+	job := NewRetentionJob(st, logger, 90, 7*24*time.Hour, 0, 4)
+
+	now := time.Now().UTC()
+	job.now = func() time.Time { return now }
+
+	insertBareSession(t, pool, "session-retention-job-ancient", now.AddDate(-1, 0, 0))
+
+	job.tick(ctx)
+
+	var exists bool
+	require.NoError(t, pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM sessions WHERE id = 'session-retention-job-ancient')`).Scan(&exists))
+	require.True(t, exists, "ARGUS_RETENTION_SESSION_DAYS=0 must mean never delete sessions")
 }

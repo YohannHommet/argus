@@ -29,6 +29,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"runtime"
 	"testing"
 	"time"
 
@@ -127,8 +128,19 @@ func TestE2E_Phase2ExitCriteria(t *testing.T) {
 	// --- Exit criterion 7: depth-2 subagents with a non-null parent,
 	// cost_usd NULL on every row (SPEC §1.9: never fabricated), non-null
 	// tool_call_count where hook coverage exists.
-	depth2 := scalarInt(t, pool, `SELECT count(*) FROM subagents WHERE depth = 2 AND parent_agent_id IS NOT NULL`)
-	require.Positive(t, depth2, "expected at least one depth-2 subagent with a non-null parent_agent_id (needs enough sessions - see P2-13 brief finding 4)")
+	// Eventually, not a bare read: waitForIngestQuiescence above settles on
+	// the `events` count alone, and a depth-2 subagent needs the *hook*
+	// SubagentStart carrying a non-empty parent_agent_id. Hooks arrive on
+	// their own HTTP path and land in their own batches, so the events count
+	// can go quiet in a lull while the batch holding the last SubagentStart
+	// is still in flight — observed as a flaky "0 is not positive" here, in
+	// the full-suite run only, while the same test passed in isolation. The
+	// assertion is unchanged in strength (still: at least one such row); it
+	// is only allowed to wait for the row it is asserting about.
+	require.Eventually(t, func() bool {
+		return scalarInt(t, pool, `SELECT count(*) FROM subagents WHERE depth = 2 AND parent_agent_id IS NOT NULL`) > 0
+	}, e2eDrainTimeout, 100*time.Millisecond,
+		"expected at least one depth-2 subagent with a non-null parent_agent_id (needs enough sessions - see P2-13 brief finding 4)")
 	costNotNull := scalarInt(t, pool, `SELECT count(*) FROM subagents WHERE cost_usd IS NOT NULL`)
 	require.Zero(t, costNotNull, "cost_usd must be NULL on every subagent row (SPEC §1.9: Claude Code emits no per-agent cost)")
 	toolCallCountKnown := scalarInt(t, pool, `SELECT count(*) FROM subagents WHERE tool_call_count IS NOT NULL`)
@@ -220,6 +232,15 @@ func newE2EApp(t *testing.T, opts ...Option) (*App, string, *pgxpool.Pool) {
 	require.Empty(t, warnings)
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	// Default every App this helper builds onto its own Prometheus registry,
+	// while still letting an explicit opts entry override it. The ingest
+	// pipeline's metric names collide on prometheus.DefaultRegisterer, and
+	// that collision *panics* rather than failing an assertion — so the
+	// second e2e test in a binary to forget WithRegisterer takes the whole
+	// run down with a stack trace that says nothing about the real cause.
+	// Three separate tests hit this before it was defaulted here; making the
+	// safe choice the default is what stops a fourth.
+	opts = append([]Option{WithRegisterer(prometheus.NewRegistry())}, opts...)
 	a, err := New(ctx, cfg, logger, opts...)
 	require.NoError(t, err)
 
@@ -449,10 +470,14 @@ func runChaosDuplicates(t *testing.T, a *App, pool *pgxpool.Pool, baseURL string
 	require.True(t, report.AllOK())
 
 	ceiling := before + report.HookEvents
+	floor := before + report.HookEvents/2
 	lastSeen := waitForQuiescentCount(t, pool, a, `SELECT count(*) FROM events WHERE source = 'hook'`)
 	require.LessOrEqual(t, lastSeen, ceiling,
 		"expected the ~3%% byte-identical hook resends to never inflate the stored row count beyond the sim's own logical event count; before=%d reportHookEvents=%d",
 		before, report.HookEvents)
+	require.GreaterOrEqual(t, lastSeen, floor,
+		"expected at most half of the sim's reported hook events to have been suppressed as duplicates; a regression that dropped hook events entirely would satisfy the <= ceiling above but not this floor; before=%d reportHookEvents=%d lastSeen=%d",
+		before, report.HookEvents, lastSeen)
 
 	_, dedupedAfter, _ := readIngestMetrics(a)
 	require.Greater(t, dedupedAfter, dedupedBefore, "expected argus_ingest_deduped_total to grow: --chaos-duplicates resent >=1 hook payload byte-identically across 10 sessions")
@@ -691,6 +716,19 @@ func runLoadCapacityCheck(t *testing.T) {
 	}
 	baseURL := "http://" + a.Addr()
 
+	// "RSS stays bounded" half of exit criterion 9: sampled as HeapSys
+	// growth across the burst, not live HeapAlloc (M17's exact trap — live
+	// heap can shrink between the two GCs for reasons unrelated to whether
+	// memory was bounded, and an implementation that buffered the whole
+	// burst before dropping it would register no growth by the time GC
+	// runs). HeapSys is the memory obtained from the OS for the heap; Go
+	// does not hand it back eagerly, so it is monotonic across a burst this
+	// short and reflects how much was actually allocated to serve/shed it,
+	// not how much survived to be counted live.
+	runtime.GC()
+	var memBefore runtime.MemStats
+	runtime.ReadMemStats(&memBefore)
+
 	_, _, code, report := runSim(t, []string{
 		"--mode=load",
 		"--rate=200",
@@ -698,6 +736,19 @@ func runLoadCapacityCheck(t *testing.T) {
 		"--duration=3s",
 		"--target=" + baseURL,
 	})
+
+	runtime.GC()
+	var memAfter runtime.MemStats
+	runtime.ReadMemStats(&memAfter)
+	// A queue this tiny (ARGUS_INGEST_QUEUE=1, one worker, batch size 1)
+	// under a 200req/s*8conn*3s burst should shed almost everything via
+	// ErrQueueFull rather than buffer it; heapGrowthCeiling gives ample
+	// slack over normal per-request allocation (parsing, JSON error bodies)
+	// while still failing loudly if load-shedding stopped bounding memory
+	// and the server started buffering the burst instead of rejecting it.
+	const heapGrowthCeiling = 64 << 20
+	require.Less(t, int64(memAfter.HeapSys)-int64(memBefore.HeapSys), int64(heapGrowthCeiling),
+		"expected the ingest server's heap to stay bounded while shedding an over-capacity burst, not grow with it")
 
 	var saw429, saw503 bool
 	for status := range report.StatusHistogram {

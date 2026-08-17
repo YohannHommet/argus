@@ -3,6 +3,7 @@ package httpapi
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -69,11 +70,11 @@ func contains[T comparable](values []T, want T) bool {
 
 // mountAnalyticsRoutes attaches the four analytics read routes this ticket
 // owns (SPEC §4.2).
-func mountAnalyticsRoutes(r chi.Router, reader AnalyticsReader) {
-	r.Get("/analytics/summary", getAnalyticsSummaryHandler(reader))
-	r.Get("/analytics/timeseries", getAnalyticsTimeseriesHandler(reader))
-	r.Get("/analytics/breakdown", getAnalyticsBreakdownHandler(reader))
-	r.Get("/analytics/decisions", getAnalyticsDecisionsHandler(reader))
+func mountAnalyticsRoutes(r chi.Router, reader AnalyticsReader, logger *slog.Logger) {
+	r.Get("/analytics/summary", getAnalyticsSummaryHandler(reader, logger))
+	r.Get("/analytics/timeseries", getAnalyticsTimeseriesHandler(reader, logger))
+	r.Get("/analytics/breakdown", getAnalyticsBreakdownHandler(reader, logger))
+	r.Get("/analytics/decisions", getAnalyticsDecisionsHandler(reader, logger))
 }
 
 // parseAnalyticsFilter binds the `from`/`to`/`project`/`model`/`vendor`/
@@ -110,7 +111,7 @@ func writeNotAttributable(w http.ResponseWriter, r *http.Request, detail string)
 // §4.3). No parameter here is Argus-invented-and-closed (source is
 // permissive, see parseAnalyticsFilter), so the only 400s are
 // parseTimeWindow's.
-func getAnalyticsSummaryHandler(reader AnalyticsReader) http.HandlerFunc {
+func getAnalyticsSummaryHandler(reader AnalyticsReader, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		f, err := parseAnalyticsFilter(r)
 		if err != nil {
@@ -119,7 +120,7 @@ func getAnalyticsSummaryHandler(reader AnalyticsReader) http.HandlerFunc {
 		}
 		summary, err := query.AnalyticsSummary(r.Context(), reader, f)
 		if err != nil {
-			writeProblem(w, r, http.StatusInternalServerError, "internal", err.Error())
+			writeInternalError(w, r, logger, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, summary)
@@ -131,7 +132,7 @@ func getAnalyticsSummaryHandler(reader AnalyticsReader) http.HandlerFunc {
 // are validated here and 400 with the allowed-values list on a miss; `
 // group_by`/`limit_series` are permissive/clamped at the store layer, same
 // reasoning as `source`.
-func getAnalyticsTimeseriesHandler(reader AnalyticsReader) http.HandlerFunc {
+func getAnalyticsTimeseriesHandler(reader AnalyticsReader, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 
@@ -176,7 +177,7 @@ func getAnalyticsTimeseriesHandler(reader AnalyticsReader) http.HandlerFunc {
 				writeNotAttributable(w, r, fmt.Sprintf("metric=%s is not attributable under a model filter", metric))
 				return
 			}
-			writeProblem(w, r, http.StatusInternalServerError, "internal", err.Error())
+			writeInternalError(w, r, logger, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, series)
@@ -187,7 +188,7 @@ func getAnalyticsTimeseriesHandler(reader AnalyticsReader) http.HandlerFunc {
 // (SPEC §4.3): `dimension` (required, closed) and `metric` (optional,
 // closed) are validated here and 400 with the allowed-values list on a
 // miss.
-func getAnalyticsBreakdownHandler(reader AnalyticsReader) http.HandlerFunc {
+func getAnalyticsBreakdownHandler(reader AnalyticsReader, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 
@@ -231,7 +232,7 @@ func getAnalyticsBreakdownHandler(reader AnalyticsReader) http.HandlerFunc {
 				writeNotAttributable(w, r, fmt.Sprintf("dimension=%s is not attributable under a model filter", dimension))
 				return
 			}
-			writeProblem(w, r, http.StatusInternalServerError, "internal", err.Error())
+			writeInternalError(w, r, logger, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, breakdown)
@@ -240,7 +241,7 @@ func getAnalyticsBreakdownHandler(reader AnalyticsReader) http.HandlerFunc {
 
 // getAnalyticsDecisionsHandler implements GET /api/v1/analytics/decisions
 // (SPEC §4.3): only `from`/`to`/`project`, none of them closed.
-func getAnalyticsDecisionsHandler(reader AnalyticsReader) http.HandlerFunc {
+func getAnalyticsDecisionsHandler(reader AnalyticsReader, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		from, to, err := parseTimeWindow(r)
 		if err != nil {
@@ -251,7 +252,7 @@ func getAnalyticsDecisionsHandler(reader AnalyticsReader) http.HandlerFunc {
 
 		matrix, err := query.AnalyticsDecisions(r.Context(), reader, f)
 		if err != nil {
-			writeProblem(w, r, http.StatusInternalServerError, "internal", err.Error())
+			writeInternalError(w, r, logger, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, matrix)

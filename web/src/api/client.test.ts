@@ -109,6 +109,24 @@ describe('unwrap()', () => {
     await expect(call).rejects.not.toBeInstanceOf(ApiError)
   })
 
+  it('maps a bodyless 502 (no Content-Length, empty body) to a status-based ApiError', async () => {
+    // openapi-fetch 0.17.0 resolves `{ error: undefined, response }` when a
+    // non-2xx response has no parseable body — a proxy/LB 502 is the
+    // realistic shape (SPEC §4.1 error bodies are all argusd-authored
+    // problem+json; a 502 never reaches argusd). Regression coverage for
+    // m20: branching on `error !== undefined` let this resolve as if it
+    // had succeeded.
+    const fetchMock = vi.fn(
+      async () => new Response(null, { status: 502, headers: { 'Content-Length': '0' } }),
+    )
+    const client = createApiClient({ fetch: fetchMock, baseUrl: TEST_BASE_URL })
+
+    const call = unwrap(client.GET('/api/v1/sessions', {}))
+
+    await expect(call).rejects.toBeInstanceOf(ApiError)
+    await expect(call).rejects.toMatchObject({ status: 502 })
+  })
+
   it('attaches the configured bearer token, never a hardcoded one', async () => {
     let seenAuthHeader: string | null = null
     const fetchMock = vi.fn(

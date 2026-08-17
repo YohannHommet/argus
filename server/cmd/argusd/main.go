@@ -7,12 +7,19 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/knadh/koanf/parsers/yaml"
+	"github.com/knadh/koanf/providers/confmap"
+	"github.com/knadh/koanf/providers/env/v2"
+	"github.com/knadh/koanf/providers/file"
+	"github.com/knadh/koanf/v2"
 
 	"github.com/YohannHommet/argus/server/internal/app"
 	"github.com/YohannHommet/argus/server/internal/config"
@@ -32,7 +39,7 @@ Commands:
   prices                  Manage the model price table
   config                  Print or document the effective configuration
   version                 Print version, commit, and Go runtime info
-  healthcheck             Check /healthz on the configured HTTP listener (exit 0/1)
+  healthcheck             Check /healthz or /readyz on the configured HTTP listener (--endpoint, exit 0/1)
 `
 
 func main() {
@@ -291,16 +298,32 @@ func runRetention(args []string) int {
 	return 0
 }
 
-// runRebuildProjections implements `argusd rebuild-projections [--from-ts …]`
-// (SPEC §1.6, §3.8, P3-10). --from-ts (RFC 3339) seeds a *fresh* rebuild's
-// starting point and defaults to the zero time (replay every event ever
-// stored); it is ignored when postgres.Store.RebuildProjections finds an
-// in-progress watermark in job_state and resumes an interrupted rebuild
-// instead (see rebuild.go's package doc).
+// runRebuildProjections implements `argusd rebuild-projections [--from-ts …]
+// [--force]` (SPEC §1.6, §3.8, P3-10). --from-ts (RFC 3339) selects every
+// session with at least one event at or after it, and rebuilds each of those
+// sessions from its own true start — NOT literally "replay events from this
+// point forward" — because a session that straddles --from-ts (started
+// before it, still active at/after it) can only be reconstructed correctly
+// from its full history; see postgres/rebuild.go's package doc (M12) for why.
+// --from-ts defaults to the zero time (rebuild every session, unscoped —
+// this file's original, always-safe full-rebuild behaviour). --force
+// overrides the M12 safety refusal that fires when --from-ts predates the
+// oldest surviving events partition (raw events before that point may
+// already be gone, SPEC §2.4 retention, so the "full session history" this
+// rebuilds from may itself be incomplete).
+//
+// Resuming an interrupted rebuild: RebuildProjectionsForce recomputes the
+// affected-session set from --from-ts on every call (job_state's watermark
+// only stores (ts, seq), not the original --from-ts — see the package doc)
+// — so an operator resuming a scoped (--from-ts != "") rebuild MUST
+// re-supply the exact same --from-ts used to start it, or the resumed call
+// computes a different session set against an already-partially-rebuilt
+// database and produces inconsistent results.
 func runRebuildProjections(args []string) int {
 	fs := flag.NewFlagSet("rebuild-projections", flag.ContinueOnError)
 	configPath := fs.String("config", "", "path to an optional YAML config file")
-	fromTSFlag := fs.String("from-ts", "", "RFC 3339 timestamp to replay from on a fresh rebuild (default: the beginning of time); ignored when resuming an interrupted rebuild")
+	fromTSFlag := fs.String("from-ts", "", "RFC 3339 timestamp; rebuilds every session active at/after it, in full, from that session's own start (default: every session — a full rebuild). Re-supply the SAME value to resume an interrupted rebuild.")
+	force := fs.Bool("force", false, "proceed even if --from-ts predates the oldest surviving events partition (some raw history may already be gone)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -329,10 +352,13 @@ func runRebuildProjections(args []string) int {
 	}
 	defer pool.Close()
 
-	if err := postgres.New(pool).RebuildProjections(ctx, fromTS); err != nil {
+	report, err := postgres.New(pool).RebuildProjectionsForce(ctx, fromTS, *force)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "argusd: rebuild-projections: %v\n", err)
 		return 1
 	}
+	fmt.Printf("argusd: rebuild-projections: destroyed and rebuilt %d session(s), %d turn(s), %d tool_call(s), %d subagent(s)\n",
+		report.Sessions, report.Turns, report.ToolCalls, report.Subagents)
 	fmt.Println("argusd: rebuild-projections: complete")
 	return 0
 }
@@ -378,21 +404,47 @@ func runServe(args []string) int {
 	return 0
 }
 
+// runHealthcheck implements `argusd healthcheck [--endpoint=<healthz|readyz>]`
+// (m35, m36, m37; the compose healthcheck contract, SPEC §3.8). --endpoint
+// defaults to "healthz" (liveness only, ops.go's healthzHandler: no DB, no
+// migrations, no queue check) so existing invocations keep their current
+// meaning; "readyz" hits the full SPEC §3.8 readiness contract instead — the
+// compose-side half of m37 (gating `condition: service_healthy` dependents,
+// e.g. `sim`, on real readiness) is a separate ticket's deploy/docker-
+// compose.yml change, wired against exactly this flag name.
 func runHealthcheck(args []string) int {
 	fs := flag.NewFlagSet("healthcheck", flag.ContinueOnError)
 	configPath := fs.String("config", "", "path to an optional YAML config file")
 	timeout := fs.Duration("timeout", 2*time.Second, "request timeout")
+	endpoint := fs.String("endpoint", "healthz", "which endpoint to probe: healthz (liveness) or readyz (full SPEC §3.8 readiness)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 
-	cfg, _, err := config.Load(*configPath)
+	switch *endpoint {
+	case "healthz", "readyz":
+	default:
+		fmt.Fprintf(os.Stderr, "argusd: healthcheck: invalid --endpoint %q (want healthz or readyz)\n", *endpoint)
+		return 2
+	}
+
+	// m35: resolve ONLY ARGUS_HTTP_ADDR, not the full config.Load, which
+	// errors when ARGUS_DATABASE_URL is unset (config.go's `required:"true"`
+	// tag) even though a healthcheck never touches the database. A
+	// YAML-configured deployment with no DSN visible to this short-lived
+	// process would otherwise report permanently unhealthy while the server
+	// itself is fine. internal/config/config.go is owned by another ticket
+	// and offers no way to skip just that validation, so this resolves the
+	// one field it needs itself, using the same koanf precedence order
+	// (defaults -> optional YAML file -> ARGUS_-prefixed env, env wins)
+	// config.Load already implements.
+	addr, err := healthcheckHTTPAddr(*configPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "argusd: %v\n", err)
+		fmt.Fprintf(os.Stderr, "argusd: healthcheck: %v\n", err)
 		return 1
 	}
 
-	url := healthURL(cfg.HTTPAddr)
+	url := healthURL(addr, *endpoint)
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
 
@@ -416,18 +468,67 @@ func runHealthcheck(args []string) int {
 	return 0
 }
 
-// healthURL turns an ARGUS_HTTP_ADDR listen address (e.g. ":8080",
-// "0.0.0.0:8080", "localhost:8080") into a loopback URL for the healthcheck
-// subcommand to hit, since the address itself may not be dialable (":8080"
-// binds all interfaces but isn't a valid dial target).
-func healthURL(addr string) string {
-	host, port, ok := strings.Cut(addr, ":")
-	if !ok {
-		port = addr
-		host = ""
+// defaultHTTPAddrForHealthcheck must track config.go's Config.HTTPAddr
+// struct tag (`default:":8080"`) — duplicated here rather than imported
+// because healthcheckHTTPAddr exists specifically to bypass config.Load
+// (m35), so it cannot pull the default from a resolved Config either.
+const defaultHTTPAddrForHealthcheck = ":8080"
+
+// healthcheckHTTPAddr resolves ARGUS_HTTP_ADDR the same way config.Load
+// merges it (defaults -> optional YAML file at configPath -> ARGUS_-prefixed
+// environment, env wins) but skips every other field and config.Load's
+// required-key validation entirely (m35: internal/config/config.go is owned
+// by another ticket and has no validation-skipping entry point, so this
+// duplicates just enough of Load's merge order — using the same koanf
+// building blocks config.go already depends on — for the one field the
+// healthcheck subcommand needs).
+func healthcheckHTTPAddr(configPath string) (string, error) {
+	const key = "http_addr"
+
+	k := koanf.New(".")
+	if err := k.Load(confmap.Provider(map[string]any{key: defaultHTTPAddrForHealthcheck}, "."), nil); err != nil {
+		return "", fmt.Errorf("loading default %s: %w", key, err)
 	}
-	if host == "" || host == "0.0.0.0" {
+	if configPath != "" {
+		if err := k.Load(file.Provider(configPath), yaml.Parser()); err != nil {
+			return "", fmt.Errorf("loading %s: %w", configPath, err)
+		}
+	}
+	if err := k.Load(env.Provider(".", env.Opt{
+		Prefix: "ARGUS_",
+		TransformFunc: func(k, v string) (string, any) {
+			return strings.ToLower(strings.TrimPrefix(k, "ARGUS_")), v
+		},
+	}), nil); err != nil {
+		return "", fmt.Errorf("loading environment: %w", err)
+	}
+	return k.String(key), nil
+}
+
+// healthURL turns an ARGUS_HTTP_ADDR listen address (e.g. ":8080",
+// "0.0.0.0:8080", "[::]:8080", "localhost:8080") into a loopback URL for the
+// healthcheck subcommand to hit, since the address itself may not be
+// dialable (":8080" binds all interfaces but isn't a valid dial target).
+//
+// m36: the pre-fix version split on the FIRST colon (strings.Cut), which
+// mis-parses any bracketed IPv6 form — "[::]:8080" yields host "[" and port
+// "]:8080", producing a URL http.NewRequestWithContext never rejects but
+// that can never actually connect, so the healthcheck always failed for that
+// (valid, net.Listen-accepted) address. net.SplitHostPort/net.JoinHostPort
+// parse and re-quote bracketed IPv6 correctly; "::" (the unspecified IPv6
+// address, ARGUS_HTTP_ADDR's IPv6 equivalent of "0.0.0.0") is mapped to
+// localhost alongside the existing "" and "0.0.0.0" cases.
+func healthURL(addr, endpoint string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		// addr has no colon net.SplitHostPort recognises as a host/port
+		// delimiter (e.g. a bare port with no leading ':', which net.Listen
+		// itself would already have rejected) — best-effort fallback
+		// matching the pre-m36 behaviour for this unreachable-in-practice case.
+		host, port = "", addr
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
 		host = "localhost"
 	}
-	return fmt.Sprintf("http://%s:%s/healthz", host, port)
+	return fmt.Sprintf("http://%s/%s", net.JoinHostPort(host, port), endpoint)
 }

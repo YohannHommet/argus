@@ -8,7 +8,8 @@ LDFLAGS := -s -w \
 	-X github.com/YohannHommet/argus/server/internal/telemetry.Version=$(VERSION) \
 	-X github.com/YohannHommet/argus/server/internal/telemetry.Commit=$(COMMIT)
 
-.PHONY: help dev build test lint ci gen migrate sim compose-up compose-smoke \
+.PHONY: help dev build test test-fast lint type-check openapi-check ci gen migrate sim \
+	compose-up compose-smoke \
 	check-server check-web check-migrations check-compose check-smoke
 
 help: ## Show this list of targets
@@ -48,15 +49,29 @@ build: check-server check-web ## Build the argusd binary and the web assets
 	mkdir -p bin
 	cd server && CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o ../bin/argusd ./cmd/argusd
 
-test: check-server check-web ## Run the Go test suite and the web unit tests
+test: check-server check-web ## Run the CI-equivalent test suite: Go -tags=e2e -race + coverage floor, web unit --coverage (see .github/workflows/ci.yml go-test/web)
+	cd server && go test -tags=e2e -race -covermode=atomic -coverprofile=cover.out ./...
+	cd server && ../scripts/coverage-floor.sh cover.out ../scripts/coverage-floors.txt
+	cd web && pnpm unit --coverage
+
+test-fast: check-server check-web ## Fast inner-loop test run: no -race, no -tags=e2e (skips the e2e suites), no coverage floor
 	cd server && go test ./...
 	cd web && pnpm unit
 
-lint: check-server check-web ## Lint the Go code and the web code
+lint: check-server check-web ## Lint the Go code (golangci-lint + gofmt) and the web code
 	cd server && golangci-lint run ./...
+	cd server && unformatted="$$(gofmt -l .)"; if [ -n "$$unformatted" ]; then echo "The following files are not gofmt-formatted:"; echo "$$unformatted"; exit 1; fi
 	cd web && pnpm lint
 
-ci: lint test build ## Local equivalent of the CI pipeline (lint + test + build, both stacks)
+type-check: check-web ## Type-check the web app (vue-tsc)
+	cd web && pnpm type-check
+
+openapi-check: check-server check-web ## Validate the OpenAPI spec and fail if the generated TS client is stale (see .github/workflows/ci.yml openapi)
+	cd server && go run ./internal/tools/specvalidate
+	cd web && pnpm gen:api
+	cd web && git diff --exit-code src/api/schema.d.ts
+
+ci: lint type-check test build openapi-check ## Local equivalent of the CI pipeline (go-lint, web type-check, go-test+web-unit w/ coverage, build, openapi)
 
 gen: check-migrations check-web ## Generate sqlc code and the TS API client
 	cd server && sqlc generate

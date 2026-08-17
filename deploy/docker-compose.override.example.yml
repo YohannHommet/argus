@@ -14,17 +14,18 @@ services:
       ARGUS_RETENTION_RAW_DAYS: "90"
       ARGUS_RETENTION_SESSION_DAYS: "30"
 
-  # One-shot traffic simulator. SPEC §3.8 names the `sim` subcommand; it is
-  # still a stub in Phase 1 (`argusd sim` prints "not implemented yet" and
-  # exits 1) — this service previews the Phase-4 shape and is safe to leave
-  # in place: `docker compose up sim` will just exit 1 until then.
+  # One-shot traffic simulator (SPEC §3.8's `sim` subcommand, wired for real
+  # since main.go). It POSTs to the already-running argusd container over
+  # the compose network rather than touching Postgres itself, so it needs
+  # --target pointed at argusd's in-network address, not the CLI's
+  # http://localhost:8080 default (sim/cli.go), which is unreachable from
+  # this container. See scripts/smoke.sh for the same pattern run via `exec`
+  # instead of a separate container.
   sim:
     image: ghcr.io/yohannhommet/argus:latest
     depends_on:
       argusd:
         condition: service_healthy
-    environment:
-      ARGUS_DATABASE_URL: postgres://argus:argus@postgres:5432/argus?sslmode=disable
     entrypoint: ["/argusd"]
-    command: ["sim"]
+    command: ["sim", "--mode=demo", "--target=http://argusd:8080"]
     restart: "no"

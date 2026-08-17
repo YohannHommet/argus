@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"sync"
 	"time"
@@ -54,16 +55,16 @@ func (c *facetsCache) get(ctx context.Context, reader query.QualityReader) (mode
 
 // mountFacetRoutes attaches GET /api/v1/facets (SPEC §4.2), wiring one
 // facetsCache instance shared by every request through this mount.
-func mountFacetRoutes(r chi.Router, reader AnalyticsReader) {
+func mountFacetRoutes(r chi.Router, reader AnalyticsReader, logger *slog.Logger) {
 	cache := &facetsCache{}
-	r.Get("/facets", getFacetsHandler(reader, cache))
+	r.Get("/facets", getFacetsHandler(reader, cache, logger))
 }
 
-func getFacetsHandler(reader query.QualityReader, cache *facetsCache) http.HandlerFunc {
+func getFacetsHandler(reader query.QualityReader, cache *facetsCache, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		facets, err := cache.get(r.Context(), reader)
 		if err != nil {
-			writeProblem(w, r, http.StatusInternalServerError, "internal", err.Error())
+			writeInternalError(w, r, logger, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, facets)

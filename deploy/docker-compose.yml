@@ -39,11 +39,25 @@ services:
     ports:
       - "${ARGUS_HTTP_PORT:-8080}:8080"
     healthcheck:
-      test: ["CMD", "/argusd", "healthcheck"]
+      # --endpoint=readyz (SPEC §3.8): unlike /healthz, /readyz checks DB
+      # connectivity, migrations, and queue saturation, so
+      # `condition: service_healthy` dependents (the shipped `sim` example)
+      # don't start against a container that's up but not actually usable.
+      # start_period gives the DB-ping/migrations checks room during cold
+      # start before failures count against `retries`.
+      test: ["CMD", "/argusd", "healthcheck", "--endpoint=readyz"]
       interval: 5s
       timeout: 5s
       retries: 20
-    restart: unless-stopped
+      start_period: 30s
+    # 40s: today's ARGUS_SHUTDOWN_GRACE is 15s (config.go), but another
+    # ticket is splitting serve.go's HTTP-shutdown and ingest-drain into
+    # separate budgets that each get the full grace instead of sharing it,
+    # so worst-case shutdown becomes ~2x15s = ~30s. Assumed "roughly 2x"
+    # means up to ~30s worst case and picked 40s for real headroom above
+    # that (not just above today's single-budget 15s), so SIGKILL only ever
+    # hits a shutdown that's actually stuck, not a slow-but-normal drain.
+    stop_grace_period: 40s
 
 volumes:
   argus-pgdata:

@@ -29,3 +29,11 @@ github.com/YohannHommet/argus/server/internal/ingest/otlp 91.0
 github.com/YohannHommet/argus/server/internal/ingest/hooks 84.0
 github.com/YohannHommet/argus/server/internal/ingest/normalize 90.0
 github.com/YohannHommet/argus/server/internal/sim 85.0
+# internal/pricing (D-20's designated specification of cost arithmetic) had
+# no floor at all until m23, so its tests could be deleted without any gate
+# going red. Measured at 100.0% via `go test -coverprofile` on this package
+# alone (server/internal/pricing/pricing.go's four functions are all
+# covered); floored at 95.0, the same round-down-below-measured convention
+# the lines above use, so an unrelated refactor cannot redden CI on a
+# rounding error while a deleted test still does.
+github.com/YohannHommet/argus/server/internal/pricing 95.0

@@ -53,12 +53,20 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
  * `AbortError` — it never reaches this function's error branch, since
  * `fetch` itself throws before a response exists to build an ApiError
  * from.
+ *
+ * Branches on `response.ok`, not on `error !== undefined`: openapi-fetch
+ * 0.17.0 resolves with `{ error: undefined, response }` for a non-2xx
+ * response with no parseable body (204, HEAD, `Content-Length: 0`), so
+ * checking `error` alone would let a failed request through as if it had
+ * succeeded. `toApiError` already falls back to a status-based Problem
+ * when the body isn't one (errors.ts's `isProblem`), so it's safe to call
+ * unconditionally on the failure path.
  */
 export async function unwrap<T>(
   promise: Promise<{ data?: T; error?: unknown; response: Response }>,
 ): Promise<T> {
   const { data, error, response } = await promise
-  if (error !== undefined) {
+  if (!response.ok) {
     throw toApiError(error, response)
   }
   return data as T

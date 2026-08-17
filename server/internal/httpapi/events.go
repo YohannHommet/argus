@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -11,6 +12,13 @@ import (
 	"github.com/YohannHommet/argus/server/internal/query"
 	"github.com/YohannHommet/argus/server/internal/store"
 )
+
+// validSortOrders is SPEC §4.3's closed `order` vocabulary ("order=asc|
+// desc"), shared by GET /api/v1/events and GET
+// /api/v1/sessions/{id}/timeline (sessions.go's getSessionTimelineHandler)
+// — same closed-vocabulary-needs-a-400 reasoning as sessions.go's
+// validSessionSorts (m1 audit finding).
+var validSortOrders = []store.SortOrder{store.OrderAsc, store.OrderDesc}
 
 // timelineEvent is the wire shape SPEC §4.3/openapi.yaml's TimelineEvent
 // schema declares, adapted from model.Event. It cannot be model.Event
@@ -133,20 +141,25 @@ func derefInt64(p *int64) int64 {
 
 // mountEventRoutes attaches the cross-session event routes this ticket
 // owns.
-func mountEventRoutes(r chi.Router, reader Reader) {
-	r.Get("/events", listEventsHandler(reader))
-	r.Get("/events/{ref}", getEventHandler(reader))
+func mountEventRoutes(r chi.Router, reader Reader, logger *slog.Logger) {
+	r.Get("/events", listEventsHandler(reader, logger))
+	r.Get("/events/{ref}", getEventHandler(reader, logger))
 }
 
 // listEventsHandler implements GET /api/v1/events (SPEC §4.3): the
 // cross-session counterpart of getSessionTimelineHandler, sharing
 // query.ListEvents/timelineEvent via store.EventFilter.SessionID == "".
-func listEventsHandler(reader Reader) http.HandlerFunc {
+func listEventsHandler(reader Reader, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		order := store.OrderAsc
 		if raw := q.Get("order"); raw != "" {
 			order = store.SortOrder(raw)
+			if !contains(validSortOrders, order) {
+				writeProblem(w, r, http.StatusBadRequest, "invalid-parameter",
+					"order must be one of "+joinStrings(validSortOrders))
+				return
+			}
 		}
 		page, err := bindLimitAndCursor(r, string(order))
 		if err != nil {
@@ -179,7 +192,7 @@ func listEventsHandler(reader Reader) http.HandlerFunc {
 
 		res, err := query.ListEvents(r.Context(), reader, f, page)
 		if err != nil {
-			writeProblem(w, r, http.StatusInternalServerError, "internal", err.Error())
+			writeListStoreError(w, r, logger, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, timelineListResponse{Data: mapTimelineEvents(res.Events), Page: pageInfoFrom(res.Page)})
@@ -189,7 +202,7 @@ func listEventsHandler(reader Reader) http.HandlerFunc {
 // getEventHandler implements GET /api/v1/events/{ref} (SPEC §4.1, §4.3): a
 // `ref` that does not decode is 400 urn:argus:error:invalid-event-ref; a
 // well-formed `ref` naming no row is 404.
-func getEventHandler(reader Reader) http.HandlerFunc {
+func getEventHandler(reader Reader, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		raw := chi.URLParam(r, "ref")
 		ref, err := model.DecodeEventRef(raw)
@@ -204,7 +217,7 @@ func getEventHandler(reader Reader) http.HandlerFunc {
 				writeProblem(w, r, http.StatusNotFound, "not-found", "no such resource")
 				return
 			}
-			writeProblem(w, r, http.StatusInternalServerError, "internal", err.Error())
+			writeInternalError(w, r, logger, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, eventDetail{timelineEvent: newTimelineEvent(*event), Attrs: event.Attrs})

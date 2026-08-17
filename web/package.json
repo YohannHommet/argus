@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "unit": "cross-env NODE_OPTIONS=--no-experimental-webstorage vitest run",
+    "unit": "vitest run",
     "type-check": "vue-tsc --build --force",
     "lint": "eslint .",
     "gen:api": "openapi-typescript ../server/api/openapi.yaml -o src/api/schema.d.ts"
