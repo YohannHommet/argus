@@ -38,6 +38,25 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html'],
+      // What the gate is allowed to measure. Both entries below remove code
+      // that was never meant to be under an Argus coverage bar; neither
+      // relaxes the bar itself.
+      //
+      // - `src/components/ui/**` is shadcn-vue's registry output, copied in
+      //   verbatim (SPEC §6.1 "copied into web/src/components/ui/, owned
+      //   code"). We own it in the sense that we may edit it, but we do not
+      //   write tests for reka-ui primitives — we test our own components
+      //   that use them. Measuring it meant ~20 files at 0% dragging the
+      //   global number purely as a function of how many primitives the
+      //   phase happened to install.
+      // - test scaffolding (`src/test/**` fixtures, `*.test.ts`,
+      //   `__tests__/**`) is the measuring instrument, not the subject.
+      exclude: [
+        'src/components/ui/**',
+        'src/test/**',
+        'src/**/*.test.ts',
+        'src/**/__tests__/**',
+      ],
       // Gate, not just report: `pnpm unit --coverage` collected numbers
       // but nothing failed the build if they regressed (m23). Set at the
       // measured baseline on this commit (statements 88.88%, branches

@@ -20,6 +20,15 @@ export class ApiError extends Error {
   readonly status: number
   readonly detail?: string
   readonly instance?: string
+  /**
+   * chi's per-request id (SPEC §4.1). Carried onto the error so the UI's
+   * problem banner can show the one value that joins a client-visible
+   * failure back to the server log line holding the real error text — the
+   * entire reason the field exists on every problem body. Optional: the
+   * ingest mounts' own problem+json encoder predates the field and does not
+   * set it.
+   */
+  readonly requestId?: string
   readonly errors?: Problem['errors']
   readonly response: Response
 
@@ -31,6 +40,7 @@ export class ApiError extends Error {
     this.status = problem.status
     this.detail = problem.detail
     this.instance = problem.instance
+    this.requestId = problem.request_id
     this.errors = problem.errors
     this.response = response
   }

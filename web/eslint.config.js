@@ -33,6 +33,19 @@ export default tseslint.config(
     },
   },
   {
+    // web/scripts/* are Node tooling scripts (the OpenAPI fixture generator,
+    // the screenshot harness's Playwright half), not browser code: they use
+    // `process`, `console` and Node's `fetch`, which the browser globals set
+    // above does not declare.
+    name: 'app/node-scripts',
+    files: ['scripts/**/*.{js,mjs,ts}'],
+    languageOptions: {
+      globals: {
+        ...globals.node,
+      },
+    },
+  },
+  {
     name: 'app/rules',
     rules: {
       'vue/multi-word-component-names': 'off',
@@ -52,6 +65,18 @@ export default tseslint.config(
     rules: {
       'vue/require-default-prop': 'off',
       'vue/max-attributes-per-line': 'off',
+    },
+  },
+  {
+    // Specs legitimately declare several throwaway `defineComponent` harnesses
+    // in one file (a parent that provides, a child that injects, a wrapper
+    // that unmounts). vue/one-component-per-file is a source-organisation
+    // rule aimed at shipped components; splitting a test's fixtures across
+    // files to satisfy it would make the tests harder to read, not better.
+    name: 'app/test-overrides',
+    files: ['src/**/*.test.ts', 'src/**/__tests__/**/*.ts'],
+    rules: {
+      'vue/one-component-per-file': 'off',
     },
   },
 )
