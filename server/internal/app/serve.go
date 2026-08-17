@@ -19,7 +19,10 @@ import (
 //  2. http.Server.Shutdown, bounded by ARGUS_SHUTDOWN_GRACE, so in-flight
 //     requests finish.
 //  3. Close/drain the ingest queue (internal/ingest.Pipeline.Close, SPEC
-//     §3.6/§3.8, wired in by P2-09).
+//     §3.6/§3.8, wired in by P2-09), bounded by its OWN separate
+//     ARGUS_SHUTDOWN_GRACE budget rather than one shared with step 2 (M4
+//     fix, see shutdown's doc comment) — so a slow in-flight request cannot
+//     starve the drain and cause healthy, queued batches to be dropped.
 //  4. pool.Close().
 //
 // It returns nil only if every step completed cleanly; a non-nil error
@@ -86,6 +89,26 @@ func (a *App) Serve(ctx context.Context) error {
 	a.server = &http.Server{
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
+		// ReadTimeout/WriteTimeout bound the whole request/response
+		// lifecycle, not just the headers: chi's mw.Timeout (router.go, 30s)
+		// only cancels the request's context, which io.ReadAll(r.Body) in
+		// the hooks/OTLP handlers never observes, so a client that finishes
+		// headers and then trickles its body would otherwise hold the
+		// connection (and a goroutine) open indefinitely — on endpoints
+		// unauthenticated by default (ARGUS_INGEST_TOKEN's empty default).
+		// 30s matches chi's own request-context timeout so neither layer is
+		// the effectively-looser one.
+		//
+		// NOTE for whoever adds the Phase 5 SSE endpoint
+		// (/api/v1/sessions/{id}/stream): a fixed WriteTimeout is
+		// incompatible with a connection that must legitimately stay open
+		// far longer than 30s. Do not raise this global value for that —
+		// use http.ResponseController.SetWriteDeadline (or reset it
+		// per-write) on the SSE handler alone once it exists; every other
+		// handler should keep the bound this comment describes.
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  60 * time.Second,
 	}
 
 	serveErr := make(chan error, 1)
@@ -122,15 +145,29 @@ func (a *App) Serve(ctx context.Context) error {
 	// tick at shutdown just logs one error, never corrupts state.
 	go a.retention.Run(ctx)
 
+	// The sweep job (SPEC §2.4/§3.8, "abandoned-session sweep") follows the
+	// same shutdown story as the partition/rollup/retention jobs: it watches
+	// ctx and needs no shutdown() step, and a tick in flight when the pool
+	// closes just logs one error — SweepAbandoned's single UPDATE either
+	// commits or doesn't, never leaving a session half-migrated.
+	go a.sweep.Run(ctx)
+
+	var serveErrOrNil error
 	select {
-	case err := <-serveErr:
-		// The server exited on its own (e.g. a bind failure) before ctx was
-		// ever cancelled; nothing to shut down.
-		return err
+	case serveErrOrNil = <-serveErr:
+		// The server exited on its own (e.g. a bind failure or an accept-loop
+		// error) before ctx was ever cancelled. This still must run the full
+		// shutdown() sequence below (m6 fix): before this fix, returning
+		// serveErrOrNil directly here skipped shutdown() entirely, so
+		// ReadyState was never flipped false, the ingest pipeline was never
+		// closed/drained (workers and any queued batches simply abandoned,
+		// with no drop accounting), and store.Close() never ran — every one
+		// of which shutdown() exists specifically to do.
 	case <-ctx.Done():
 	}
 
-	return a.shutdown() //nolint:contextcheck // ctx is already Done() here (that's why we're shutting down); shutdown deliberately derives its own bounded context from Background rather than a cancelled one
+	//nolint:contextcheck // ctx is already Done() (or was never used) here; shutdown deliberately derives its own bounded context(s) from Background rather than a cancelled one
+	return errors.Join(serveErrOrNil, a.shutdown())
 }
 
 // shutdown runs steps (1)-(4) of the SPEC §3.8 sequence in order. Step (4)
@@ -144,7 +181,22 @@ func (a *App) shutdown() error {
 
 	httpErr := a.server.Shutdown(shutdownCtx) // (2) bounded, waits for in-flight requests
 
-	drainErr := a.drainIngest(shutdownCtx) // (3) ordered seam; no-op until P2's pipeline exists
+	// (3) drainCtx gets its OWN full ARGUS_SHUTDOWN_GRACE budget, deliberately
+	// not shutdownCtx (M4 fix). Before this fix, a single shared context
+	// meant the two steps split one grace between them: if in-flight
+	// requests consumed most of it, drainIngest's ctx.Done() branch would
+	// fire almost immediately, Pipeline.Close would cancel its workers, and
+	// every queued/buffered batch would be dropped — with Postgres perfectly
+	// healthy — for no reason but an unlucky timing split with step (2).
+	// Each step is independently allowed to take up to the full grace; the
+	// two are not summed against a single caller-facing deadline because
+	// nothing upstream of Serve enforces one (SPEC §3.8 names ARGUS_SHUTDOWN_
+	// GRACE as "the graceful-shutdown budget" for the sequence's bounded
+	// steps individually, not a wall-clock cap on the whole process exit).
+	drainCtx, drainCancel := context.WithTimeout(context.Background(), a.cfg.ShutdownGrace)
+	defer drainCancel()
+
+	drainErr := a.drainIngest(drainCtx) // (3) ordered seam; no-op until P2's pipeline exists
 
 	a.store.Close() // (4) always runs
 
@@ -158,12 +210,12 @@ func (a *App) shutdown() error {
 }
 
 // drainIngest is step (3) of the shutdown sequence: closing the ingest
-// queue and waiting for it to fully drain, bounded by the same
-// ARGUS_SHUTDOWN_GRACE deadline as the HTTP shutdown (ctx is shutdownCtx,
-// shared with step (2)). A non-nil return means the deadline was hit before
-// every buffered batch was flushed — SPEC §3.8: "exit 0 only if the drain
-// completed; 1 if events were dropped" — which shutdown propagates as
-// Serve's own error.
+// queue and waiting for it to fully drain, bounded by ctx — its own
+// ARGUS_SHUTDOWN_GRACE-length deadline (drainCtx in shutdown, independent of
+// step (2)'s shutdownCtx; see shutdown's doc comment, M4 fix). A non-nil
+// return means the deadline was hit before every buffered batch was flushed
+// — SPEC §3.8: "exit 0 only if the drain completed; 1 if events were
+// dropped" — which shutdown propagates as Serve's own error.
 func (a *App) drainIngest(ctx context.Context) error {
 	return a.ingest.Close(ctx)
 }

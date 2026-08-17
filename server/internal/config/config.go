@@ -33,41 +33,50 @@ type Config struct {
 	HTTPAddr    string `env:"ARGUS_HTTP_ADDR" default:":8080" doc:"single listener for ingest + API + UI"`
 	DatabaseURL string `env:"ARGUS_DATABASE_URL" default:"" doc:"required" secret:"true" required:"true"`
 
-	DBMaxConns int `env:"ARGUS_DB_MAX_CONNS" default:"10" doc:"pgxpool"`
+	DBMaxConns int `env:"ARGUS_DB_MAX_CONNS" default:"10" doc:"pgxpool" positive:"true"`
 
 	AutoMigrate   bool          `env:"ARGUS_AUTO_MIGRATE" default:"true" doc:"run migrations at serve start (advisory-locked)"`
-	ShutdownGrace time.Duration `env:"ARGUS_SHUTDOWN_GRACE" default:"15s" doc:"graceful-shutdown budget (§3.8)"`
+	ShutdownGrace time.Duration `env:"ARGUS_SHUTDOWN_GRACE" default:"15s" doc:"graceful-shutdown budget (§3.8)" positive:"true"`
 
-	IngestQueue                   int           `env:"ARGUS_INGEST_QUEUE" default:"1024" doc:"batches"`
-	IngestWorkers                 int           `env:"ARGUS_INGEST_WORKERS" default:"4" doc:""`
-	IngestBatchSize               int           `env:"ARGUS_INGEST_BATCH_SIZE" default:"500" doc:"events"`
-	IngestFlush                   time.Duration `env:"ARGUS_INGEST_FLUSH" default:"250ms" doc:""`
-	IngestMaxBodyBytes            int64         `env:"ARGUS_INGEST_MAX_BODY_BYTES" default:"8388608" doc:"decompressed"`
+	IngestQueue        int           `env:"ARGUS_INGEST_QUEUE" default:"1024" doc:"batches" positive:"true"`
+	IngestWorkers      int           `env:"ARGUS_INGEST_WORKERS" default:"4" doc:"" positive:"true"`
+	IngestBatchSize    int           `env:"ARGUS_INGEST_BATCH_SIZE" default:"500" doc:"events" positive:"true"`
+	IngestFlush        time.Duration `env:"ARGUS_INGEST_FLUSH" default:"250ms" doc:"" positive:"true"`
+	IngestMaxBodyBytes int64         `env:"ARGUS_INGEST_MAX_BODY_BYTES" default:"8388608" doc:"decompressed" positive:"true"`
+	// IngestWriteTimeout is M6's split contract: this ticket (W2) owns the
+	// config key; ticket W1 owns internal/ingest.Pipeline's own
+	// WriteTimeout field (pipeline.go) that this value must be wired into
+	// after both merge — see this ticket's report for the exact one-line
+	// change, since internal/ingest/pipeline.go and the app.go call site
+	// that constructs ingest.Config are outside this ticket's file
+	// ownership (W1's worktree does not yet have this field, and this
+	// worktree's ingest.Config does not yet have WriteTimeout).
+	IngestWriteTimeout            time.Duration `env:"ARGUS_INGEST_WRITE_TIMEOUT" default:"30s" doc:"per-batch write budget (M6)" positive:"true"`
 	IngestRetryConflict           int           `env:"ARGUS_INGEST_RETRY_CONFLICT" default:"8" doc:"deadlock/serialization attempts"`
 	IngestRetryTransient          int           `env:"ARGUS_INGEST_RETRY_TRANSIENT" default:"3" doc:"connection-error attempts"`
 	IngestHookAllowMessageDisplay bool          `env:"ARGUS_INGEST_HOOK_ALLOW_MESSAGE_DISPLAY" default:"false" doc:"§1.5.2"`
 	IngestToken                   string        `env:"ARGUS_INGEST_TOKEN" default:"" doc:"ingest auth seam" secret:"true"`
 	APIToken                      string        `env:"ARGUS_API_TOKEN" default:"" doc:"read-API auth seam" secret:"true"`
 
-	RetentionRawDays     int `env:"ARGUS_RETENTION_RAW_DAYS" default:"90" doc:"DECISIONS.md; also the clock-clamp lower bound (§1.2)"`
+	RetentionRawDays     int `env:"ARGUS_RETENTION_RAW_DAYS" default:"90" doc:"DECISIONS.md; also the clock-clamp lower bound (§1.2)" positive:"true"`
 	RetentionSessionDays int `env:"ARGUS_RETENTION_SESSION_DAYS" default:"0" doc:"0 = never"`
 	RetentionHour        int `env:"ARGUS_RETENTION_HOUR" default:"4" doc:"local hour for the daily job"`
 	AttrsRetentionDays   int `env:"ARGUS_ATTRS_RETENTION_DAYS" default:"0" doc:"0 = keep attrs for the full raw retention (OQ-5)"`
 
-	DedupWindow time.Duration `env:"ARGUS_DEDUP_WINDOW" default:"7d" doc:"ingest_dedup retention = the exact-dedup guarantee"`
+	DedupWindow time.Duration `env:"ARGUS_DEDUP_WINDOW" default:"7d" doc:"ingest_dedup retention = the exact-dedup guarantee" positive:"true"`
 
-	RollupInterval         time.Duration `env:"ARGUS_ROLLUP_INTERVAL" default:"60s" doc:""`
-	RollupMaxBuckets       int           `env:"ARGUS_ROLLUP_MAX_BUCKETS" default:"200" doc:"per run"`
-	RollupSessionRemarkMax int           `env:"ARGUS_ROLLUP_SESSION_REMARK_MAX" default:"720" doc:"cap on buckets re-dirtied by a late project change"`
+	RollupInterval         time.Duration `env:"ARGUS_ROLLUP_INTERVAL" default:"60s" doc:"" positive:"true"`
+	RollupMaxBuckets       int           `env:"ARGUS_ROLLUP_MAX_BUCKETS" default:"200" doc:"per run" positive:"true"`
+	RollupSessionRemarkMax int           `env:"ARGUS_ROLLUP_SESSION_REMARK_MAX" default:"720" doc:"cap on buckets re-dirtied by a late project change" positive:"true"`
 
-	SweepInterval      time.Duration `env:"ARGUS_SWEEP_INTERVAL" default:"60s" doc:"abandoned-session sweep"`
-	SessionIdleTimeout time.Duration `env:"ARGUS_SESSION_IDLE_TIMEOUT" default:"15m" doc:"active→abandoned boundary"`
+	SweepInterval      time.Duration `env:"ARGUS_SWEEP_INTERVAL" default:"60s" doc:"abandoned-session sweep" positive:"true"`
+	SessionIdleTimeout time.Duration `env:"ARGUS_SESSION_IDLE_TIMEOUT" default:"15m" doc:"active→abandoned boundary" positive:"true"`
 
-	StreamBuffer         int           `env:"ARGUS_STREAM_BUFFER" default:"256" doc:"per-subscriber channel"`
-	StreamHeartbeat      time.Duration `env:"ARGUS_STREAM_HEARTBEAT" default:"15s" doc:""`
-	StreamReplayWindow   time.Duration `env:"ARGUS_STREAM_REPLAY_WINDOW" default:"5m" doc:"SSE replay bound (also bounds the ts predicate)"`
-	StreamReplayMax      int           `env:"ARGUS_STREAM_REPLAY_MAX" default:"2000" doc:"events per reconnect"`
-	StreamMaxSubscribers int           `env:"ARGUS_STREAM_MAX_SUBSCRIBERS" default:"100" doc:"503 beyond it"`
+	StreamBuffer         int           `env:"ARGUS_STREAM_BUFFER" default:"256" doc:"per-subscriber channel" positive:"true"`
+	StreamHeartbeat      time.Duration `env:"ARGUS_STREAM_HEARTBEAT" default:"15s" doc:"" positive:"true"`
+	StreamReplayWindow   time.Duration `env:"ARGUS_STREAM_REPLAY_WINDOW" default:"5m" doc:"SSE replay bound (also bounds the ts predicate)" positive:"true"`
+	StreamReplayMax      int           `env:"ARGUS_STREAM_REPLAY_MAX" default:"2000" doc:"events per reconnect" positive:"true"`
+	StreamMaxSubscribers int           `env:"ARGUS_STREAM_MAX_SUBSCRIBERS" default:"100" doc:"503 beyond it" positive:"true"`
 
 	LogLevel  string `env:"ARGUS_LOG_LEVEL" default:"info" doc:"slog"`
 	LogFormat string `env:"ARGUS_LOG_FORMAT" default:"json" doc:"tint handler for text"`
@@ -87,6 +96,7 @@ type fieldSpec struct {
 	doc      string
 	secret   bool
 	required bool
+	positive bool
 	index    int
 	kind     reflect.Kind
 	isDur    bool
@@ -124,6 +134,7 @@ func schema() []fieldSpec {
 			doc:      f.Tag.Get("doc"),
 			secret:   f.Tag.Get("secret") == "true",
 			required: f.Tag.Get("required") == "true",
+			positive: f.Tag.Get("positive") == "true",
 			index:    i,
 			kind:     kind,
 			isDur:    isDur,
@@ -227,9 +238,22 @@ func load(configPath string, environ func() []string) (*Config, []string, error)
 // validate checks required fields and value constraints that a plain
 // type-parse cannot express.
 func (c *Config) validate(specs []fieldSpec) error {
+	v := reflect.ValueOf(c).Elem()
 	for _, s := range specs {
 		if s.required && s.goName == "DatabaseURL" && c.DatabaseURL == "" {
 			return fmt.Errorf("config: %s is required", s.env)
+		}
+		// m19 fix: a "positive"-tagged field (every numeric/duration key
+		// whose only sane values are > 0 — queue sizes, worker counts,
+		// batch sizes, timeouts, intervals, byte limits) silently produces
+		// wrong behaviour rather than an error at 0 or negative. The
+		// original instance, ARGUS_INGEST_MAX_BODY_BYTES <= 0: Go clamps a
+		// negative http.MaxBytesReader limit to 0, so every non-empty
+		// ingest payload gets 413'd — total silent ingest loss on a server
+		// that still reports itself ready — with nothing at startup to
+		// catch it.
+		if s.positive && v.Field(s.index).Int() <= 0 {
+			return fmt.Errorf("config: %s: must be positive, got %d", s.env, v.Field(s.index).Int())
 		}
 	}
 	switch c.LogFormat {

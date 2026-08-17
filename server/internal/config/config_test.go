@@ -34,6 +34,7 @@ var wantDefaults = map[string]expectedDefault{
 	"ARGUS_INGEST_BATCH_SIZE":                 {def: "500"},
 	"ARGUS_INGEST_FLUSH":                      {def: "250ms"},
 	"ARGUS_INGEST_MAX_BODY_BYTES":             {def: "8388608"},
+	"ARGUS_INGEST_WRITE_TIMEOUT":              {def: "30s"},
 	"ARGUS_INGEST_RETRY_CONFLICT":             {def: "8"},
 	"ARGUS_INGEST_RETRY_TRANSIENT":            {def: "3"},
 	"ARGUS_INGEST_HOOK_ALLOW_MESSAGE_DISPLAY": {def: "false"},
@@ -263,6 +264,69 @@ func TestPrintRedactsSecrets(t *testing.T) {
 	require.Contains(t, out, "ARGUS_DATABASE_URL=REDACTED")
 	require.Contains(t, out, "ARGUS_INGEST_TOKEN=REDACTED")
 	require.Contains(t, out, "ARGUS_API_TOKEN=REDACTED")
+}
+
+// TestLoadRejectsNonPositiveIngestMaxBodyBytes pins m19: ARGUS_INGEST_MAX_BODY_BYTES
+// <= 0 must fail startup validation instead of silently reaching
+// http.MaxBytesReader, which clamps a negative/zero limit to 0 and then 413s
+// every non-empty ingest payload — total silent ingest loss on a server that
+// still reports itself ready.
+func TestLoadRejectsNonPositiveIngestMaxBodyBytes(t *testing.T) {
+	for _, bad := range []string{"0", "-1"} {
+		_, _, err := load("", environOf(map[string]string{
+			"ARGUS_DATABASE_URL":          "postgres://localhost/argus",
+			"ARGUS_INGEST_MAX_BODY_BYTES": bad,
+		}))
+		require.Errorf(t, err, "ARGUS_INGEST_MAX_BODY_BYTES=%s must be rejected", bad)
+		require.Contains(t, err.Error(), "ARGUS_INGEST_MAX_BODY_BYTES")
+		require.Contains(t, err.Error(), "must be positive")
+	}
+}
+
+// TestLoadRejectsNonPositivePositiveTaggedFields is the general form of the
+// m19 fix: every field tagged `positive:"true"` in the Config struct (not
+// just ARGUS_INGEST_MAX_BODY_BYTES, the audit's one named instance) must
+// reject 0 and negative values the same way. Driven off schema() itself so
+// a future field that adds the tag is covered automatically.
+func TestLoadRejectsNonPositivePositiveTaggedFields(t *testing.T) {
+	for _, s := range schema() {
+		if !s.positive {
+			continue
+		}
+		t.Run(s.env, func(t *testing.T) {
+			_, _, err := load("", environOf(map[string]string{
+				"ARGUS_DATABASE_URL": "postgres://localhost/argus",
+				s.env:                "0",
+			}))
+			require.Errorf(t, err, "%s=0 must be rejected", s.env)
+			require.Contains(t, err.Error(), s.env)
+		})
+	}
+}
+
+// TestLoadIngestWriteTimeout pins the W2 half of the M6 split contract:
+// ARGUS_INGEST_WRITE_TIMEOUT parses into Config.IngestWriteTimeout, defaults
+// to 30s, and rejects <= 0 like every other positive-tagged duration.
+func TestLoadIngestWriteTimeout(t *testing.T) {
+	cfg, _, err := load("", environOf(map[string]string{
+		"ARGUS_DATABASE_URL": "postgres://localhost/argus",
+	}))
+	require.NoError(t, err)
+	require.Equal(t, 30*time.Second, cfg.IngestWriteTimeout)
+
+	cfg, _, err = load("", environOf(map[string]string{
+		"ARGUS_DATABASE_URL":         "postgres://localhost/argus",
+		"ARGUS_INGEST_WRITE_TIMEOUT": "5s",
+	}))
+	require.NoError(t, err)
+	require.Equal(t, 5*time.Second, cfg.IngestWriteTimeout)
+
+	_, _, err = load("", environOf(map[string]string{
+		"ARGUS_DATABASE_URL":         "postgres://localhost/argus",
+		"ARGUS_INGEST_WRITE_TIMEOUT": "0s",
+	}))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "ARGUS_INGEST_WRITE_TIMEOUT")
 }
 
 func TestMarkdownRoundTripsKeySet(t *testing.T) {
