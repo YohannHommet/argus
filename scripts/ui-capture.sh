@@ -126,6 +126,47 @@ for attempt in $(seq 1 60); do
   sleep 2
 done
 
+# The sessions projection above is written synchronously on ingest, but
+# /api/v1/analytics/* reads `rollup_hourly` (SPEC §2.5 forbids request-time
+# aggregation over `events`), and the rollup job is periodic. Measured on
+# this stack: the session list reports all 20 sessions at t+0s while the
+# analytics summary still reports zeros until ~t+45s. Without this wait the
+# harness photographs a correct-but-empty analytics dashboard, and a design
+# review then "fixes" a layout that was only ever showing an empty state.
+#
+# The criterion is equality with the sessions projection, not "stopped
+# changing". The rollup fills in discrete steps and *plateaus for ~35s*
+# between them, so any "N identical reads" heuristic short enough to be
+# practical will sometimes stop on a plateau and capture partial totals —
+# observed directly: a stability check accepted $24.31/955 tool calls when
+# the true figure was $39.78/1249. Half-filled is worse than empty, because
+# the numbers look real and are wrong.
+#
+# `sessions.cost_usd` and `sessions.tool_call_count` are written
+# synchronously, so their sums are ground truth the rollup must converge to.
+# Costs are compared in whole cents to avoid float-repr flapping.
+log "waiting for the analytics rollups to reach the sessions projection's totals"
+truth=""
+for attempt in $(seq 1 90); do
+  truth="$(
+    curl -fsS "${base_url}/api/v1/sessions?limit=500" 2>/dev/null \
+      | python3 -c 'import json,sys; d=json.load(sys.stdin)["data"]; print(round(sum(s["cost"]["usd"] for s in d)*100), sum(s["tool_call_count"] for s in d))' 2>/dev/null || echo "pending"
+  )"
+  rolled="$(
+    curl -fsS "${base_url}/api/v1/analytics/summary?from=-30d" 2>/dev/null \
+      | python3 -c 'import json,sys; d=json.load(sys.stdin); print(round(d["cost"]["usd"]*100), d["tool_calls"])' 2>/dev/null || echo "pending"
+  )"
+
+  if [[ "$truth" != "pending" && "$rolled" == "$truth" ]]; then
+    log "rollups match the sessions projection [cents tool_calls = ${rolled}] after ${attempt} attempt(s)"
+    break
+  fi
+  if [[ "$attempt" == 90 ]]; then
+    log "WARNING: rollups never reached the projection (rollup=[${rolled}] projection=[${truth}]) — capturing anyway; the analytics shots may show partial totals"
+  fi
+  sleep 5
+done
+
 # Chromium is not a repo dependency of the web package, only a Playwright
 # download. Install it on demand; keep the run going if the browser is
 # already there.

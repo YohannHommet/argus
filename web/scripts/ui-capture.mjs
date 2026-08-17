@@ -123,7 +123,16 @@ async function main() {
       path: `/sessions/${session.id}?tab=subagents`,
       waitFor: ready,
     },
+    // Two analytics shots, on purpose. The view defaults to a 24h window,
+    // but `sim --mode=demo` backfills event timestamps across 14 days, so
+    // the default view honestly holds only a fraction of the seeded data
+    // (measured: $4.24 of $39.78, with correspondingly thin charts). That
+    // default is what an operator sees on a quiet day and is worth
+    // reviewing; a design review also needs a populated dashboard, which
+    // `?window=30d` gives by covering the whole backfill. Neither is more
+    // correct than the other — they are two real states of one screen.
     { name: 'analytics', path: '/analytics', waitFor: ready },
+    { name: 'analytics-30d', path: '/analytics?window=30d', waitFor: ready },
     { name: 'tools', path: '/tools', waitFor: ready },
     { name: 'data-quality', path: '/data-quality', waitFor: ready },
   ]
