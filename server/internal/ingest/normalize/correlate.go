@@ -234,7 +234,28 @@ func AssignKeylessContributions(
 		if !contribs[ia].TS.Equal(contribs[ib].TS) {
 			return contribs[ia].TS.Before(contribs[ib].TS)
 		}
-		return contribs[ia].Event.Seq < contribs[ib].Event.Seq
+		// audit finding m13: Event.Seq is a Postgres identity assigned by
+		// the events INSERT; this function runs on the pre-insert
+		// candidates slice, where every Seq is still its zero value, so a
+		// same-ts tiebreak on Seq silently degrades to (ts, dedup_key)
+		// lexicographic order — which sorts vendor_seq 10 before 9. Tiebreak
+		// on VendorSeq instead (NULLS LAST, i.e. an absent VendorSeq sorts
+		// after any present one — a hook contribution has none), then
+		// DedupKey for a fully deterministic order when even VendorSeq ties
+		// or is absent on both sides. This documents the tiebreak as
+		// submission order (VendorSeq when the source supplies one,
+		// otherwise arrival order via DedupKey), not the originally
+		// intended-but-inoperative Seq-based order.
+		va, vb := contribs[ia].Event.VendorSeq, contribs[ib].Event.VendorSeq
+		switch {
+		case va != nil && vb != nil && *va != *vb:
+			return *va < *vb
+		case va != nil && vb == nil:
+			return true
+		case va == nil && vb != nil:
+			return false
+		}
+		return contribs[ia].Event.DedupKey < contribs[ib].Event.DedupKey
 	})
 
 	pool := make([]OpenCall, len(open))

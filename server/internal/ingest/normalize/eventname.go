@@ -1,6 +1,56 @@
 package normalize
 
-import "strings"
+import (
+	"strings"
+	"unicode/utf8"
+)
+
+// maxEventNameLen caps the resolved event name so it can never make
+// `dedup_key` (model/dedup.go, which interpolates it verbatim) an
+// unbounded btree key (audit finding m4). `LogRecord.EventName` and the
+// `event.name` attribute are both short, vendor-controlled identifiers in
+// every observed payload, but SPEC §1.5.1 step 3's fallback — the record
+// *body* — is arbitrary vendor/user text with no length guarantee at all;
+// a body over roughly 2.7 KB pushes `dedup_key` (and therefore the
+// `ingest_dedup` PK and the `UNIQUE (ts, dedup_key)` index,
+// 002_events.sql:65) past Postgres's btree index entry limit, raising
+// SQLSTATE 54000 — a failure retry.go's classification does not recognize,
+// so it defaults to transient and the whole batch is retried and dropped.
+// 255 is comfortably below that limit for any of the three resolution
+// sources while still being generous for a real event name.
+const maxEventNameLen = 255
+
+// capEventName drops newlines (a dedup_key is meant to be a single opaque
+// token, not a display string with embedded line breaks) and truncates to
+// maxEventNameLen runes, never splitting a multi-byte rune. This is
+// deliberately a length *cap*, not a hash: SPEC §1.7 rule 2's dedup_key
+// construction is a stability contract across a deploy, and hashing the
+// name component would change every existing key derived from a
+// (session_id, vendor_seq, event_name) triple that happens to already fit
+// under the cap — capping only ever changes the pathologically long names
+// this finding is about.
+func capEventName(name string) string {
+	name = strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\r' {
+			return -1
+		}
+		return r
+	}, name)
+
+	if utf8.RuneCountInString(name) <= maxEventNameLen {
+		return name
+	}
+	var b strings.Builder
+	n := 0
+	for _, r := range name {
+		if n >= maxEventNameLen {
+			break
+		}
+		b.WriteRune(r)
+		n++
+	}
+	return b.String()
+}
 
 // vendorEventNamePrefix is the prefix Claude Code's `body` field carries
 // (`"claude_code.api_request"`) that its `event.name` *attribute* does not
@@ -38,5 +88,9 @@ func ResolveEventName(recordEventName string, attrs map[string]any, bodyStr stri
 			name = bodyStr
 		}
 	}
-	return strings.TrimPrefix(name, vendorEventNamePrefix)
+	name = strings.TrimPrefix(name, vendorEventNamePrefix)
+	// audit finding m4: cap regardless of which source won — a
+	// pathologically long event.name *attribute* is exactly as dangerous
+	// to dedup_key as a long body (see capEventName's doc comment).
+	return capEventName(name)
 }

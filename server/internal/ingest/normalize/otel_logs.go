@@ -1,6 +1,7 @@
 package normalize
 
 import (
+	"fmt"
 	"time"
 
 	logspb "go.opentelemetry.io/proto/otlp/logs/v1"
@@ -105,16 +106,43 @@ func (n *Normalizer) FromOTLPLogs(data *logspb.LogsData) ([]model.Event, []Rejec
 
 				eventName := ResolveEventName(rec.GetEventName(), merged, bodyStr, bodyIsString)
 
+				// audit finding m12: a session.id present only on the
+				// resource (not scope/record) is still findable in merged
+				// under its "resource." prefix (resourceAttrPrefix, above)
+				// — fall back to it before rejecting the record for good.
 				sessionID := String(merged, "session.id")
+				if sessionID == nil || *sessionID == "" {
+					sessionID = String(merged, resourceAttrPrefix+"session.id")
+				}
 				if sessionID == nil || *sessionID == "" {
 					rejections = append(rejections, Rejection{
 						Reason: "missing session.id",
 						Record: merged,
+						Count:  1, // one LogRecord
 					})
 					continue
 				}
 
-				events = append(events, n.buildEvent(*sessionID, vendor, eventName, merged, rec, nowFn()))
+				evt, err := n.buildEvent(*sessionID, vendor, eventName, merged, rec, nowFn())
+				if err != nil {
+					// Provably unreachable now that every string/float64
+					// attribute is sanitized at decode time (M5,
+					// otlpattrs.go's sanitizeAttrString/sanitizeAttrFloat
+					// doc comment): canonicalJSON can no longer fail on
+					// this map. Surfaced as a Rejection rather than a
+					// silently-degraded dedup key so a future regression
+					// in that invariant fails loud (visible in
+					// partial_success) instead of writing an event whose
+					// idempotency the store's own re-marshal would break
+					// anyway.
+					rejections = append(rejections, Rejection{
+						Reason: fmt.Sprintf("dedup key: %v", err),
+						Record: merged,
+						Count:  1, // one LogRecord
+					})
+					continue
+				}
+				events = append(events, evt)
 			}
 		}
 	}
@@ -144,8 +172,10 @@ func resolveVendor(resourceAttrs map[string]any) string {
 // buildEvent assembles one model.Event from a resolved session/vendor/
 // event-name and the fully merged attrs map, applying the §1.5.1 kind
 // mapping, the §3.4 timestamp resolution + clamp, and the §1.7 rule 2 dedup
-// key.
-func (n *Normalizer) buildEvent(sessionID, vendor, eventName string, attrs map[string]any, rec *logspb.LogRecord, ingestedAt time.Time) model.Event {
+// key. The only error it returns is model.DedupKeyOTelLog's — see the call
+// site's doc comment for why that is provably unreachable post-M5 and is
+// nonetheless surfaced rather than papered over.
+func (n *Normalizer) buildEvent(sessionID, vendor, eventName string, attrs map[string]any, rec *logspb.LogRecord, ingestedAt time.Time) (model.Event, error) {
 	promptID := String(attrs, "prompt.id")
 	vendorSeq := Int64(attrs, "event.sequence")
 
@@ -170,21 +200,24 @@ func (n *Normalizer) buildEvent(sessionID, vendor, eventName string, attrs map[s
 
 	evt.Kind = applyKindMapping(eventName, attrs, &evt)
 
-	if dedupKey, err := model.DedupKeyOTelLog(sessionID, vendorSeq, eventName, attrs); err == nil {
-		evt.DedupKey = dedupKey
-	} else {
-		// attrs is built exclusively from otlpAnyValueToGo's outputs
-		// (string/bool/int64/float64/[]byte/[]any/map[string]any), every
-		// one of which encoding/json marshals without error, so this
-		// branch is not reachable with any input FromOTLPLogs can produce.
-		// It exists so a future change to otlpAnyValueToGo's output types
-		// fails safe (a deterministic, session-scoped fallback key) instead
-		// of leaving DedupKey empty, which would break idempotency (SPEC
-		// §1.7 rule 2's non-negotiable "no exceptions").
-		evt.DedupKey = "otel:" + sessionID + ":unhashable:" + eventName
+	dedupKey, err := model.DedupKeyOTelLog(sessionID, vendorSeq, eventName, attrs)
+	if err != nil {
+		// M5 audit note: this used to be reachable (a NaN/±Inf attrs value
+		// makes canonicalJSON's json.Marshal fail) and the previous
+		// fallback here — a deterministic but unhashed key — was dead in
+		// effect anyway, because events.go re-marshals this same attrs map
+		// for the jsonb column and would fail identically, taking out the
+		// whole WriteBatch regardless of what DedupKey this function
+		// picked. Now that every string/float64 attribute is sanitized at
+		// decode time (otlpattrs.go), attrs always marshals, so this
+		// branch is provably unreachable — surfaced as an error to the
+		// caller (which turns it into a Rejection) rather than resurrected
+		// as a fallback key that solved nothing.
+		return model.Event{}, err
 	}
+	evt.DedupKey = dedupKey
 
-	return evt
+	return evt, nil
 }
 
 // resolveTimestamp implements SPEC §3.4: "LogRecord.TimeUnixNano is

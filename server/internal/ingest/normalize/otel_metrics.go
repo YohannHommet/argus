@@ -104,7 +104,7 @@ func (n *Normalizer) FromOTLPMetrics(data *metricspb.MetricsData) ([]model.Metri
 					sum := metric.GetSum()
 					temporality := mapTemporality(sum.GetAggregationTemporality())
 					for _, dp := range sum.GetDataPoints() {
-						sample, ok := n.numberSample(name, vendor, temporality, dp, ingestedAt)
+						sample, ok := n.numberSample(name, vendor, temporality, dp, resourceAttrs, ingestedAt)
 						if !ok {
 							rejections = append(rejections, numberDataPointRejection(name, vendor, dp))
 							continue
@@ -114,7 +114,7 @@ func (n *Normalizer) FromOTLPMetrics(data *metricspb.MetricsData) ([]model.Metri
 
 				case metric.GetGauge() != nil:
 					for _, dp := range metric.GetGauge().GetDataPoints() {
-						sample, ok := n.numberSample(name, vendor, temporalityGauge, dp, ingestedAt)
+						sample, ok := n.numberSample(name, vendor, temporalityGauge, dp, resourceAttrs, ingestedAt)
 						if !ok {
 							rejections = append(rejections, numberDataPointRejection(name, vendor, dp))
 							continue
@@ -126,7 +126,7 @@ func (n *Normalizer) FromOTLPMetrics(data *metricspb.MetricsData) ([]model.Metri
 					hist := metric.GetHistogram()
 					temporality := mapTemporality(hist.GetAggregationTemporality())
 					for _, dp := range hist.GetDataPoints() {
-						samples = append(samples, n.histogramSamples(name, vendor, temporality, dp, ingestedAt)...)
+						samples = append(samples, n.histogramSamples(name, vendor, temporality, dp, resourceAttrs, ingestedAt)...)
 					}
 
 				default:
@@ -138,6 +138,15 @@ func (n *Normalizer) FromOTLPMetrics(data *metricspb.MetricsData) ([]model.Metri
 							"metric.name":     name,
 							"resource.vendor": vendor,
 						},
+						// audit finding m14 (your half): this Rejection
+						// discards every data point the unsupported metric
+						// carried, not just "the metric" as one unit — an
+						// ExponentialHistogram with 50 points must report
+						// 50 here, not 1, or the handler's
+						// rejectedDataPoints (otlp/metrics.go, ticket W7's
+						// half) undercounts by summing len(rejections)
+						// instead of summing Count.
+						Count: unsupportedMetricDataPointCount(metric),
 					})
 				}
 			}
@@ -173,7 +182,7 @@ func mapTemporality(t metricspb.AggregationTemporality) string {
 // NumberDataPoint, or reports ok=false when the point's value oneof is
 // unset (SPEC lead note 5: "Handle both [AsDouble/AsInt]", and the doc
 // package comment's rejection policy above).
-func (n *Normalizer) numberSample(name, vendor, temporality string, dp *metricspb.NumberDataPoint, ingestedAt time.Time) (sample model.MetricSample, ok bool) {
+func (n *Normalizer) numberSample(name, vendor, temporality string, dp *metricspb.NumberDataPoint, resourceAttrs map[string]any, ingestedAt time.Time) (sample model.MetricSample, ok bool) {
 	var value float64
 	switch v := dp.GetValue().(type) {
 	case *metricspb.NumberDataPoint_AsDouble:
@@ -184,7 +193,7 @@ func (n *Normalizer) numberSample(name, vendor, temporality string, dp *metricsp
 		return model.MetricSample{}, false
 	}
 
-	return n.buildSample(name, vendor, temporality, dp.GetAttributes(), dp.GetTimeUnixNano(), value, ingestedAt), true
+	return n.buildSample(name, vendor, temporality, dp.GetAttributes(), resourceAttrs, dp.GetTimeUnixNano(), value, ingestedAt), true
 }
 
 // histogramSamples implements the ticket's "store sum/count as two samples"
@@ -203,13 +212,13 @@ func (n *Normalizer) numberSample(name, vendor, temporality string, dp *metricsp
 // hashes and two different dedup keys without any bespoke suffixing logic
 // here — the same mechanism that already distinguishes any other two
 // same-timestamp, same-attrs, different-name metrics.
-func (n *Normalizer) histogramSamples(name, vendor, temporality string, dp *metricspb.HistogramDataPoint, ingestedAt time.Time) []model.MetricSample {
+func (n *Normalizer) histogramSamples(name, vendor, temporality string, dp *metricspb.HistogramDataPoint, resourceAttrs map[string]any, ingestedAt time.Time) []model.MetricSample {
 	var out []model.MetricSample
 
 	if dp.Sum != nil {
-		out = append(out, n.buildSample(name+"_sum", vendor, temporality, dp.GetAttributes(), dp.GetTimeUnixNano(), dp.GetSum(), ingestedAt))
+		out = append(out, n.buildSample(name+"_sum", vendor, temporality, dp.GetAttributes(), resourceAttrs, dp.GetTimeUnixNano(), dp.GetSum(), ingestedAt))
 	}
-	out = append(out, n.buildSample(name+"_count", vendor, temporality, dp.GetAttributes(), dp.GetTimeUnixNano(), float64(dp.GetCount()), ingestedAt))
+	out = append(out, n.buildSample(name+"_count", vendor, temporality, dp.GetAttributes(), resourceAttrs, dp.GetTimeUnixNano(), float64(dp.GetCount()), ingestedAt))
 
 	return out
 }
@@ -261,23 +270,40 @@ func (n *Normalizer) histogramSamples(name, vendor, temporality string, dp *metr
 // never taking ts as an input at all — DedupKeyMetric, unlike
 // DedupKeyOTelLog, takes ts explicitly, so this function must choose which
 // one, and consistency with the stored row wins).
-func (n *Normalizer) buildSample(name, vendor string, temporality string, kvs []*commonpb.KeyValue, timeUnixNano uint64, value float64, ingestedAt time.Time) model.MetricSample {
+// resourceAttrs is only ever consulted for the audit finding m12 session.id
+// fallback below — never folded into attrs/series_hash, since series_hash's
+// inputs "must stay exactly the stored attrs" (this ticket's caveat) and
+// buildSample's own doc comment already documents resource attrs as
+// deliberately excluded from series identity.
+func (n *Normalizer) buildSample(name, vendor string, temporality string, kvs []*commonpb.KeyValue, resourceAttrs map[string]any, timeUnixNano uint64, value float64, ingestedAt time.Time) model.MetricSample {
 	attrs := otlpAttrsToMap(kvs)
 
 	rawTS := time.Unix(0, int64(timeUnixNano)).UTC()                        //nolint:gosec // uint64 wire timestamp never approaches int64 overflow within any plausible event time (same justification as otel_logs.go's resolveTimestamp)
 	clampedTS, _ := model.ClampTimestamp(rawTS, ingestedAt, n.RetentionRaw) // skew signal deliberately discarded — see buildSample's doc comment
 
+	// audit finding m12: a session.id present only on the resource (never
+	// merged into a metric data point's own attrs, unlike the logs path)
+	// is still worth attributing the sample to — read it here, from the
+	// separate resourceAttrs map, so it never touches attrs/series_hash.
 	sessionID := String(attrs, "session.id")
+	if sessionID == nil || *sessionID == "" {
+		sessionID = String(resourceAttrs, "session.id")
+	}
 
 	dedupKey, err := model.DedupKeyMetric(name, clampedTS, attrs)
 	if err != nil {
-		// attrs is built exclusively from otlpAnyValueToGo's outputs, all of
-		// which encoding/json marshals without error *except* a float64
-		// holding NaN or +/-Inf (OTLP permits a DoubleValue to carry either).
-		// This mirrors FromOTLPLogs.buildEvent's identical fallback: a
-		// deterministic, name-scoped key rather than leaving DedupKey empty,
-		// which would break SPEC §1.7 rule 2's "no exceptions" idempotency
-		// guarantee.
+		// M5 audit note: this branch used to be reachable — attrs is built
+		// exclusively from otlpAnyValueToGo's outputs, and a float64 holding
+		// NaN or +/-Inf (OTLP permits a DoubleValue to carry either) made
+		// encoding/json refuse to marshal it. otlpAnyValueToGo now sanitizes
+		// every DoubleValue at decode time (otlpattrs.go's
+		// sanitizeAttrFloat), replacing a non-finite value with its string
+		// form before it ever reaches this map, so attrs always marshals
+		// and this branch is provably unreachable. Kept as defense in depth
+		// (mirroring FromOTLPLogs.buildEvent's identical fallback) rather
+		// than removed, since — unlike the logs path — FromOTLPMetrics's
+		// contract (this file's package doc comment) is to never turn a
+		// value-level problem into an error at all.
 		dedupKey = "metric:unhashable:" + name
 	}
 
@@ -300,11 +326,11 @@ func (n *Normalizer) buildSample(name, vendor string, temporality string, kvs []
 // every nesting level (the same property model's canonicalJSON relies on),
 // so json.Marshal(attrs) is sorted-attrs-as-bytes without a bespoke encoder.
 //
-// A marshal error (NaN/Inf float64, see buildSample's DedupKeyMetric
-// comment) falls back to hashing the name alone: still deterministic and
-// still distinguishes this metric from every differently-named one, which is
-// the best available substitute for "sorted attrs" when the attrs cannot be
-// canonically rendered at all.
+// A marshal error (see buildSample's DedupKeyMetric comment for why this is
+// now provably unreachable post-M5) falls back to hashing the name alone:
+// still deterministic and still distinguishes this metric from every
+// differently-named one, which is the best available substitute for "sorted
+// attrs" when the attrs cannot be canonically rendered at all.
 func seriesHash(name string, attrs map[string]any) []byte {
 	canon, err := json.Marshal(attrs)
 	if err != nil {
@@ -328,5 +354,21 @@ func numberDataPointRejection(name, vendor string, dp *metricspb.NumberDataPoint
 			"time_unix_nano":  dp.GetTimeUnixNano(),
 			"attrs":           otlpAttrsToMap(dp.GetAttributes()),
 		},
+		Count: 1, // one NumberDataPoint
 	}
+}
+
+// unsupportedMetricDataPointCount is audit finding m14's fix: how many data
+// points the "unsupported aggregation type" Rejection above actually
+// discards. ExponentialHistogram and Summary both carry a DataPoints slice
+// (like Sum/Gauge/Histogram do); an empty oneof (no aggregation type set at
+// all) has none to count.
+func unsupportedMetricDataPointCount(metric *metricspb.Metric) int {
+	if eh := metric.GetExponentialHistogram(); eh != nil {
+		return len(eh.GetDataPoints())
+	}
+	if s := metric.GetSummary(); s != nil {
+		return len(s.GetDataPoints())
+	}
+	return 0
 }
