@@ -2,6 +2,7 @@ package httpapi_test
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -13,6 +14,55 @@ import (
 	"github.com/YohannHommet/argus/server/internal/model"
 	"github.com/YohannHommet/argus/server/internal/store"
 )
+
+// TestListToolCalls_StoreInvalidCursor_400 is M14's handler-level
+// regression test for GET /api/v1/tool-calls: a cursor valid at httpapi's
+// shallow check but rejected by the store's stricter decode must map onto
+// 400, not 500.
+func TestListToolCalls_StoreInvalidCursor_400(t *testing.T) {
+	t.Parallel()
+
+	reader := &fakeReader{
+		ListToolCallsFunc: func(_ context.Context, _ store.ToolCallFilter, _ store.Page) ([]model.ToolCall, store.Cursor, error) {
+			return nil, "", fmt.Errorf("postgres: list tool calls: %w: missing key or malformed values", store.ErrInvalidCursor)
+		},
+	}
+	r := httpapi.New(httpapi.Deps{Reader: reader})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/tool-calls?cursor=eyJrIjoic3RhcnRlZF9hdCIsInYiOlsieCJdfQ", nil)
+	r.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusBadRequest, rec.Code, "body: %s", rec.Body.String())
+	require.Equal(t, "application/problem+json", rec.Header().Get("Content-Type"))
+	require.Contains(t, rec.Body.String(), `"type":"urn:argus:error:invalid-cursor"`)
+}
+
+// TestListSessionToolCalls_StoreInvalidCursor_400 is M14's regression test
+// for the session-scoped drill-down GET /api/v1/sessions/{id}/tool-calls,
+// sharing listSessionToolCallsHandler's error mapping with the
+// cross-session endpoint above.
+func TestListSessionToolCalls_StoreInvalidCursor_400(t *testing.T) {
+	t.Parallel()
+
+	reader := &fakeReader{
+		GetSessionFunc: func(_ context.Context, id string) (*model.SessionDetail, error) {
+			return newTestSession(id), nil
+		},
+		ListToolCallsFunc: func(_ context.Context, _ store.ToolCallFilter, _ store.Page) ([]model.ToolCall, store.Cursor, error) {
+			return nil, "", fmt.Errorf("postgres: list tool calls: %w: missing key or malformed values", store.ErrInvalidCursor)
+		},
+	}
+	r := httpapi.New(httpapi.Deps{Reader: reader})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/sessions/s1/tool-calls?cursor=eyJrIjoic3RhcnRlZF9hdCIsInYiOlsieCJdfQ", nil)
+	r.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusBadRequest, rec.Code, "body: %s", rec.Body.String())
+	require.Equal(t, "application/problem+json", rec.Header().Get("Content-Type"))
+	require.Contains(t, rec.Body.String(), `"type":"urn:argus:error:invalid-cursor"`)
+}
 
 func TestListToolCalls_RepeatedToolParamsOR(t *testing.T) {
 	t.Parallel()

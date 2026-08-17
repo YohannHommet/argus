@@ -162,8 +162,18 @@ func New(d Deps) http.Handler {
 		r.Use(CORS(d.Config.CORSOrigins))
 	}
 
+	// m18 audit finding: the problem+json NotFound/MethodNotAllowed
+	// handlers used to be installed only on the /api and /api/v1
+	// subrouters below, so a wrong-method request against a root-mounted
+	// route (the OTLP receivers' /v1/logs|metrics|traces, the hooks
+	// webhook's /ingest/hook) got chi's bodyless default 405 instead of
+	// the problem+json body openapi.yaml declares for all four. Root
+	// MethodNotAllowed is installed once, here, before either ingest mount
+	// seam registers its own routes.
+	r.MethodNotAllowed(problemMethodNotAllowedHandler)
+
 	r.Get("/healthz", healthzHandler)
-	r.Get("/readyz", readyzHandler(d.Store, d.Migrations, d.Queue, d.Ready))
+	r.Get("/readyz", readyzHandler(d.Store, d.Migrations, d.Queue, d.Ready, d.Logger))
 	r.Handle("/metrics", promhttp.Handler())
 
 	// Ingest mount seam #1: future OTLP receivers (SPEC §3.4), top-level
@@ -181,23 +191,23 @@ func New(d Deps) http.Handler {
 				v1.Use(RequireAPIToken(d.Config.APIToken))
 			}
 
-			v1.Get("/meta", metaHandler(d.Config, d.Analytics))
+			v1.Get("/meta", metaHandler(d.Config, d.Analytics, d.Logger))
 
 			// P3-07's read API. A nil Reader (P1-05's default) mounts none
 			// of these, matching Mounter's nil-safe convention.
 			if d.Reader != nil {
-				mountSessionRoutes(v1, d.Reader)
-				mountEventRoutes(v1, d.Reader)
-				mountToolCallRoutes(v1, d.Reader)
+				mountSessionRoutes(v1, d.Reader, d.Logger)
+				mountEventRoutes(v1, d.Reader, d.Logger)
+				mountToolCallRoutes(v1, d.Reader, d.Logger)
 			}
 
 			// P3-08's read API. A nil Analytics (P1-05/P3-07's default)
 			// mounts none of these, matching Reader's own nil-safe
 			// convention above.
 			if d.Analytics != nil {
-				mountAnalyticsRoutes(v1, d.Analytics)
-				mountFacetRoutes(v1, d.Analytics)
-				mountQualityRoutes(v1, d.Analytics)
+				mountAnalyticsRoutes(v1, d.Analytics, d.Logger)
+				mountFacetRoutes(v1, d.Analytics, d.Logger)
+				mountQualityRoutes(v1, d.Analytics, d.Logger)
 			}
 		})
 	})

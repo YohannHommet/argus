@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -24,9 +25,9 @@ type unknownKindsListResponse struct {
 
 // mountQualityRoutes attaches the two quality-introspection routes this
 // ticket owns (SPEC §4.2).
-func mountQualityRoutes(r chi.Router, reader AnalyticsReader) {
-	r.Get("/quality/unknown-kinds", getQualityUnknownKindsHandler(reader))
-	r.Get("/quality/hook-latency", getQualityHookLatencyHandler(reader))
+func mountQualityRoutes(r chi.Router, reader AnalyticsReader, logger *slog.Logger) {
+	r.Get("/quality/unknown-kinds", getQualityUnknownKindsHandler(reader, logger))
+	r.Get("/quality/hook-latency", getQualityHookLatencyHandler(reader, logger))
 }
 
 // getQualityUnknownKindsHandler implements GET /api/v1/quality/unknown-kinds
@@ -34,7 +35,7 @@ func mountQualityRoutes(r chi.Router, reader AnalyticsReader) {
 // only parameter openapi.yaml exposes — the row-count cap is Argus's own,
 // applied inside store.UnknownKinds (read_quality.go's maxUnknownKindGroups),
 // not a wire-visible limit param.
-func getQualityUnknownKindsHandler(reader query.QualityReader) http.HandlerFunc {
+func getQualityUnknownKindsHandler(reader query.QualityReader, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		raw := r.URL.Query().Get("since")
 		if raw == "" {
@@ -48,7 +49,7 @@ func getQualityUnknownKindsHandler(reader query.QualityReader) http.HandlerFunc 
 
 		rows, err := query.UnknownKinds(r.Context(), reader, *since, 0)
 		if err != nil {
-			writeProblem(w, r, http.StatusInternalServerError, "internal", err.Error())
+			writeInternalError(w, r, logger, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, unknownKindsListResponse{Rows: rows})
@@ -58,7 +59,7 @@ func getQualityUnknownKindsHandler(reader query.QualityReader) http.HandlerFunc 
 // getQualityHookLatencyHandler implements GET /api/v1/quality/hook-latency
 // (SPEC §4.3): only `from`/`to`, matching getAnalyticsDecisionsHandler's
 // narrow parameter set.
-func getQualityHookLatencyHandler(reader query.QualityReader) http.HandlerFunc {
+func getQualityHookLatencyHandler(reader query.QualityReader, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		from, to, err := parseTimeWindow(r)
 		if err != nil {
@@ -68,7 +69,7 @@ func getQualityHookLatencyHandler(reader query.QualityReader) http.HandlerFunc {
 
 		hl, err := query.HookLatency(r.Context(), reader, store.AnalyticsFilter{From: from, To: to})
 		if err != nil {
-			writeProblem(w, r, http.StatusInternalServerError, "internal", err.Error())
+			writeInternalError(w, r, logger, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, hl)

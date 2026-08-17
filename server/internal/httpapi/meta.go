@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -70,7 +71,7 @@ func estimatedCostPresent(ctx context.Context, r query.AnalyticsReader) (bool, e
 	return false, nil
 }
 
-func metaHandler(cfg *config.Config, reader AnalyticsReader) http.HandlerFunc {
+func metaHandler(cfg *config.Config, reader AnalyticsReader, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		resp := metaResponse{
 			Version:      telemetry.Version,
@@ -89,14 +90,14 @@ func metaHandler(cfg *config.Config, reader AnalyticsReader) http.HandlerFunc {
 		if reader != nil {
 			facets, err := query.Facets(r.Context(), reader)
 			if err != nil {
-				writeProblem(w, r, http.StatusInternalServerError, "internal", err.Error())
+				writeInternalError(w, r, logger, err)
 				return
 			}
 			resp.Vendors = facets.Vendors
 
 			dq, err := query.DataQuality(r.Context(), reader)
 			if err != nil {
-				writeProblem(w, r, http.StatusInternalServerError, "internal", err.Error())
+				writeInternalError(w, r, logger, err)
 				return
 			}
 			resp.DataQuality = dq
@@ -107,7 +108,7 @@ func metaHandler(cfg *config.Config, reader AnalyticsReader) http.HandlerFunc {
 
 			present, err := estimatedCostPresent(r.Context(), reader)
 			if err != nil {
-				writeProblem(w, r, http.StatusInternalServerError, "internal", err.Error())
+				writeInternalError(w, r, logger, err)
 				return
 			}
 			resp.EstimatedCostPresent = present

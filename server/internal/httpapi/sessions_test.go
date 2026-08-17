@@ -3,6 +3,7 @@ package httpapi_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -281,6 +282,87 @@ func TestListSessionTurns_PaginatesInMemoryAndRoundTripsCursor(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec2.Code)
 	require.Contains(t, rec2.Body.String(), `"prompt_id":"p2"`)
 	require.Contains(t, rec2.Body.String(), `"has_more":false`)
+}
+
+// TestListSessions_UnknownSort_400InvalidParameter is the m1 audit
+// finding's regression test: an out-of-enum `sort` used to be cast
+// unvalidated and rejected only by the store with a plain fmt.Errorf,
+// surfacing as a 500 with internal error text. ListSessionsFunc must never
+// even be called: sort validation happens before the store is asked
+// anything.
+func TestListSessions_UnknownSort_400InvalidParameter(t *testing.T) {
+	t.Parallel()
+
+	reader := &fakeReader{
+		ListSessionsFunc: func(_ context.Context, _ store.SessionFilter, _ store.Page) ([]model.SessionSummary, store.Cursor, error) {
+			t.Fatal("ListSessions must not be called for an invalid sort")
+			return nil, "", nil
+		},
+	}
+	r := httpapi.New(httpapi.Deps{Reader: reader})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/sessions?sort=bogus", nil)
+	r.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusBadRequest, rec.Code, "body: %s", rec.Body.String())
+	require.Equal(t, "application/problem+json", rec.Header().Get("Content-Type"))
+	require.Contains(t, rec.Body.String(), `"type":"urn:argus:error:invalid-parameter"`)
+	require.Contains(t, rec.Body.String(), "sort must be one of")
+}
+
+// TestGetSessionTimeline_UnknownOrder_400InvalidParameter is m1's
+// regression test for the timeline endpoint's `order` parameter (shared
+// validation with listEventsHandler's own copy in events_test.go).
+func TestGetSessionTimeline_UnknownOrder_400InvalidParameter(t *testing.T) {
+	t.Parallel()
+
+	reader := &fakeReader{
+		GetSessionFunc: func(_ context.Context, id string) (*model.SessionDetail, error) {
+			return newTestSession(id), nil
+		},
+		ListEventsFunc: func(_ context.Context, _ store.EventFilter, _ store.Page) ([]model.Event, store.Cursor, error) {
+			t.Fatal("ListEvents must not be called for an invalid order")
+			return nil, "", nil
+		},
+	}
+	r := httpapi.New(httpapi.Deps{Reader: reader})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/sessions/s1/timeline?order=DESC", nil)
+	r.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusBadRequest, rec.Code, "body: %s", rec.Body.String())
+	require.Contains(t, rec.Body.String(), `"type":"urn:argus:error:invalid-parameter"`)
+	require.Contains(t, rec.Body.String(), "order must be one of")
+}
+
+// TestListSessions_StoreInvalidCursor_400 is M14's handler-level regression
+// test: a cursor that passes httpapi's own shallow shape check
+// (DecodeCursor) but fails the store's stricter decode used to escape as a
+// 500 echoing the store's internal error text. ListSessionsFunc simulates
+// exactly that failure mode (postgres's decodeSessionCursor wraps
+// store.ErrInvalidCursor the same way) without needing a real backend —
+// TestListSessions_RealPostgres_MalformedCursor_400 in
+// cursor_postgres_test.go covers the real decode path this fake cannot
+// exercise (storetest.Fake never decodes a cursor at all).
+func TestListSessions_StoreInvalidCursor_400(t *testing.T) {
+	t.Parallel()
+
+	reader := &fakeReader{
+		ListSessionsFunc: func(_ context.Context, _ store.SessionFilter, _ store.Page) ([]model.SessionSummary, store.Cursor, error) {
+			return nil, "", fmt.Errorf("postgres: list sessions: %w: missing key or malformed values", store.ErrInvalidCursor)
+		},
+	}
+	r := httpapi.New(httpapi.Deps{Reader: reader})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/sessions?cursor=eyJrIjoibGFzdF9ldmVudF9hdCIsInYiOlsieCJdfQ", nil)
+	r.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusBadRequest, rec.Code, "body: %s", rec.Body.String())
+	require.Equal(t, "application/problem+json", rec.Header().Get("Content-Type"))
+	require.Contains(t, rec.Body.String(), `"type":"urn:argus:error:invalid-cursor"`)
 }
 
 func TestListSessionTurns_InvalidCursorValue_400(t *testing.T) {

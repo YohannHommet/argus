@@ -3,6 +3,7 @@ package httpapi
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -211,13 +212,15 @@ func writeBindError(w http.ResponseWriter, r *http.Request, err error) {
 // problem+json response: query.ErrSessionNotFound is SPEC §4.3's `GET
 // /api/v1/sessions/{id}` 404 (and, by reuse, every session-scoped
 // sub-resource's own 404 — see each handler's existence-check comment);
-// anything else is an unexpected store failure.
-func writeSessionLookupError(w http.ResponseWriter, r *http.Request, err error) {
+// anything else is an unexpected store failure (m2 audit finding: routed
+// through writeInternalError so it never echoes err's own text to the
+// client).
+func writeSessionLookupError(w http.ResponseWriter, r *http.Request, logger *slog.Logger, err error) {
 	if errors.Is(err, query.ErrSessionNotFound) {
 		writeProblem(w, r, http.StatusNotFound, "not-found", "no such resource")
 		return
 	}
-	writeProblem(w, r, http.StatusInternalServerError, "internal", err.Error())
+	writeInternalError(w, r, logger, err)
 }
 
 // pageInfo is the SPEC §4.1 pagination envelope's wire shape
