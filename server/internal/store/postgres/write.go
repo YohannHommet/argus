@@ -21,34 +21,52 @@
 //
 // One documented, narrow deviation from a *literal* read of that sequence:
 // too_old classification (SPEC §1.7 rule 3) is decided by partitionCoverage
-// *before* the sessions/turns statements are built, not by reacting to the
-// events INSERT's error after the fact. If it were reactive, the
-// too_old-excluded rows would already be baked into the sessions/turns
-// aggregates queued ahead of the events statement, and there would be no way
-// to un-count them without a second pass that touches sessions/turns *again*
-// out of order. Deciding too_old first keeps the literal table order intact
-// and keeps projections exactly consistent with what actually lands in
-// `events`. It does not weaken the deadlock invariant: partitionCoverage
-// only reads pg_class/pg_inherits metadata, it takes no lock on
-// sessions/turns/events rows. See partitions.go's partitionCoverage doc for
-// the full reasoning and its accepted TOCTOU trade-off, and IsTooOld's doc
-// for why it is still exercised as defence in depth.
+// *before* the ingest_dedup gate and before the sessions/turns statements
+// are built, not by reacting to the events INSERT's error after the fact.
+// If it were reactive, the too_old-excluded rows would already be baked
+// into the sessions/turns aggregates queued ahead of the events statement
+// (or, worse, into the dedup ledger — see the next paragraph), and there
+// would be no way to un-count them without a second pass that touches
+// sessions/turns *again* out of order. Deciding too_old first keeps the
+// literal table order intact and keeps projections exactly consistent with
+// what actually lands in `events`. It does not weaken the deadlock
+// invariant: partitionCoverage only reads pg_class/pg_inherits metadata, it
+// takes no lock on sessions/turns/events rows. See partitions.go's
+// partitionCoverage doc for the full reasoning and its accepted TOCTOU
+// trade-off, and IsTooOld's doc for why it is still exercised as defence in
+// depth.
 //
-// # Why pgx.Batch, not CopyFrom
+// A consequence of deciding too_old first (audit finding m3, fixed here):
+// only the dedup keys of events that *do* have a partition to land in are
+// ever admitted into ingest_dedup. Gating dedup admission on every sorted
+// event regardless of coverage would burn a too_old event's key against the
+// ledger even though the row never reached `events` — so a legitimate
+// replay after an operator restores the missing partition (D-18: the only
+// way too_old is reachable at all) would come back `deduped`, not written,
+// and the event would be lost for the ledger's full ARGUS_DEDUP_WINDOW.
 //
-// CopyFrom (COPY FROM STDIN) cannot express ON CONFLICT, and every statement
-// here needs it (the ingest_dedup gate, the events parent-level defence in
-// depth, and every projection upsert). Per-row exec of these table-level
-// statements would need up to seven round trips *per event*; pgx.Batch
-// pipelines every statement in one round trip while preserving the server-
-// side execution order the invariant above requires (pgx.Batch executes
-// queued statements in the order queued, unlike a set of independent
-// goroutine calls). The ingest_dedup gate itself is issued as a single
-// ahead-of-batch statement (via *pgx.Tx directly, not queued) because its
-// result — which keys survived — determines the SQL the rest of the
-// batch needs to build; everything after it (sessions, turns, events,
-// tool_calls/subagents seams, rollup_dirty) is queued as one pgx.Batch and
-// sent together.
+// # Round trips, not pgx.Batch (m26 correction, 2026-08-14)
+//
+// This section previously claimed everything after the dedup gate "is
+// queued as one pgx.Batch and sent together". That was aspirational, not
+// descriptive: nothing in this package calls pgx.Batch or Tx.SendBatch.
+// Every statement in the sequence documented above — ingest_dedup, the
+// sessions/turns upserts, the events insert, the tool_calls/subagents
+// seams, rollup_dirty — is issued as its own individually round-tripped
+// statement or query (insertIngestDedup via *pgx.Tx directly; the rest via
+// upsert_session.go:335, upsert_turn.go:179/:245, events.go:134,
+// upsert_toolcall.go:557, upsert_subagent.go:395, this file's
+// correctSessionTurnCounts, dirty.go:95), in the fixed order the invariant
+// above requires — order is preserved because each call blocks the tx on
+// the previous one completing, the same guarantee pgx.Batch would have
+// given, just paid for as ~8 network round trips per transaction instead of
+// one. That is the window every concurrent overlapping-session write blocks
+// on for the row locks this transaction holds. Collapsing the sequence into
+// one real pgx.Batch (CopyFrom is not an option: it cannot express ON
+// CONFLICT, which the ingest_dedup gate, the events parent-level defence in
+// depth, and every projection upsert all need) is a real latency win, but a
+// ~1-day change across files this ticket does not own — deferred, not
+// implemented, by audit finding m26.
 package postgres
 
 import (
@@ -85,8 +103,28 @@ func (s *Store) WriteBatch(ctx context.Context, b []model.Event) (store.BatchRes
 	}
 	defer func() { _ = tx.Rollback(ctx) }() // no-op after a successful Commit
 
-	dedupKeys := make([]string, len(sorted))
-	for i, e := range sorted {
+	covers, err := partitionCoverage(ctx, tx, "events")
+	if err != nil {
+		return store.BatchResult{}, err
+	}
+
+	// Split by partition coverage *before* the ingest_dedup gate (m3 fix):
+	// see this file's package doc for why a too_old event's dedup_key must
+	// never be admitted to the ledger. partitionCoverage takes no row
+	// locks, so doing this first does not disturb the lock-ordering
+	// invariant.
+	covered := make([]model.Event, 0, len(sorted))
+	tooOld := 0
+	for _, e := range sorted {
+		if covers(e.TS) {
+			covered = append(covered, e)
+		} else {
+			tooOld++
+		}
+	}
+
+	dedupKeys := make([]string, len(covered))
+	for i, e := range covered {
 		dedupKeys[i] = e.DedupKey
 	}
 	survived, err := insertIngestDedup(ctx, tx, dedupKeys)
@@ -94,19 +132,14 @@ func (s *Store) WriteBatch(ctx context.Context, b []model.Event) (store.BatchRes
 		return store.BatchResult{}, err
 	}
 
-	covers, err := partitionCoverage(ctx, tx, "events")
-	if err != nil {
-		return store.BatchResult{}, err
-	}
-
 	// Collapse to one candidate per distinct dedup_key (SPEC §1.7 rule 2's
 	// ledger has one row per key regardless of how many batch entries share
-	// it — see dedup.go's doc), then split by partition coverage.
+	// it — see dedup.go's doc). Every entry here already has a partition to
+	// land in.
 	seenKey := map[string]bool{}
 	var candidates []model.Event
 	deduped := 0
-	tooOld := 0
-	for _, e := range sorted {
+	for _, e := range covered {
 		if !survived[e.DedupKey] {
 			deduped++
 			continue
@@ -116,10 +149,6 @@ func (s *Store) WriteBatch(ctx context.Context, b []model.Event) (store.BatchRes
 			continue
 		}
 		seenKey[e.DedupKey] = true
-		if !covers(e.TS) {
-			tooOld++
-			continue
-		}
 		candidates = append(candidates, e)
 	}
 
@@ -198,9 +227,14 @@ func (s *Store) WriteBatch(ctx context.Context, b []model.Event) (store.BatchRes
 	}
 
 	result.Written = len(inserted)
+	// DedupKey rides along on every ref (M1 fix): internal/ingest's
+	// matchPersisted keys off it to map a persisted ref back to the
+	// submitted batch event it belongs to, since `batch` arrives in
+	// arrival order, not the (ts, seq) order these refs are sorted into
+	// below — see matchPersisted's doc.
 	refs := make([]model.EventRef, 0, len(inserted))
-	for _, ev := range inserted {
-		refs = append(refs, model.EventRef{TS: ev.TS, Seq: ev.Seq})
+	for dk, ins := range inserted {
+		refs = append(refs, model.EventRef{TS: ins.TS, Seq: ins.Seq, DedupKey: dk})
 	}
 	sort.Slice(refs, func(i, j int) bool {
 		if !refs[i].TS.Equal(refs[j].TS) {
