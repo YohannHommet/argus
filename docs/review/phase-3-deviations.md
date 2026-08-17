@@ -87,19 +87,30 @@ silently zero for any operator who skips it.
 | session-0003 | **8** | **8** | 2 |
 | session-0004 | **0** | **0** | 1 |
 
-Session content collapses as the ordinal rises. `backfillOffset(ordinal, sessions, backfill)` places
-ordinal `N-1` at the very end of the backfill window, so its events fall at or past "now" and are
-not emitted. The last session therefore contributes only a metric sample, which correctly produces
-**no `sessions` row** (the sessions projection is event-driven; a metrics-only project is exactly
-what SPEC §4.3's `metrics_only_projects` describes). This is why a `--sessions=5` demo run yields 4
-session rows.
+The last session contributes only a metric sample, which correctly produces **no `sessions` row**
+(the sessions projection is event-driven; a metrics-only project is exactly what SPEC §4.3's
+`metrics_only_projects` describes). This is why a `--sessions=5` demo run yields 4 session rows.
 
 Server-side behaviour is correct — `count(*) FROM sessions` equals `count(DISTINCT session_id) FROM
 events` and no stub rows remain — so nothing in Phase 3 is wrong. But **Phase 4's exit criterion 1
 requires `/sessions` to list ≥ 20 sessions from a demo run**, and with this defect the operator must
 pass a larger `--sessions` than they expect, with the tail of the range producing thin or empty
-sessions. Worth fixing in `internal/sim` (P2-12's `backfillOffset`/emission cutoff) before Phase 4
-depends on demo data volume.
+sessions.
+
+> **Diagnosis corrected, 2026-08-14 (pre-Phase-4 audit fix wave).** The mechanism recorded here
+> originally — "`backfillOffset(ordinal, sessions, backfill)` places ordinal `N-1` at the very end of
+> the backfill window, so its events fall at or past 'now' and are not emitted", and the suggestion
+> to fix "P2-12's `backfillOffset`/emission cutoff" — **was wrong**, and nearly sent the fix into the
+> wrong function. There is no time-based emission cutoff anywhere in the demo path: under `--out` the
+> clock origin is a fixed epoch (`clock.go`'s `ResolveClockOrigin`) and no timestamp is ever compared
+> to `time.Now()`. Nor does content "collapse as the ordinal rises" — that reading came from a single
+> seed. The real cause was `project := projects[ordinal%len(projects)]` in `runner.go`: the
+> metrics-only legacy-app project sits at index 4 of 5, and that residue depends only on the ordinal,
+> never on the seed, so any `--sessions` that is a multiple of 5 put it last every time. Confirmed by
+> re-running seeds 1-9: the last session had 0 log events on *every* seed, while ordinary sessions'
+> thinness moved around with the seed as ordinary variance. Fixed by drawing the project from a
+> per-session RNG, as every other categorical field already is. Recorded here because a wrong
+> diagnosis in the ledger is worse than none: it reads with the same authority as a verified one.
 
 ## Process observations
 
