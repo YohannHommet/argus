@@ -42,7 +42,7 @@ func TestDemo_LastOrdinalProjectNotForcedByOrdinal(t *testing.T) {
 	const trials = 40
 	legacyCount := 0
 	for seed := uint64(1); seed <= trials; seed++ {
-		if pickProject(seed, sessions-1) == legacyAppProject {
+		if demoProjectAssignment(seed, sessions)[sessions-1] == legacyAppProject {
 			legacyCount++
 		}
 	}
@@ -55,7 +55,7 @@ func TestDemo_LastOrdinalProjectNotForcedByOrdinal(t *testing.T) {
 // TestDemo_NSessionsYieldNDistinctRealisticSessions is the ticket's
 // broader AC: "--sessions=N yields N sessions that each carry a realistic
 // event count". It runs the exact loop RunDemo runs (backfillOffset +
-// pickProject + generateSession) for --sessions=20 — Phase 4 exit
+// demoProjectAssignment + generateSession) for --sessions=20 — Phase 4 exit
 // criterion 1's own number — across many seeds, and checks two properties
 // that must hold for *every* seed, not just a hand-picked lucky one:
 //
@@ -81,11 +81,12 @@ func TestDemo_NSessionsYieldNDistinctRealisticSessions(t *testing.T) {
 	for seed := uint64(1); seed <= trials; seed++ {
 		cfg.Seed = seed
 
+		assignment := demoProjectAssignment(cfg.Seed, cfg.Sessions)
 		ids := make(map[string]bool, cfg.Sessions)
 		nonLegacy, thin := 0, 0
 		for ordinal := 0; ordinal < cfg.Sessions; ordinal++ {
 			startOffset := backfillOffset(ordinal, cfg.Sessions, cfg.Backfill)
-			project := pickProject(cfg.Seed, ordinal)
+			project := assignment[ordinal]
 			result := generateSession(cfg, clock, ordinal, startOffset, project)
 
 			ids[result.SessionID] = true
@@ -122,7 +123,7 @@ func TestPickProject_OrdinalZeroIsAlwaysLogsCapable(t *testing.T) {
 	t.Parallel()
 
 	for seed := uint64(1); seed <= 500; seed++ {
-		require.NotEqual(t, legacyAppProject, pickProject(seed, 0),
+		require.NotEqual(t, legacyAppProject, demoProjectAssignment(seed, 25)[0],
 			"seed %d: ordinal 0 must be a logs-capable project, or --chaos-clock-skew's once-per-run beyond-retention event is never emitted", seed)
 	}
 
@@ -131,10 +132,49 @@ func TestPickProject_OrdinalZeroIsAlwaysLogsCapable(t *testing.T) {
 	// "logs exporter appears off" demo case (SPEC §7.1) has no data.
 	sawLegacyApp := false
 	for ordinal := 1; ordinal < 200 && !sawLegacyApp; ordinal++ {
-		if pickProject(7, ordinal) == legacyAppProject {
+		if demoProjectAssignment(7, 200)[ordinal] == legacyAppProject {
 			sawLegacyApp = true
 		}
 	}
 	require.True(t, sawLegacyApp,
 		"legacy-app must still be reachable for ordinals past 0, or SPEC §7.1's metrics-only demo case never appears")
+}
+
+// TestDemoProjectAssignment_YieldsEnoughSessionRowsForEverySeed pins the
+// property Phase 4's exit criterion 1 actually depends on: a default demo
+// run must put at least 20 sessions in the session list, for every seed —
+// not on average.
+//
+// A metrics-only project correctly produces no `sessions` row (SPEC §4.3's
+// metrics_only_projects), so the session-row count is the number of
+// logs-capable ordinals. Under the balanced allocation that count is a
+// function of --sessions alone, with no seed variance, which is the whole
+// reason the allocation is balanced rather than an independent per-ordinal
+// draw: an i.i.d. draw at the same default left 34% of seeds below 20, and
+// the worst seed at 15. This asserts the invariant across a wide seed
+// sample so a future change back to i.i.d. draws fails here — cheaply —
+// rather than in a Phase-4 exit-criteria run.
+func TestDemoProjectAssignment_YieldsEnoughSessionRowsForEverySeed(t *testing.T) {
+	t.Parallel()
+
+	// The floor Phase 4's exit criterion 1 states.
+	const wantSessionRows = 20
+
+	worst := demoDefaultSessions
+	for seed := uint64(1); seed <= 2000; seed++ {
+		rows := 0
+		for _, project := range demoProjectAssignment(seed, demoDefaultSessions) {
+			if project != legacyAppProject {
+				rows++
+			}
+		}
+		if rows < worst {
+			worst = rows
+		}
+	}
+
+	require.GreaterOrEqual(t, worst, wantSessionRows,
+		"the default demo run (--sessions=%d) must yield >= %d session rows for every seed (worst seen: %d); "+
+			"Phase 4 exit criterion 1 requires the session list to show at least %d from a demo run",
+		demoDefaultSessions, wantSessionRows, worst, wantSessionRows)
 }
