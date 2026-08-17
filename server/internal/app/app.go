@@ -156,14 +156,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, opts ...O
 	if o.registerer != nil {
 		ingestOpts = append(ingestOpts, ingest.WithRegisterer(o.registerer))
 	}
-	ing := ingest.New(st, ingest.PipelineConfig{
-		QueueCap:       cfg.IngestQueue,
-		Workers:        cfg.IngestWorkers,
-		BatchSize:      cfg.IngestBatchSize,
-		FlushInterval:  cfg.IngestFlush,
-		RetryConflict:  cfg.IngestRetryConflict,
-		RetryTransient: cfg.IngestRetryTransient,
-	}, ingestOpts...)
+	ing := ingest.New(st, ingestPipelineConfig(cfg), ingestOpts...)
 
 	// P2-11: the hooks webhook (SPEC §3.5). hookNormalizer is built here
 	// (not inside internal/ingest/hooks) because it needs
@@ -206,6 +199,27 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, opts ...O
 		otlp:       otlpHandler,
 		addrReady:  make(chan struct{}),
 	}, nil
+}
+
+// ingestPipelineConfig maps the ARGUS_INGEST_* config keys onto the ingest
+// pipeline's own config struct. It exists as a named function purely so the
+// mapping is directly testable: every field here is a config key that
+// reaches production only through this one assignment, and an omitted field
+// silently falls back to the pipeline's internal default rather than
+// failing anything. That is the exact shape of the two integration defects
+// Phase 3 shipped (docs/review/phase-3-deviations.md) — two components each
+// individually correct and individually tested, with nothing covering the
+// seam between them.
+func ingestPipelineConfig(cfg *config.Config) ingest.PipelineConfig {
+	return ingest.PipelineConfig{
+		QueueCap:       cfg.IngestQueue,
+		Workers:        cfg.IngestWorkers,
+		BatchSize:      cfg.IngestBatchSize,
+		FlushInterval:  cfg.IngestFlush,
+		RetryConflict:  cfg.IngestRetryConflict,
+		RetryTransient: cfg.IngestRetryTransient,
+		WriteTimeout:   cfg.IngestWriteTimeout,
+	}
 }
 
 // Addr returns the address Serve actually bound to, resolving an

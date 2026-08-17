@@ -33,3 +33,4 @@ npm-debug.log*
 *.swo
 .idea/
 .vscode/
+.worktrees/
