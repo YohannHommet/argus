@@ -5,6 +5,7 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"path"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -52,8 +53,50 @@ func mountSPA(r chi.Router, assets fs.FS) {
 			problemNotFoundHandler(w, req)
 			return
 		}
+		// m24 audit finding: before this, every path that missed the
+		// /assets/* mount above — including a genuinely missing root file
+		// like /favicon.svg — fell straight through to serveIndex, so the
+		// browser got the whole SPA document back as 200 text/html
+		// wherever it expected a specific asset. A root-level path with a
+		// file extension (isRootStaticAssetPath) is now served through the
+		// FileServer if it really exists there, and 404s (not 200-with-
+		// index.html) if it doesn't; a client-side route like /sessions/abc
+		// has no extension on its last segment, so it still falls through
+		// to serveIndex exactly as before.
+		if isRootStaticAssetPath(req.URL.Path) {
+			if rootStaticAssetExists(assets, req.URL.Path) {
+				fileServer.ServeHTTP(w, req)
+				return
+			}
+			problemNotFoundHandler(w, req)
+			return
+		}
 		serveIndex(w, req, assets)
 	})
+}
+
+// isRootStaticAssetPath reports whether p looks like a request for a real
+// static file served straight from the SPA's document root (e.g.
+// /favicon.svg, /robots.txt) rather than a client-side route (e.g.
+// /sessions/abc): a last path segment containing a dot. Every one of
+// Argus's actual client-side routes is an id/keyword segment with no dot in
+// it, so this heuristic never misclassifies a real route as a missing
+// asset — the same convention static-SPA servers (webpack-dev-server's
+// historyApiFallback, `serve`, ...) use for exactly this disambiguation.
+func isRootStaticAssetPath(p string) bool {
+	return strings.Contains(path.Base(p), ".")
+}
+
+// rootStaticAssetExists reports whether p names a real, non-directory file
+// in assets, given p is already known to look like a root static asset
+// request (isRootStaticAssetPath).
+func rootStaticAssetExists(assets fs.FS, p string) bool {
+	name := strings.TrimPrefix(p, "/")
+	if name == "" {
+		return false
+	}
+	info, err := fs.Stat(assets, name)
+	return err == nil && !info.IsDir()
 }
 
 func immutableCache(next http.Handler) http.Handler {

@@ -37,3 +37,18 @@ var (
 	ErrSessionNotFound = errors.New("store: session not found")
 	ErrEventNotFound   = errors.New("store: event not found")
 )
+
+// ErrInvalidCursor is the backend-independent signal for "a `?cursor=`
+// value that decoded past httpapi's own shallow shape check but failed a
+// backend's stricter decode" (SPEC §4.1: "opaque, validated, 400 on
+// tamper"; M14 audit finding).
+//
+// It lives on the seam for the same reason ErrSessionNotFound/
+// ErrEventNotFound do (see their doc comment above): httpapi's list
+// handlers sit behind internal/query, which must never import a concrete
+// backend to recognise a tampered cursor, and storetest.Fake needs a way to
+// signal the same failure the real postgres backend can produce so the
+// conformance suite exercises the 400 path production actually has.
+// postgres.ErrInvalidCursor is kept as an alias so errors.Is holds against
+// either name.
+var ErrInvalidCursor = errors.New("store: invalid cursor")

@@ -68,12 +68,17 @@ var sessionSortColumns = map[store.SessionSort]string{
 	store.SessionSortEventCount:  "event_count",
 }
 
-// ErrInvalidCursor is ListSessions' cursor decode failure (SPEC §4.1:
-// "opaque, validated, 400 on tamper") — a distinct sentinel from
-// httpapi.ErrInvalidCursor because store cannot depend on httpapi (see
-// package doc), but wrapping the identical semantics so a future caller can
-// map it onto the same problem+json response.
-var ErrInvalidCursor = errors.New("postgres: invalid cursor")
+// ErrInvalidCursor is ListSessions'/ListEvents'/ListToolCalls' cursor
+// decode failure (SPEC §4.1: "opaque, validated, 400 on tamper").
+//
+// It is an alias for store.ErrInvalidCursor, not its own error value —
+// same D-22 pattern as ErrSessionNotFound just below: the sentinel belongs
+// on the seam so every backend (and storetest.Fake) can produce it and
+// httpapi/internal/query never has to import this package to recognise a
+// tampered cursor. Existing callers and tests that reference
+// postgres.ErrInvalidCursor keep working, and errors.Is holds against
+// either name.
+var ErrInvalidCursor = store.ErrInvalidCursor
 
 // ErrSessionNotFound is GetSession's not-found signal (SPEC §4.3's `GET
 // /api/v1/sessions/{id}` 404 response), wrapping pgx.ErrNoRows so callers

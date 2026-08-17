@@ -2,6 +2,7 @@ package httpapi_test
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -13,6 +14,54 @@ import (
 	"github.com/YohannHommet/argus/server/internal/model"
 	"github.com/YohannHommet/argus/server/internal/store"
 )
+
+// TestListEvents_UnknownOrder_400InvalidParameter is the m1 audit finding's
+// regression test for GET /api/v1/events' own `order` parameter (events.go
+// defines validSortOrders, shared with sessions.go's timeline handler).
+func TestListEvents_UnknownOrder_400InvalidParameter(t *testing.T) {
+	t.Parallel()
+
+	reader := &fakeReader{
+		ListEventsFunc: func(_ context.Context, _ store.EventFilter, _ store.Page) ([]model.Event, store.Cursor, error) {
+			t.Fatal("ListEvents must not be called for an invalid order")
+			return nil, "", nil
+		},
+	}
+	r := httpapi.New(httpapi.Deps{Reader: reader})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/events?order=DESC", nil)
+	r.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusBadRequest, rec.Code, "body: %s", rec.Body.String())
+	require.Equal(t, "application/problem+json", rec.Header().Get("Content-Type"))
+	require.Contains(t, rec.Body.String(), `"type":"urn:argus:error:invalid-parameter"`)
+	require.Contains(t, rec.Body.String(), "order must be one of")
+}
+
+// TestListEvents_StoreInvalidCursor_400 is M14's handler-level regression
+// test for GET /api/v1/events (the cross-session counterpart of
+// TestListSessions_StoreInvalidCursor_400 in sessions_test.go): a cursor
+// valid at httpapi's shallow check but rejected by the store's stricter
+// decode must map onto 400, not 500.
+func TestListEvents_StoreInvalidCursor_400(t *testing.T) {
+	t.Parallel()
+
+	reader := &fakeReader{
+		ListEventsFunc: func(_ context.Context, _ store.EventFilter, _ store.Page) ([]model.Event, store.Cursor, error) {
+			return nil, "", fmt.Errorf("postgres: list events: %w: missing key or malformed values", store.ErrInvalidCursor)
+		},
+	}
+	r := httpapi.New(httpapi.Deps{Reader: reader})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/events?cursor=eyJrIjoiYXNjIiwidiI6WyJ4Il19", nil)
+	r.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusBadRequest, rec.Code, "body: %s", rec.Body.String())
+	require.Equal(t, "application/problem+json", rec.Header().Get("Content-Type"))
+	require.Contains(t, rec.Body.String(), `"type":"urn:argus:error:invalid-cursor"`)
+}
 
 func TestGetEvent_MalformedRef_400InvalidEventRef(t *testing.T) {
 	t.Parallel()
