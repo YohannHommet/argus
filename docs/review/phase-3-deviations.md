@@ -1,9 +1,13 @@
 # Phase 3 accepted deviations
 
 All entries below deviate from SPEC.md/PLAN.md as originally written. Entries marked **RULING
-NEEDED** have not been ratified by the owner; the rest are mechanical consequences of already-accepted
-decisions and are recorded for completeness. Unlike Phase 1 and 2, SPEC.md and PLAN.md have **not**
-yet been amended to match — that amendment is the owner's call on the RULING NEEDED rows.
+NEEDED** were not ratified when this file was written; the rest are mechanical consequences of
+already-accepted decisions and are recorded for completeness.
+
+**Status as of 2026-08-14 (pre-Phase-4 audit fix wave).** The RULING NEEDED rows have since been
+ratified, and SPEC.md — plus one PLAN.md acceptance criterion — have now been amended to match, so
+the caveat this paragraph used to carry no longer applies. Each row's `Status` column records where
+the amendment landed. D-22 required no SPEC change; D-25 was added by the same wave.
 
 ## Deviations needing an owner ruling
 

@@ -1039,9 +1039,12 @@ server/
 
 Dependency direction is strictly inward: `httpapi → query → store`, `ingest → normalize + store +
 stream`, `model` depends on nothing. `store` never imports `httpapi` or `query`. Enforced by a
-`depguard` rule in golangci-lint for the `model`, `store`, `ingest` and `sim` packages; `httpapi`
-and `query` carry no rule of their own yet, so the inward direction on those two is convention,
-not gate, until that gap closes.
+`depguard` rule in golangci-lint for the `model`, `store`, `ingest`, `sim`, `httpapi` and `query`
+packages — all six, as of the pre-Phase-4 audit wave, which found rules for only the first four and
+added the two that were missing. `internal/store` itself is deliberately *not* on the `httpapi` or
+`query` deny lists: it is the shared seam both layers are meant to depend on (filter and enum types,
+and the not-found sentinels D-22 moved there). What each rule denies is the concrete
+`internal/store/postgres` implementation, and `internal/ingest`.
 
 **Accepted exception: `store/postgres → ingest/normalize`.** `upsert_toolcall.go` and
 `upsert_subagent.go` reuse `ingest/normalize`'s pure correlation helpers rather than
@@ -1327,8 +1330,14 @@ allow-list of one name, so the next harness variable cannot reintroduce it.
   `estimated_share` on every fresh install (§4.1), which is worse than refusing to start.
 - Graceful shutdown on SIGINT/SIGTERM: (1) `/readyz` starts failing; (2) `http.Server.Shutdown`
   with `ARGUS_SHUTDOWN_GRACE` — in-flight ingest requests finish, SSE subscribers get a final
-  `event: shutdown`; (3) close the ingest queue and drain it fully (same grace); (4) `pool.Close()`.
+  `event: shutdown`; (3) close the ingest queue and drain it fully, with **its own separate
+  `ARGUS_SHUTDOWN_GRACE` budget** rather than the remainder of step (2)'s; (4) `pool.Close()`.
   Exit 0 only if the drain completed; 1 if events were dropped, so a compose restart loop is visible.
+  Steps (2) and (3) are budgeted independently because sharing one deadline made a slow in-flight
+  request starve the drain: the grace would already be spent by the time step (3) began, so the
+  pipeline cancelled its workers and dropped every queued batch with the database perfectly healthy.
+  Worst-case shutdown is therefore up to twice the grace, which is what a container's
+  `stop_grace_period` must accommodate (`deploy/docker-compose.yml`).
 
 Self-observability: `GET /healthz` (liveness, no DB), `GET /readyz` (DB ping + migrations current +
 queue not saturated), `GET /metrics` (Prometheus). In Phase 1, `/readyz` reports
