@@ -221,6 +221,15 @@ func newE2EApp(t *testing.T, opts ...Option) (*App, string, *pgxpool.Pool) {
 	require.Empty(t, warnings)
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	// Default every App this helper builds onto its own Prometheus registry,
+	// while still letting an explicit opts entry override it. The ingest
+	// pipeline's metric names collide on prometheus.DefaultRegisterer, and
+	// that collision *panics* rather than failing an assertion — so the
+	// second e2e test in a binary to forget WithRegisterer takes the whole
+	// run down with a stack trace that says nothing about the real cause.
+	// Three separate tests hit this before it was defaulted here; making the
+	// safe choice the default is what stops a fourth.
+	opts = append([]Option{WithRegisterer(prometheus.NewRegistry())}, opts...)
 	a, err := New(ctx, cfg, logger, opts...)
 	require.NoError(t, err)
 

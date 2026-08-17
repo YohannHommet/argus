@@ -15,11 +15,13 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 
 	"github.com/YohannHommet/argus/server/internal/config"
@@ -104,7 +106,12 @@ func newShutdownTestApp(t *testing.T) (app *App, baseURL string, pool *pgxpool.P
 	require.Empty(t, warnings)
 
 	logger := slog.New(slog.NewTextHandler(debugLogOutput(), nil))
-	a, err := New(ctx, cfg, logger)
+	// Its own registry, not the default one: this file's Apps share a test
+	// binary with e2e_ingest_test.go's, and the ingest pipeline's metric
+	// names would collide on prometheus.DefaultRegisterer — which panics
+	// rather than failing gracefully. Same reason, and same fix, as
+	// read_api_e2e_test.go's newE2EApp.
+	a, err := New(ctx, cfg, logger, WithRegisterer(prometheus.NewRegistry()))
 	require.NoError(t, err)
 
 	serveCtx, cancelServe := context.WithCancel(context.Background())
