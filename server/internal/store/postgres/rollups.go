@@ -205,6 +205,47 @@ func toTimestamptz(ts []time.Time) []pgtype.Timestamptz {
 	return out
 }
 
+// bucketRange returns the M9 sargable range [min(buckets), max(buckets)+
+// width) as pgtype.Timestamptz, for buckets already sorted ascending
+// (sortedTimes's contract). width is the bucket grain (time.Hour for every
+// caller today) — the range must be exactly one bucket wider than the last
+// entry so that bucket's own rows (which can carry any ts within
+// [bucket, bucket+width)) are not excluded by the range predicate before
+// the exact date_trunc(...) = ANY(buckets) equality gets a chance to
+// select them. Callers only invoke this with a non-empty buckets slice
+// (both call sites already return early on len(buckets) == 0).
+func bucketRange(buckets []time.Time, width time.Duration) (from, to pgtype.Timestamptz) {
+	first, last := buckets[0], buckets[len(buckets)-1]
+	return pgtype.Timestamptz{Time: first, Valid: true}, pgtype.Timestamptz{Time: last.Add(width), Valid: true}
+}
+
+// filterPartitionCovered implements the m9 minor fix: it drops every bucket
+// in buckets (already hour-truncated, UTC) that falls outside every
+// currently-attached monthly partition of parent ("events" or
+// "metric_samples"), using the same partitionCoverage predicate
+// partitions.go's WriteBatch/WriteMetrics pre-flight check already relies
+// on (this ticket does not own partitions.go and makes no change there —
+// partitionCoverage is called, not modified). The order of buckets is
+// preserved (sortedTimes's ascending contract survives filtering), which is
+// what lets bucketRange's [min, max+width) computation stay correct on the
+// filtered slice.
+func filterPartitionCovered(ctx context.Context, tx pgx.Tx, parent string, buckets []time.Time) ([]time.Time, error) {
+	if len(buckets) == 0 {
+		return buckets, nil
+	}
+	covers, err := partitionCoverage(ctx, tx, parent)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]time.Time, 0, len(buckets))
+	for _, b := range buckets {
+		if covers(b) {
+			out = append(out, b)
+		}
+	}
+	return out, nil
+}
+
 // recomputeDaily implements SPEC §2.4 step 5 for one source: rollup_daily
 // is always derived from rollup_hourly, never from events/metric_samples
 // directly, and the affected days are re-derived fully (delete then
@@ -267,21 +308,41 @@ type eventGroupAgg struct {
 // sums into cost_estimated_usd — the one piece of SPEC §2.4's cost split
 // with no SQL equivalent in this codebase.
 func recomputeEventBuckets(ctx context.Context, tx pgx.Tx, q *gen.Queries, prices []pricing.Price, buckets []time.Time) error {
+	// m9 minor fix (pre-Phase-4 audit wave, ticket W3): a claimed bucket
+	// with no covering `events` partition (the retention job dropped it
+	// between the dirty mark and this run — reachable via §2.4's
+	// project-change re-mark, which can dirty up to
+	// ARGUS_ROLLUP_SESSION_REMARK_MAX hours of past buckets) is dropped from
+	// this pass entirely, before DeleteRollupHourly ever runs for it. Without
+	// this, DeleteRollupHourly commits first, AggregateEventRollup/
+	// AggregateToolCallRollup then legitimately find zero rows (there is no
+	// partition left to read), and recomputeEventBuckets returns early with
+	// the delete already committed — permanently losing that bucket's
+	// rollup_hourly row instead of leaving it as the last known-good value.
+	// A bucket that IS covered but genuinely has no contributing data is a
+	// different, correct case (DeleteRollupHourly's own doc comment: "a key
+	// that no longer has any contributing data actually disappears") and is
+	// left untouched by this filter.
+	buckets, err := filterPartitionCovered(ctx, tx, "events", buckets)
+	if err != nil {
+		return fmt.Errorf("postgres: run rollups: event partition coverage: %w", err)
+	}
 	if len(buckets) == 0 {
 		return nil
 	}
 	tsBuckets := toTimestamptz(buckets)
+	fromTS, toTS := bucketRange(buckets, time.Hour)
 
 	if err := q.DeleteRollupHourly(ctx, gen.DeleteRollupHourlyParams{Buckets: tsBuckets, SourceKind: sourceEvent}); err != nil {
 		return fmt.Errorf("postgres: run rollups: delete event rollup_hourly: %w", err)
 	}
 
-	rows, err := q.AggregateEventRollup(ctx, tsBuckets)
+	rows, err := q.AggregateEventRollup(ctx, gen.AggregateEventRollupParams{FromTs: fromTS, ToTs: toTS, Buckets: tsBuckets})
 	if err != nil {
 		return fmt.Errorf("postgres: run rollups: aggregate event rollup: %w", err)
 	}
 
-	toolRows, err := q.AggregateToolCallRollup(ctx, tsBuckets)
+	toolRows, err := q.AggregateToolCallRollup(ctx, gen.AggregateToolCallRollupParams{FromTs: fromTS, ToTs: toTS, Buckets: tsBuckets})
 	if err != nil {
 		return fmt.Errorf("postgres: run rollups: aggregate tool_calls rollup: %w", err)
 	}
@@ -505,16 +566,23 @@ func insertEventRollupHourly(ctx context.Context, tx pgx.Tx, ins eventRollupInse
 // metrics, so this pass computes in Go and bulk-writes once, exactly like
 // the event pass).
 func recomputeMetricBuckets(ctx context.Context, tx pgx.Tx, q *gen.Queries, buckets []time.Time) error {
+	// m9 minor fix: same "skip a bucket with no covering partition" rule as
+	// recomputeEventBuckets, against metric_samples instead of events.
+	buckets, err := filterPartitionCovered(ctx, tx, "metric_samples", buckets)
+	if err != nil {
+		return fmt.Errorf("postgres: run rollups: metric partition coverage: %w", err)
+	}
 	if len(buckets) == 0 {
 		return nil
 	}
 	tsBuckets := toTimestamptz(buckets)
+	fromTS, toTS := bucketRange(buckets, time.Hour)
 
 	if err := q.DeleteRollupHourly(ctx, gen.DeleteRollupHourlyParams{Buckets: tsBuckets, SourceKind: sourceMetric}); err != nil {
 		return fmt.Errorf("postgres: run rollups: delete metric rollup_hourly: %w", err)
 	}
 
-	rows, err := q.FetchMetricRowsForRollup(ctx, tsBuckets)
+	rows, err := q.FetchMetricRowsForRollup(ctx, gen.FetchMetricRowsForRollupParams{FromTs: fromTS, ToTs: toTS, Buckets: tsBuckets})
 	if err != nil {
 		return fmt.Errorf("postgres: run rollups: fetch metric rows: %w", err)
 	}

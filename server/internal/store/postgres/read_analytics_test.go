@@ -545,3 +545,48 @@ func TestAnalyticsSeries_EmptyWindowReturnsZeros(t *testing.T) {
 	require.Equal(t, []float64{0, 0, 0}, got.Series[0].Values)
 	require.Nil(t, got.Other)
 }
+
+// --- m10 (pre-Phase-4 audit wave, ticket W3): DecisionCounts's decided/
+// exact_decided must agree with SessionDecisionTotals's
+// decision IN ('accept','reject') convention, not IS NOT NULL -------------
+
+// TestAnalyticsDecisions_ThirdDecisionValueDoesNotInflateDecided reproduces
+// m10: `decision` is unconstrained vendor vocabulary (SPEC §0), so a third
+// value alongside accept/reject (here "defer", standing in for any future
+// or vendor-specific value this codebase has never seen) must be excluded
+// from `decided` and `exact_share`'s denominator exactly like
+// SessionDecisionTotals (read_sessions.sql:84-85) already excludes it —
+// before the fix, DecisionCounts's `decision IS NOT NULL` filter counted it
+// anyway, so `accept + reject != decided` and `/analytics/decisions`
+// disagreed with `/sessions/{id}` for the same underlying data.
+func TestAnalyticsDecisions_ThirdDecisionValueDoesNotInflateDecided(t *testing.T) {
+	st, pool := newStore(t)
+	ctx := context.Background()
+	sessionID := nextTestSessionID("dec-third-value")
+	seedSession(t, pool, sessionSeed{ID: sessionID, Project: "argus-third-value"})
+
+	base := time.Now().UTC().Add(-time.Hour)
+	seedToolCallFull(t, pool, toolCallFullSeed{ID: testUUID(22001), SessionID: sessionID, ToolName: "Edit", Decision: strPtr("accept"), DecisionSource: strPtr("config"), Correlation: "exact", StartedAt: base})
+	seedToolCallFull(t, pool, toolCallFullSeed{ID: testUUID(22002), SessionID: sessionID, ToolName: "Edit", Decision: strPtr("reject"), DecisionSource: strPtr("config"), Correlation: "exact", StartedAt: base.Add(time.Second)})
+	// A third, unconstrained decision value (SPEC §0), deliberately given
+	// correlation="heuristic" so the buggy `IS NOT NULL` predicate and the
+	// fixed `IN ('accept','reject')` predicate disagree on exact_share, not
+	// just on the internal decided count no Go type exposes directly: the
+	// buggy version inflates `decided` (denominator) with this row while
+	// leaving `exact_decided` (numerator) untouched (it's heuristic in
+	// both), so exact_share drops to 2/3 pre-fix instead of the correct
+	// 2/2 = 1.0.
+	seedToolCallFull(t, pool, toolCallFullSeed{ID: testUUID(22003), SessionID: sessionID, ToolName: "Edit", Decision: strPtr("defer"), DecisionSource: strPtr("config"), Correlation: "heuristic", StartedAt: base.Add(2 * time.Second)})
+
+	from := base.Add(-time.Minute)
+	to := time.Now().UTC().Add(time.Minute)
+	got, err := st.AnalyticsDecisions(ctx, store.AnalyticsFilter{From: &from, To: &to, Project: []string{"argus-third-value"}})
+	require.NoError(t, err)
+	require.Len(t, got.Rows, 1)
+
+	row := got.Rows[0]
+	require.Equal(t, "Edit", row.ToolName)
+	require.Equal(t, int64(1), row.Accept)
+	require.Equal(t, int64(1), row.Reject)
+	require.InDelta(t, 1.0, row.ExactShare, 1e-9, "the third decision value must not appear in decided's denominator, matching SessionDecisionTotals's decision IN ('accept','reject') convention")
+}

@@ -255,8 +255,8 @@ const decisionCounts = `-- name: DecisionCounts :many
 SELECT tc.tool_name,
     count(*) FILTER (WHERE tc.decision = 'accept')::bigint AS accept,
     count(*) FILTER (WHERE tc.decision = 'reject')::bigint AS reject,
-    count(*) FILTER (WHERE tc.decision IS NOT NULL)::bigint AS decided,
-    count(*) FILTER (WHERE tc.decision IS NOT NULL AND tc.correlation <> 'heuristic')::bigint AS exact_decided
+    count(*) FILTER (WHERE tc.decision IN ('accept', 'reject'))::bigint AS decided,
+    count(*) FILTER (WHERE tc.decision IN ('accept', 'reject') AND tc.correlation <> 'heuristic')::bigint AS exact_decided
 FROM tool_calls tc
 WHERE tc.started_at >= $1::timestamptz AND tc.started_at < $2::timestamptz
   AND (cardinality($3::text[]) = 0
@@ -284,6 +284,15 @@ type DecisionCountsRow struct {
 // read_analytics.go compute exact_share = exact_decided/decided per row,
 // matching GetSession's SessionDecisionSummary.ExactShare convention
 // (read_sessions.go: vacuously 1.0 when nothing is decided yet).
+//
+// m10 fix (pre-Phase-4 audit wave, ticket W3): `decided`/`exact_decided`
+// filter on `tc.decision IN ('accept', 'reject')`, not `tc.decision IS NOT
+// NULL` — `decision` is unconstrained vendor vocabulary (SPEC §0), so a
+// third value (or any future one) inflated `decided` here without moving
+// `accept`/`reject`, disagreeing with SessionDecisionTotals's
+// `decision IN ('accept', 'reject')` (read_sessions.sql:84-85, the
+// convention this query's comment already claimed to match) and making
+// accept+reject != decided. Copies read_sessions.sql's predicate verbatim.
 func (q *Queries) DecisionCounts(ctx context.Context, arg DecisionCountsParams) ([]DecisionCountsRow, error) {
 	rows, err := q.db.Query(ctx, decisionCounts, arg.FromTs, arg.ToTs, arg.Projects)
 	if err != nil {

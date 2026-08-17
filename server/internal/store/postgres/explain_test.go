@@ -2,12 +2,16 @@ package postgres_test
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
+
+	"github.com/YohannHommet/argus/server/internal/model"
+	"github.com/YohannHommet/argus/server/internal/store/postgres"
 )
 
 // explainCase names one read_analytics.go-backed query (SPEC §2.5's "every
@@ -218,8 +222,8 @@ func analyticsExplainCases(now time.Time) []explainCase {
 			SELECT tc.tool_name,
 			    count(*) FILTER (WHERE tc.decision = 'accept')::bigint AS accept,
 			    count(*) FILTER (WHERE tc.decision = 'reject')::bigint AS reject,
-			    count(*) FILTER (WHERE tc.decision IS NOT NULL)::bigint AS decided,
-			    count(*) FILTER (WHERE tc.decision IS NOT NULL AND tc.correlation <> 'heuristic')::bigint AS exact_decided
+			    count(*) FILTER (WHERE tc.decision IN ('accept', 'reject'))::bigint AS decided,
+			    count(*) FILTER (WHERE tc.decision IN ('accept', 'reject') AND tc.correlation <> 'heuristic')::bigint AS exact_decided
 			FROM tool_calls tc
 			WHERE tc.started_at >= $1::timestamptz AND tc.started_at < $2::timestamptz
 			  AND (cardinality($3::text[]) = 0
@@ -411,6 +415,191 @@ func planBoundsTS(plan string) bool {
 // standing test (it would require mutating read_analytics.go's real SQL),
 // so this synthetic canary is what stays in the suite to catch a future
 // regression in planMentionsEvents itself.
+// --- M9 (pre-Phase-4 audit wave, ticket W3): AggregateEventRollup's new
+// [from_ts, to_ts) range predicate must let the planner prune partitions
+// outside the claimed bucket window, instead of Append-scanning every
+// retained `events` partition on every 60s rollup tick. ------------------
+
+// aggregateEventRollupSQL is copied verbatim from sqlc's compiled
+// aggregateEventRollup const (internal/store/postgres/gen/rollups.sql.go),
+// for the same reason analyticsExplainCases above copies read_analytics.go's
+// compiled queries: Postgres can only EXPLAIN sqlc's compiled $N-form SQL,
+// not the sqlc.arg(...) source form, and this package cannot import gen's
+// unexported consts from a different (_test) package.
+const aggregateEventRollupSQL = `
+	SELECT
+	    date_trunc('hour', e.ts, 'UTC')::timestamptz                        AS bucket,
+	    COALESCE(s.project, '')::text                                AS project,
+	    e.vendor::text                                                AS vendor,
+	    COALESCE(e.model, '')::text                                  AS model,
+	    count(*) FILTER (WHERE e.kind = 'session.start')::int         AS sessions_started,
+	    count(*) FILTER (WHERE e.kind = 'turn.start')::int            AS turns,
+	    count(*) FILTER (WHERE e.kind = 'llm.request')::int           AS api_requests,
+	    count(*) FILTER (WHERE e.kind = 'llm.error')::int             AS api_errors,
+	    COALESCE(sum(e.input_tokens) FILTER (WHERE e.kind = 'llm.request'), 0)::bigint          AS input_tokens,
+	    COALESCE(sum(e.output_tokens) FILTER (WHERE e.kind = 'llm.request'), 0)::bigint          AS output_tokens,
+	    COALESCE(sum(e.cache_read_tokens) FILTER (WHERE e.kind = 'llm.request'), 0)::bigint      AS cache_read_tokens,
+	    COALESCE(sum(e.cache_creation_tokens) FILTER (WHERE e.kind = 'llm.request'), 0)::bigint  AS cache_creation_tokens,
+	    COALESCE(sum(e.cost_usd) FILTER (WHERE e.cost_source = 'reported'), 0)::numeric          AS cost_reported_usd,
+	    COALESCE(sum(e.input_tokens) FILTER (WHERE e.kind = 'llm.request' AND e.cost_usd IS NULL), 0)::bigint          AS uncosted_input_tokens,
+	    COALESCE(sum(e.output_tokens) FILTER (WHERE e.kind = 'llm.request' AND e.cost_usd IS NULL), 0)::bigint         AS uncosted_output_tokens,
+	    COALESCE(sum(e.cache_read_tokens) FILTER (WHERE e.kind = 'llm.request' AND e.cost_usd IS NULL), 0)::bigint     AS uncosted_cache_read_tokens,
+	    COALESCE(sum(e.cache_creation_tokens) FILTER (WHERE e.kind = 'llm.request' AND e.cost_usd IS NULL), 0)::bigint AS uncosted_cache_creation_tokens
+	FROM events e
+	LEFT JOIN sessions s ON s.id = e.session_id
+	WHERE e.ts >= $1::timestamptz AND e.ts < $2::timestamptz
+	  AND date_trunc('hour', e.ts, 'UTC') = ANY($3::timestamptz[])
+	GROUP BY 1, 2, 3, 4`
+
+// fetchMetricRowsForRollupSQL is the same kind of verbatim copy, of
+// FetchMetricRowsForRollup (metric_samples, the other RANGE-partitioned
+// table M9 covers).
+const fetchMetricRowsForRollupSQL = `
+	SELECT
+	    ms.ts, ms.series_hash, ms.name, ms.vendor,
+	    COALESCE(s.project, '')::text AS project,
+	    ms.value, ms.temporality, ms.dedup_key,
+	    COALESCE(ms.attrs->>'type', '')::text      AS attr_type,
+	    COALESCE(ms.attrs->>'decision', '')::text  AS attr_decision,
+	    COALESCE(ms.attrs->>'model', '')::text     AS attr_model
+	FROM metric_samples ms
+	LEFT JOIN sessions s ON s.id = ms.session_id
+	WHERE ms.ts >= $1::timestamptz AND ms.ts < $2::timestamptz
+	  AND date_trunc('hour', ms.ts, 'UTC') = ANY($3::timestamptz[])
+	ORDER BY ms.series_hash, ms.ts`
+
+// prunedToSinglePartition reports whether an EXPLAIN plan shows structural
+// evidence that the planner eliminated every candidate partition but the
+// ones named in want, given the full universe of partition names present
+// (all). This covers both shapes Postgres's planner can produce for a
+// range predicate narrow enough to match only some partitions: an Append
+// node listing "Subplans Removed: N" (when it still considers pruning worth
+// showing explicitly), or — for a range this narrow, matching exactly one
+// partition — collapsing the Append away entirely and planning directly
+// against that partition, which is a *stronger* pruning result than
+// "Subplans Removed" but leaves no such node to look for. Either shape is
+// valid proof the M9 range predicate is sargable against the partition key
+// (unlike the pre-fix STABLE `date_trunc(...) = ANY(...)` alone, which
+// cannot prune at all — the audit's own repro: "Append -> Seq Scan" on
+// every one of six partitions, no "Subplans Removed"): what matters is that
+// none of the excluded partitions' names appear in the plan at all.
+func prunedToSinglePartition(t *testing.T, plan string, all, want []string) bool {
+	t.Helper()
+	if strings.Contains(plan, "Subplans Removed") {
+		return true
+	}
+	for _, name := range all {
+		excluded := true
+		for _, w := range want {
+			if name == w {
+				excluded = false
+			}
+		}
+		if excluded && strings.Contains(plan, name) {
+			return false
+		}
+	}
+	return true
+}
+
+// seedMonthOfEvents writes n LLM-request events, one per minute starting at
+// month, into whatever `events` partition already covers that range
+// (EnsurePartitions must be called first) — enough real rows per partition
+// that ANALYZE gives the planner honest per-partition statistics, so the
+// Append plan this test measures is the same shape a production-sized
+// `events` table would produce, not the degenerate "Result / One-Time
+// Filter: false" plan explain_test.go's own doc comment on
+// TestExplainGuard_DataQualityAllowList warns an empty schema would give.
+func seedMonthOfEvents(t *testing.T, st *postgres.Store, month time.Time, n int, sessionIDPrefix string) {
+	t.Helper()
+	ctx := context.Background()
+	sessionID := sessionIDPrefix + "-" + month.Format("2006-01")
+	events := make([]model.Event, 0, n)
+	for i := 0; i < n; i++ {
+		events = append(events, mkEvent(t, sessionID, model.KindLLMRequest, model.SourceOTelLog, month.Add(time.Duration(i)*time.Minute), withModel("claude-prune")))
+	}
+	_, err := st.WriteBatch(ctx, events)
+	require.NoError(t, err)
+}
+
+// TestAggregateEventRollup_PrunesPartitions and
+// TestFetchMetricRowsForRollup_PrunesPartitions are M9's EXPLAIN proof: six
+// consecutive monthly `events`/`metric_samples` partitions, each with real
+// rows, ANALYZEd, then EXPLAIN on a single target hour's claimed bucket.
+// Before the fix (no range predicate, only the STABLE
+// `date_trunc(...) = ANY(buckets)` equality), every partition is Append-
+// scanned regardless of which single hour is claimed — this is the "fires
+// every 60s tick" defect. After the fix, the added [from_ts, to_ts) range
+// lets the planner eliminate every partition but the one the target hour
+// actually falls in.
+func TestAggregateEventRollup_PrunesPartitions(t *testing.T) {
+	st, pool := newStore(t)
+	ctx := context.Background()
+
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	require.NoError(t, st.EnsurePartitions(ctx, start, end))
+
+	const monthsCovered = 6
+	const rowsPerMonth = 25
+	for m := 0; m < monthsCovered; m++ {
+		seedMonthOfEvents(t, st, start.AddDate(0, m, 0), rowsPerMonth, "session-prune-event")
+	}
+	_, err := pool.Exec(ctx, `ANALYZE events`)
+	require.NoError(t, err)
+
+	targetBucket := time.Date(2026, 3, 15, 10, 0, 0, 0, time.UTC)
+	from, to := targetBucket, targetBucket.Add(time.Hour)
+
+	plan := explainPlanText(t, pool, aggregateEventRollupSQL, []any{from, to, []time.Time{targetBucket}})
+	require.True(t, prunedToSinglePartition(t, plan, monthlyPartitionNames("events", start, monthsCovered), []string{"events_2026_03"}),
+		"AggregateEventRollup must prune partitions outside [from_ts, to_ts) — %d months of partitions exist but only one hour was claimed:\n%s",
+		monthsCovered, plan)
+}
+
+func TestFetchMetricRowsForRollup_PrunesPartitions(t *testing.T) {
+	st, pool := newStore(t)
+	ctx := context.Background()
+
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	require.NoError(t, st.EnsurePartitions(ctx, start, end))
+
+	const monthsCovered = 6
+	const rowsPerMonth = 25
+	for m := 0; m < monthsCovered; m++ {
+		month := start.AddDate(0, m, 0)
+		samples := make([]model.MetricSample, 0, rowsPerMonth)
+		for i := 0; i < rowsPerMonth; i++ {
+			samples = append(samples, mkMetricSample(t, month.Add(time.Duration(i)*time.Minute), "claude_code.cost.usage", nil, float64(i), "delta", []byte(fmt.Sprintf("series-prune-%d-%d", m, i)), map[string]any{}))
+		}
+		_, err := st.WriteMetrics(ctx, samples)
+		require.NoError(t, err)
+	}
+	_, err := pool.Exec(ctx, `ANALYZE metric_samples`)
+	require.NoError(t, err)
+
+	targetBucket := time.Date(2026, 3, 15, 10, 0, 0, 0, time.UTC)
+	from, to := targetBucket, targetBucket.Add(time.Hour)
+
+	plan := explainPlanText(t, pool, fetchMetricRowsForRollupSQL, []any{from, to, []time.Time{targetBucket}})
+	require.True(t, prunedToSinglePartition(t, plan, monthlyPartitionNames("metric_samples", start, monthsCovered), []string{"metric_samples_2026_03"}),
+		"FetchMetricRowsForRollup must prune partitions outside [from_ts, to_ts) — %d months of partitions exist but only one hour was claimed:\n%s",
+		monthsCovered, plan)
+}
+
+// monthlyPartitionNames returns the parent_YYYY_MM partition names
+// EnsurePartitions creates for n consecutive months starting at start —
+// matching partitions.go's ensureMonthlyPartition naming.
+func monthlyPartitionNames(parent string, start time.Time, n int) []string {
+	names := make([]string, n)
+	for i := 0; i < n; i++ {
+		m := start.AddDate(0, i, 0)
+		names[i] = fmt.Sprintf("%s_%04d_%02d", parent, m.Year(), m.Month())
+	}
+	return names
+}
+
 func TestExplainGuard_DetectsEventsInPlan(t *testing.T) {
 	st, pool := newStore(t)
 	ctx := context.Background()

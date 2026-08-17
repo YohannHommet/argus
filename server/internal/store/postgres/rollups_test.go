@@ -3,13 +3,17 @@ package postgres_test
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 
 	"github.com/YohannHommet/argus/server/internal/ingest/normalize"
 	"github.com/YohannHommet/argus/server/internal/model"
+	"github.com/YohannHommet/argus/server/internal/store/postgres"
+	storetesting "github.com/YohannHommet/argus/server/internal/store/testing"
 )
 
 // rollupLockKeyForTest mirrors rollups.go's unexported rollupLockKey
@@ -426,6 +430,100 @@ func TestRunRollups_EventAndMetricSourcesCoexistNeverSummed(t *testing.T) {
 	require.InDelta(t, 3.0, metricCost, 1e-9)
 }
 
+// --- M9 (pre-Phase-4 audit wave, ticket W3): the [from_ts, to_ts) range
+// predicate added for partition pruning must be additive, never a
+// replacement for the exact date_trunc(...) = ANY(buckets) equality -------
+
+// TestRunRollups_NonContiguousDirtyBucketsRangeStaysExact reproduces the
+// exact risk M9's fix comment warns about: "the range must be exactly as
+// wide as the claimed bucket set, or you will silently aggregate rows into
+// the wrong bucket." Five consecutive hours (09:00-13:00) are rolled up
+// once, so every hour gets its own correct rollup_hourly row. Then only the
+// two OUTER hours (09:00 and 13:00) are re-dirtied by a genuine late event
+// each — the middle three hours (10:00-12:00) stay clean/unclaimed. A
+// second RunRollups pass claims a non-contiguous bucket set {09:00, 13:00};
+// AggregateEventRollup's new range predicate spans [09:00, 14:00) — which
+// covers the untouched middle hours too — but the pre-existing
+// `date_trunc(...) = ANY(buckets)` equality must still be the only thing
+// that decides which rows actually get aggregated, so 10:00-12:00 must come
+// out of this pass completely unchanged.
+func TestRunRollups_NonContiguousDirtyBucketsRangeStaysExact(t *testing.T) {
+	st, pool := newStore(t)
+	ctx := context.Background()
+	h9 := time.Date(2026, 7, 10, 9, 0, 0, 0, time.UTC)
+	h10 := h9.Add(time.Hour)
+	h11 := h9.Add(2 * time.Hour)
+	h12 := h9.Add(3 * time.Hour)
+	h13 := h9.Add(4 * time.Hour)
+	ensureRange(t, st, h9, h13)
+
+	sessionID := "session-noncontiguous"
+	firstPass := []model.Event{
+		mkEvent(t, sessionID, model.KindLLMRequest, model.SourceOTelLog, h9, withModel("claude-nc")),
+		mkEvent(t, sessionID, model.KindLLMRequest, model.SourceOTelLog, h10, withModel("claude-nc")),
+		mkEvent(t, sessionID, model.KindLLMRequest, model.SourceOTelLog, h11, withModel("claude-nc")),
+		mkEvent(t, sessionID, model.KindLLMRequest, model.SourceOTelLog, h12, withModel("claude-nc")),
+		mkEvent(t, sessionID, model.KindLLMRequest, model.SourceOTelLog, h13, withModel("claude-nc")),
+	}
+	_, err := st.WriteBatch(ctx, firstPass)
+	require.NoError(t, err)
+	_, err = st.RunRollups(ctx, 200)
+	require.NoError(t, err)
+
+	apiRequestsAt := func(bucket time.Time) int {
+		t.Helper()
+		var n int
+		require.NoError(t, pool.QueryRow(ctx,
+			`SELECT api_requests FROM rollup_hourly WHERE bucket=$1 AND model='claude-nc' AND source='event'`, bucket).Scan(&n))
+		return n
+	}
+	require.Equal(t, 1, apiRequestsAt(h9))
+	require.Equal(t, 1, apiRequestsAt(h10))
+	require.Equal(t, 1, apiRequestsAt(h11))
+	require.Equal(t, 1, apiRequestsAt(h12))
+	require.Equal(t, 1, apiRequestsAt(h13))
+
+	// A late-arriving event re-dirties ONLY 09:00 and 13:00 (dirty.go's
+	// per-batch marking, WriteBatch/markRollupDirty), leaving 10:00-12:00
+	// clean and unclaimed by the next pass.
+	secondPass := []model.Event{
+		mkEvent(t, sessionID, model.KindLLMRequest, model.SourceOTelLog, h9.Add(time.Minute), withModel("claude-nc")),
+		mkEvent(t, sessionID, model.KindLLMRequest, model.SourceOTelLog, h13.Add(time.Minute), withModel("claude-nc")),
+	}
+	_, err = st.WriteBatch(ctx, secondPass)
+	require.NoError(t, err)
+
+	var dirtyBuckets []time.Time
+	rows, err := pool.Query(ctx, `SELECT bucket FROM rollup_dirty WHERE source = 'event' ORDER BY bucket`)
+	require.NoError(t, err)
+	for rows.Next() {
+		var b time.Time
+		require.NoError(t, rows.Scan(&b))
+		// pgx decodes timestamptz into the Go process's local *time.Location
+		// (an absolute-instant-preserving, but location-differing,
+		// representation) — normalize to UTC before comparing, since
+		// require.Equal on time.Time is a structural (reflect.DeepEqual)
+		// comparison that a differing Location fails even for the identical
+		// instant.
+		dirtyBuckets = append(dirtyBuckets, b.UTC())
+	}
+	require.NoError(t, rows.Err())
+	rows.Close()
+	require.Equal(t, []time.Time{h9, h13}, dirtyBuckets, "test setup: only the two outer hours must be dirty before the second pass")
+
+	_, err = st.RunRollups(ctx, 200)
+	require.NoError(t, err)
+
+	// The outer hours picked up the late event.
+	require.Equal(t, 2, apiRequestsAt(h9))
+	require.Equal(t, 2, apiRequestsAt(h13))
+	// The middle hours, inside the range predicate's [09:00, 14:00) span but
+	// outside the exact claimed bucket set, must be completely untouched.
+	require.Equal(t, 1, apiRequestsAt(h10), "10:00 is inside the range predicate but was never claimed — it must not be recomputed")
+	require.Equal(t, 1, apiRequestsAt(h11), "11:00 is inside the range predicate but was never claimed — it must not be recomputed")
+	require.Equal(t, 1, apiRequestsAt(h12), "12:00 is inside the range predicate but was never claimed — it must not be recomputed")
+}
+
 // --- P3-05 defect 1: rollup_hourly.tool_calls/tool_rejects must count one
 // row per real tool call regardless of which surface reported it, and stay
 // consistent with sessions.tool_call_count/tool_reject_count. Before the
@@ -764,4 +862,180 @@ func TestRunRollups_ToolCallSurvivesRawEventDeletion_StillRolledUp(t *testing.T)
 		`SELECT tool_calls FROM rollup_hourly WHERE bucket=$1 AND project='' AND model='' AND source='event'`,
 		base).Scan(&toolCalls))
 	require.Equal(t, 1, toolCalls, "a tool call must still roll up even when AggregateEventRollup has no row at all for its bucket")
+}
+
+// --- M8 (pre-Phase-4 audit wave, ticket W3): date_trunc runs in the
+// connection's TimeZone GUC, Go's bucket keys are hard UTC ---------------
+
+// newStoreWithTimeZone is newStore (write_test.go) but against a pool whose
+// session TimeZone GUC the DSN itself requests, instead of the harness's
+// default (whatever the server/container defaults to, which is UTC in this
+// suite's postgres:18-alpine/postgres:18 setups — exactly why this bug
+// needed a dedicated non-UTC pool to reproduce at all). It goes through the
+// real postgres.NewPool (not storetesting.NewPool, which hardcodes maxConns
+// but not a caller-chosen DSN) so the M8 fix under test — NewPool pinning
+// RuntimeParams["TimeZone"] = "UTC", overriding whatever the DSN asked for —
+// is exercised exactly as production wires it (internal/app.New calls
+// postgres.NewPool the same way).
+func newStoreWithTimeZone(t *testing.T, tz string) (*postgres.Store, *pgxpool.Pool) {
+	t.Helper()
+	ctx := context.Background()
+
+	dsn := storetesting.NewDSN(t) + "&TimeZone=" + url.QueryEscape(tz)
+	pool, err := postgres.NewPool(ctx, dsn, 5)
+	require.NoError(t, err)
+	t.Cleanup(pool.Close)
+
+	st := postgres.New(pool)
+	require.NoError(t, st.Migrate(ctx))
+	return st, pool
+}
+
+// TestRunRollups_NonUTCSessionTimeZone_KolkataBreaksHourlyBucket reproduces
+// the audit's Asia/Kolkata (UTC+5:30, a half-hour offset — no whole-hour
+// hourly truncation is immune to this) example verbatim: a connection whose
+// TimeZone GUC is Asia/Kolkata truncates '...10:20Z' to '09:30Z', not
+// '10:00Z'. Go's ClaimDirtyBuckets/curHour/prevHour bucket keys are always
+// UTC-hour-aligned instants (dirty.go's hourBucket), so on an unpinned
+// connection AggregateEventRollup's
+// `date_trunc('hour', e.ts) = ANY(buckets)` WHERE never matches an
+// UTC-hour-aligned bucket at all: the event is silently dropped from
+// rollup_hourly entirely, not merely mis-keyed.
+func TestRunRollups_NonUTCSessionTimeZone_KolkataBreaksHourlyBucket(t *testing.T) {
+	st, pool := newStoreWithTimeZone(t, "Asia/Kolkata")
+	ctx := context.Background()
+
+	// Sanity-check the pool actually landed where the M8 fix says it must:
+	// pinned to UTC regardless of the DSN's TimeZone request.
+	var sessionTZ string
+	require.NoError(t, pool.QueryRow(ctx, `SHOW TimeZone`).Scan(&sessionTZ))
+	require.Equal(t, "UTC", sessionTZ, "postgres.NewPool must pin every connection's TimeZone to UTC regardless of what the DSN requests")
+
+	bucket := time.Date(2026, 6, 15, 10, 0, 0, 0, time.UTC)
+	ensureRange(t, st, bucket, bucket)
+
+	sessionID := "session-kolkata"
+	ev := mkEvent(t, sessionID, model.KindLLMRequest, model.SourceOTelLog, bucket.Add(20*time.Minute), withModel("claude-kolkata"))
+	_, err := st.WriteBatch(ctx, []model.Event{ev})
+	require.NoError(t, err)
+
+	_, err = st.RunRollups(ctx, 200)
+	require.NoError(t, err)
+
+	var apiRequests int
+	err = pool.QueryRow(ctx,
+		`SELECT api_requests FROM rollup_hourly WHERE bucket=$1 AND model='claude-kolkata' AND source='event'`,
+		bucket).Scan(&apiRequests)
+	require.NoError(t, err, "the 10:20Z event must roll up into the 10:00Z UTC hour bucket even on a half-hour-offset session TimeZone")
+	require.Equal(t, 1, apiRequests)
+}
+
+// TestRunRollups_NonUTCSessionTimeZone_ParisLeavesDailyRollupEmpty
+// reproduces the audit's other half of M8: Europe/Paris is a whole-hour
+// offset, so the hourly pass (date_trunc('hour', ...)) is unaffected, but
+// InsertRollupDailyFromHourly/DeleteRollupDaily's
+// `date_trunc('day', bucket) = ANY(days)` truncates to *local* midnight,
+// which is never the same instant as the UTC midnight Go's daysOf builds —
+// for any nonzero offset, not just a near-midnight event. The audit's own
+// repro against postgres:18-alpine: `SET TIME ZONE 'Europe/Paris'` plus the
+// real Delete/Insert pair with the Go day key -> `INSERT 0 0`, so
+// rollup_daily stays permanently empty.
+func TestRunRollups_NonUTCSessionTimeZone_ParisLeavesDailyRollupEmpty(t *testing.T) {
+	st, pool := newStoreWithTimeZone(t, "Europe/Paris")
+	ctx := context.Background()
+
+	var sessionTZ string
+	require.NoError(t, pool.QueryRow(ctx, `SHOW TimeZone`).Scan(&sessionTZ))
+	require.Equal(t, "UTC", sessionTZ, "postgres.NewPool must pin every connection's TimeZone to UTC regardless of what the DSN requests")
+
+	bucket := time.Date(2026, 6, 15, 10, 0, 0, 0, time.UTC)
+	day := time.Date(2026, 6, 15, 0, 0, 0, 0, time.UTC)
+	ensureRange(t, st, bucket, bucket)
+
+	sessionID := "session-paris"
+	ev := mkEvent(t, sessionID, model.KindLLMRequest, model.SourceOTelLog, bucket, withModel("claude-paris"), withCost(2.5, "reported"))
+	_, err := st.WriteBatch(ctx, []model.Event{ev})
+	require.NoError(t, err)
+
+	_, err = st.RunRollups(ctx, 200)
+	require.NoError(t, err)
+
+	// The hourly pass is unaffected by a whole-hour offset (the claim's own
+	// distinction) — sanity check it still landed correctly.
+	var apiRequests int
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT api_requests FROM rollup_hourly WHERE bucket=$1 AND model='claude-paris' AND source='event'`,
+		bucket).Scan(&apiRequests))
+	require.Equal(t, 1, apiRequests)
+
+	// The daily pass is where M8's defect actually bites on a whole-hour
+	// offset zone.
+	var dailyAPIRequests int
+	var costReported float64
+	err = pool.QueryRow(ctx,
+		`SELECT api_requests, cost_reported_usd::float8 FROM rollup_daily WHERE bucket=$1 AND model='claude-paris' AND source='event'`,
+		day).Scan(&dailyAPIRequests, &costReported)
+	require.NoError(t, err, "rollup_daily must have a row for the UTC day the event actually happened on, even on a whole-hour-offset session TimeZone")
+	require.Equal(t, 1, dailyAPIRequests)
+	require.Equal(t, 2.5, costReported)
+}
+
+// --- m9 minor (pre-Phase-4 audit wave, ticket W3): a dirty bucket with no
+// surviving partition must not lose its already-computed rollup ----------
+
+// TestRunRollups_DroppedPartitionLeavesExistingRollupIntact reproduces the
+// scenario rollups.go's package doc + the m9 minor finding describe: a
+// dirty bucket is claimed whose covering `events` partition was already
+// dropped (RetentionJob, or here, a direct DROP TABLE standing in for it).
+// Before the fix, recomputeEventBuckets ran DeleteRollupHourly for that
+// bucket unconditionally, then AggregateEventRollup legitimately found zero
+// rows (there is no partition left to read), and the function returned
+// early with the delete already committed — permanently zeroing a bucket
+// that used to have real data. The fix (filterPartitionCovered, rollups.go)
+// drops such buckets from the pass entirely before the delete ever runs.
+func TestRunRollups_DroppedPartitionLeavesExistingRollupIntact(t *testing.T) {
+	st, pool := newStore(t)
+	ctx := context.Background()
+	bucket := time.Date(2026, 3, 15, 10, 0, 0, 0, time.UTC)
+	ensureRange(t, st, bucket, bucket)
+
+	sessionID := "session-dropped-partition"
+	ev := mkEvent(t, sessionID, model.KindLLMRequest, model.SourceOTelLog, bucket, withModel("claude-x"), withCost(1.5, "reported"))
+	_, err := st.WriteBatch(ctx, []model.Event{ev})
+	require.NoError(t, err)
+
+	_, err = st.RunRollups(ctx, 200)
+	require.NoError(t, err)
+
+	var costBefore float64
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT cost_reported_usd::float8 FROM rollup_hourly WHERE bucket=$1 AND model='claude-x' AND source='event'`,
+		bucket).Scan(&costBefore))
+	require.Equal(t, 1.5, costBefore, "test setup: the rollup must exist before the partition is dropped")
+
+	// Simulate the retention job dropping this month's events partition —
+	// reachable in production via a session's project-change re-mark
+	// (dirty.go's projectChangeRemarks) reaching back past the retention
+	// horizon (ARGUS_RETENTION_RAW_DAYS < ARGUS_ROLLUP_SESSION_REMARK_MAX's
+	// span). Table name matches partitions.go's ensureMonthlyPartition
+	// naming: events_YYYY_MM.
+	_, err = pool.Exec(ctx, `DROP TABLE events_2026_03`)
+	require.NoError(t, err)
+
+	// Re-arm rollup_dirty for the now-unreachable bucket by hand, the same
+	// way TestRunRollups_ToolCallSurvivesRawEventDeletion_StillRolledUp and
+	// the B4 test do, since a dropped partition can never be reached through
+	// the normal WriteBatch/markRollupDirty path.
+	_, err = pool.Exec(ctx, `INSERT INTO rollup_dirty (bucket, source) VALUES ($1, 'event') ON CONFLICT DO NOTHING`, bucket)
+	require.NoError(t, err)
+
+	_, err = st.RunRollups(ctx, 200)
+	require.NoError(t, err)
+
+	var costAfter float64
+	err = pool.QueryRow(ctx,
+		`SELECT cost_reported_usd::float8 FROM rollup_hourly WHERE bucket=$1 AND model='claude-x' AND source='event'`,
+		bucket).Scan(&costAfter)
+	require.NoError(t, err, "the rollup_hourly row must survive a claimed bucket whose covering partition was dropped, not be deleted")
+	require.Equal(t, costBefore, costAfter, "the last known-good rollup must be left untouched, not zeroed")
 }
