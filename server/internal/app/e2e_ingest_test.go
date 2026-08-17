@@ -128,8 +128,19 @@ func TestE2E_Phase2ExitCriteria(t *testing.T) {
 	// --- Exit criterion 7: depth-2 subagents with a non-null parent,
 	// cost_usd NULL on every row (SPEC §1.9: never fabricated), non-null
 	// tool_call_count where hook coverage exists.
-	depth2 := scalarInt(t, pool, `SELECT count(*) FROM subagents WHERE depth = 2 AND parent_agent_id IS NOT NULL`)
-	require.Positive(t, depth2, "expected at least one depth-2 subagent with a non-null parent_agent_id (needs enough sessions - see P2-13 brief finding 4)")
+	// Eventually, not a bare read: waitForIngestQuiescence above settles on
+	// the `events` count alone, and a depth-2 subagent needs the *hook*
+	// SubagentStart carrying a non-empty parent_agent_id. Hooks arrive on
+	// their own HTTP path and land in their own batches, so the events count
+	// can go quiet in a lull while the batch holding the last SubagentStart
+	// is still in flight — observed as a flaky "0 is not positive" here, in
+	// the full-suite run only, while the same test passed in isolation. The
+	// assertion is unchanged in strength (still: at least one such row); it
+	// is only allowed to wait for the row it is asserting about.
+	require.Eventually(t, func() bool {
+		return scalarInt(t, pool, `SELECT count(*) FROM subagents WHERE depth = 2 AND parent_agent_id IS NOT NULL`) > 0
+	}, e2eDrainTimeout, 100*time.Millisecond,
+		"expected at least one depth-2 subagent with a non-null parent_agent_id (needs enough sessions - see P2-13 brief finding 4)")
 	costNotNull := scalarInt(t, pool, `SELECT count(*) FROM subagents WHERE cost_usd IS NOT NULL`)
 	require.Zero(t, costNotNull, "cost_usd must be NULL on every subagent row (SPEC §1.9: Claude Code emits no per-agent cost)")
 	toolCallCountKnown := scalarInt(t, pool, `SELECT count(*) FROM subagents WHERE tool_call_count IS NOT NULL`)
