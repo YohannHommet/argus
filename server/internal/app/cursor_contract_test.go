@@ -1,4 +1,4 @@
-// cursor_postgres_test.go is M14's required "goes through the real
+// cursor_contract_test.go is M14's required "goes through the real
 // postgres store" regression test: storetest.Fake never decodes a cursor
 // at all (its ListSessionsFunc/ListEventsFunc/ListToolCallsFunc are plain
 // Go closures wired per-test), so every other handler-level cursor test in
@@ -8,7 +8,15 @@
 // replays the exact `{"k":"last_event_at","v":["x"]}` payload the M14
 // audit finding cites, so the assertion is against production code on both
 // sides of the httpapi<->store seam, not just httpapi's half.
-package httpapi_test
+//
+// It lives in internal/app rather than internal/httpapi because it needs the
+// concrete *postgres.Store, and depguard (SPEC §3.1) forbids internal/httpapi
+// from importing internal/store/postgres — correctly, since that is the
+// layering the rule exists to protect. internal/app is the one package
+// documented as allowed to know about every layer at once (see app.go), which
+// makes it the honest home for a test whose whole subject is the seam between
+// two of them.
+package app
 
 import (
 	"net/http"

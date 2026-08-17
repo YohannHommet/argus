@@ -333,8 +333,8 @@ func recomputeEventBuckets(ctx context.Context, tx pgx.Tx, q *gen.Queries, price
 	tsBuckets := toTimestamptz(buckets)
 	fromTS, toTS := bucketRange(buckets, time.Hour)
 
-	if err := q.DeleteRollupHourly(ctx, gen.DeleteRollupHourlyParams{Buckets: tsBuckets, SourceKind: sourceEvent}); err != nil {
-		return fmt.Errorf("postgres: run rollups: delete event rollup_hourly: %w", err)
+	if delErr := q.DeleteRollupHourly(ctx, gen.DeleteRollupHourlyParams{Buckets: tsBuckets, SourceKind: sourceEvent}); delErr != nil {
+		return fmt.Errorf("postgres: run rollups: delete event rollup_hourly: %w", delErr)
 	}
 
 	rows, err := q.AggregateEventRollup(ctx, gen.AggregateEventRollupParams{FromTs: fromTS, ToTs: toTS, Buckets: tsBuckets})
@@ -578,8 +578,8 @@ func recomputeMetricBuckets(ctx context.Context, tx pgx.Tx, q *gen.Queries, buck
 	tsBuckets := toTimestamptz(buckets)
 	fromTS, toTS := bucketRange(buckets, time.Hour)
 
-	if err := q.DeleteRollupHourly(ctx, gen.DeleteRollupHourlyParams{Buckets: tsBuckets, SourceKind: sourceMetric}); err != nil {
-		return fmt.Errorf("postgres: run rollups: delete metric rollup_hourly: %w", err)
+	if delErr := q.DeleteRollupHourly(ctx, gen.DeleteRollupHourlyParams{Buckets: tsBuckets, SourceKind: sourceMetric}); delErr != nil {
+		return fmt.Errorf("postgres: run rollups: delete metric rollup_hourly: %w", delErr)
 	}
 
 	rows, err := q.FetchMetricRowsForRollup(ctx, gen.FetchMetricRowsForRollupParams{FromTs: fromTS, ToTs: toTS, Buckets: tsBuckets})

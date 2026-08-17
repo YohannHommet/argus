@@ -977,7 +977,7 @@ func TestRunRollups_NonUTCSessionTimeZone_ParisLeavesDailyRollupEmpty(t *testing
 		day).Scan(&dailyAPIRequests, &costReported)
 	require.NoError(t, err, "rollup_daily must have a row for the UTC day the event actually happened on, even on a whole-hour-offset session TimeZone")
 	require.Equal(t, 1, dailyAPIRequests)
-	require.Equal(t, 2.5, costReported)
+	require.InDelta(t, 2.5, costReported, 1e-9)
 }
 
 // --- m9 minor (pre-Phase-4 audit wave, ticket W3): a dirty bucket with no
@@ -1011,7 +1011,7 @@ func TestRunRollups_DroppedPartitionLeavesExistingRollupIntact(t *testing.T) {
 	require.NoError(t, pool.QueryRow(ctx,
 		`SELECT cost_reported_usd::float8 FROM rollup_hourly WHERE bucket=$1 AND model='claude-x' AND source='event'`,
 		bucket).Scan(&costBefore))
-	require.Equal(t, 1.5, costBefore, "test setup: the rollup must exist before the partition is dropped")
+	require.InDelta(t, 1.5, costBefore, 1e-9, "test setup: the rollup must exist before the partition is dropped")
 
 	// Simulate the retention job dropping this month's events partition —
 	// reachable in production via a session's project-change re-mark
@@ -1037,5 +1037,5 @@ func TestRunRollups_DroppedPartitionLeavesExistingRollupIntact(t *testing.T) {
 		`SELECT cost_reported_usd::float8 FROM rollup_hourly WHERE bucket=$1 AND model='claude-x' AND source='event'`,
 		bucket).Scan(&costAfter)
 	require.NoError(t, err, "the rollup_hourly row must survive a claimed bucket whose covering partition was dropped, not be deleted")
-	require.Equal(t, costBefore, costAfter, "the last known-good rollup must be left untouched, not zeroed")
+	require.InDelta(t, costBefore, costAfter, 1e-9, "the last known-good rollup must be left untouched, not zeroed")
 }

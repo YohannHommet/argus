@@ -156,6 +156,18 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, opts ...O
 	if o.registerer != nil {
 		ingestOpts = append(ingestOpts, ingest.WithRegisterer(o.registerer))
 	}
+	// The pipeline deliberately does NOT take New's ctx. Its context is
+	// Background-derived and owned by Pipeline.Close (see Pipeline.ctx's doc
+	// in internal/ingest/pipeline.go): Close cancels it only if the drain
+	// deadline is exceeded, which is what unblocks a worker parked inside a
+	// store call instead of leaking it. Tying the pipeline's lifetime to this
+	// startup context would defeat the shutdown sequence outright — Serve's
+	// shutdown() derives its HTTP and drain budgets from Background for the
+	// same reason, precisely so a cancelled parent context cannot make the
+	// drain discard queued batches with a healthy database (SPEC §3.8, audit
+	// finding M4). contextcheck cannot see that ownership boundary; it began
+	// flagging this call once the drain gained a per-attempt WithTimeout.
+	//nolint:contextcheck // the pipeline's lifetime is owned by Close, not by New's caller — see above
 	ing := ingest.New(st, ingestPipelineConfig(cfg), ingestOpts...)
 
 	// P2-11: the hooks webhook (SPEC §3.5). hookNormalizer is built here
