@@ -122,8 +122,11 @@ describe('AnalyticsView', () => {
     store.setPreset('7d')
     await flushPromises()
 
-    expect(getSummary).toHaveBeenCalledTimes(1)
-    expect(getTimeseries).toHaveBeenCalledTimes(2)
+    // getSummary/getTimeseries counts include the round-5 UI pass's preceding-window fetches
+    // (KPI tile deltas/sparklines) — see stores/__tests__/analytics.spec.ts's own count assertion
+    // for the full breakdown.
+    expect(getSummary).toHaveBeenCalledTimes(2)
+    expect(getTimeseries).toHaveBeenCalledTimes(16)
     expect(getBreakdown).toHaveBeenCalledTimes(4)
     expect(getDecisions).toHaveBeenCalledTimes(1)
   })
@@ -236,11 +239,13 @@ describe('AnalyticsView', () => {
   })
 
   it('shows a skeleton (not the KPI grid) while the summary fetch is pending, and swaps once it resolves', async () => {
-    let resolveSummary!: () => void
+    // getSummary now backs two resources (`summary` + `previousSummary`, round-5 UI pass), so it's
+    // called twice per fetchAll — each call needs its own resolver, not one shared variable.
+    const resolveSummaryCalls: (() => void)[] = []
     getSummary = vi.fn(
       () =>
         new Promise((resolve) => {
-          resolveSummary = () => resolve({ data: getAnalyticsSummary200Default, error: undefined, response: new Response(null, { status: 200 }) })
+          resolveSummaryCalls.push(() => resolve({ data: getAnalyticsSummary200Default, error: undefined, response: new Response(null, { status: 200 }) }))
         }),
     )
     const { wrapper } = await mountAt()
@@ -248,7 +253,7 @@ describe('AnalyticsView', () => {
     expect(wrapper.find('[data-testid="stat-tile-value"]').exists()).toBe(false)
     expect(document.documentElement.getAttribute('data-capture-ready')).not.toBe('true')
 
-    resolveSummary()
+    resolveSummaryCalls.forEach((resolve) => resolve())
     await flushPromises()
 
     expect(wrapper.find('[data-testid="stat-tile-value"]').exists()).toBe(true)

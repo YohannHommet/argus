@@ -96,7 +96,7 @@ const option = computed<DecisionMatrixOption>(() => {
   })
 
   return {
-    backgroundColor: t.backgroundColor,
+    backgroundColor: t.cardBackgroundColor,
     textStyle: t.textStyle,
     grid: { left: 140, right: 24, top: 16, bottom: 80 },
     tooltip: {
@@ -118,7 +118,7 @@ const option = computed<DecisionMatrixOption>(() => {
       axisLine: { lineStyle: { color: t.borderColor } },
       axisTick: { show: false },
       axisLabel: { color: t.mutedColor, fontSize: 11, rotate: 45 },
-      splitArea: { areaStyle: { color: [t.backgroundColor] } },
+      splitArea: { areaStyle: { color: [t.cardBackgroundColor] } },
     },
     yAxis: {
       type: 'category',
@@ -126,7 +126,7 @@ const option = computed<DecisionMatrixOption>(() => {
       axisLine: { lineStyle: { color: t.borderColor } },
       axisTick: { show: false },
       axisLabel: { color: t.mutedColor, fontSize: 11 },
-      splitArea: { areaStyle: { color: [t.backgroundColor] } },
+      splitArea: { areaStyle: { color: [t.cardBackgroundColor] } },
     },
     visualMap: {
       type: 'continuous',
@@ -143,7 +143,7 @@ const option = computed<DecisionMatrixOption>(() => {
       {
         type: 'heatmap',
         data,
-        itemStyle: { borderColor: t.backgroundColor, borderWidth: 2 },
+        itemStyle: { borderColor: t.cardBackgroundColor, borderWidth: 2 },
         emphasis: { itemStyle: { borderColor: t.primary, borderWidth: 2 } },
         label: {
           show: true,

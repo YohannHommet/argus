@@ -97,6 +97,29 @@ const totalTokens = computed(() => {
 function tileReason(field: string): string | undefined {
   return analytics.isNotAttributable(field) ? NOT_ATTRIBUTABLE_TO_MODEL : undefined
 }
+
+/**
+ * Round-5 UI pass ("flat, equal-weight numbers with no comparison or trend
+ * context"): every KPI tile gets a real period-over-period delta, and the
+ * ones a per-bucket timeseries actually backs also get an inline
+ * sparkline (see `stores/analytics.ts`'s `KPI_SPARKLINE_METRICS` doc
+ * comment for exactly which ones, and why the rest can't fake one).
+ */
+const NO_TREND_SERIES = 'This metric has no per-bucket timeseries — only a window total is available'
+
+/** `summaryFieldDelta('activeSeconds')` is in seconds; StatTile's `duration` metric formats ms. */
+const activeTimeDelta = computed(() => {
+  const seconds = analytics.summaryFieldDelta('activeSeconds')
+  return seconds === null ? null : seconds * 1000
+})
+
+const rejectRateDelta = computed(() => analytics.summaryFieldDelta('rejectRate'))
+const formattedRejectRateDelta = computed(() => {
+  const delta = rejectRateDelta.value
+  if (delta === null) return null
+  const sign = delta > 0 ? '+' : delta < 0 ? '−' : '±'
+  return `${sign}${formatRejectRate(Math.abs(delta))}`
+})
 </script>
 
 <template>
@@ -289,15 +312,63 @@ function tileReason(field: string): string | undefined {
       (never a hardcoded client-side list) to supply StatTile's tooltip reason, and StatTile's own
       null-vs-zero handling renders a measured `0` (e.g. `loc.added: 0`) as "0", never collapsing it
       into the same dash a `null` gets.
+
+      Round-5 UI pass: Cost/Tokens/API requests are the fleet's three headline numbers, so they get
+      their own larger primary row (StatTile `size="lg"`) ahead of the rest — every tile also gets a
+      real period-over-period delta, and the metrics a per-bucket timeseries backs get an inline
+      sparkline too (`stores/analytics.ts`'s `costDelta`/`kpiDelta`/etc., never fabricated).
     -->
     <div
-      class="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-6"
+      class="grid grid-cols-1 gap-3 md:grid-cols-3"
+      data-testid="analytics-kpi-primary"
+    >
+      <StatTile
+        label="Cost"
+        metric="cost"
+        size="lg"
+        :value="summary?.cost.usd ?? null"
+        :delta="analytics.costDelta"
+        :sparkline="analytics.costSparkline"
+        :loading="analytics.summary.loading"
+        :error="analytics.summary.error"
+        data-testid="kpi-cost"
+        @retry="analytics.retrySummary()"
+      />
+      <StatTile
+        label="Tokens"
+        metric="tokens"
+        size="lg"
+        :value="totalTokens"
+        :delta="analytics.tokenDelta"
+        :sparkline="analytics.tokenSparkline"
+        :loading="analytics.summary.loading"
+        :error="analytics.summary.error"
+        data-testid="kpi-tokens"
+        @retry="analytics.retrySummary()"
+      />
+      <StatTile
+        label="API requests"
+        size="lg"
+        :value="summary?.api_requests ?? null"
+        :delta="analytics.kpiDelta('api_requests')"
+        :sparkline="analytics.kpiSparkline('api_requests')"
+        :loading="analytics.summary.loading"
+        :error="analytics.summary.error"
+        data-testid="kpi-api-requests"
+        @retry="analytics.retrySummary()"
+      />
+    </div>
+
+    <div
+      class="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5"
       data-testid="analytics-kpi-grid"
     >
       <StatTile
         label="Sessions"
         :value="summary?.sessions ?? null"
         :reason="tileReason('sessions')"
+        :delta="analytics.kpiDelta('sessions')"
+        :sparkline="analytics.kpiSparkline('sessions')"
         :loading="analytics.summary.loading"
         :error="analytics.summary.error"
         data-testid="kpi-sessions"
@@ -307,22 +378,18 @@ function tileReason(field: string): string | undefined {
         label="Turns"
         :value="summary?.turns ?? null"
         :reason="tileReason('turns')"
+        :delta="analytics.kpiDelta('turns')"
+        :sparkline="analytics.kpiSparkline('turns')"
         :loading="analytics.summary.loading"
         :error="analytics.summary.error"
         data-testid="kpi-turns"
         @retry="analytics.retrySummary()"
       />
       <StatTile
-        label="API requests"
-        :value="summary?.api_requests ?? null"
-        :loading="analytics.summary.loading"
-        :error="analytics.summary.error"
-        data-testid="kpi-api-requests"
-        @retry="analytics.retrySummary()"
-      />
-      <StatTile
         label="API errors"
         :value="summary?.api_errors ?? null"
+        :delta="analytics.kpiDelta('api_errors')"
+        :sparkline="analytics.kpiSparkline('api_errors')"
         :loading="analytics.summary.loading"
         :error="analytics.summary.error"
         data-testid="kpi-api-errors"
@@ -332,6 +399,8 @@ function tileReason(field: string): string | undefined {
         label="Tool calls"
         :value="summary?.tool_calls ?? null"
         :reason="tileReason('tool_calls')"
+        :delta="analytics.kpiDelta('tool_calls')"
+        :sparkline="analytics.kpiSparkline('tool_calls')"
         :loading="analytics.summary.loading"
         :error="analytics.summary.error"
         data-testid="kpi-tool-calls"
@@ -341,33 +410,19 @@ function tileReason(field: string): string | undefined {
         label="Tool rejects"
         :value="summary?.tool_rejects ?? null"
         :reason="tileReason('tool_rejects')"
+        :delta="analytics.kpiDelta('tool_rejects')"
+        :sparkline="analytics.kpiSparkline('tool_rejects')"
         :loading="analytics.summary.loading"
         :error="analytics.summary.error"
         data-testid="kpi-tool-rejects"
         @retry="analytics.retrySummary()"
       />
       <StatTile
-        label="Cost"
-        metric="cost"
-        :value="summary?.cost.usd ?? null"
-        :loading="analytics.summary.loading"
-        :error="analytics.summary.error"
-        data-testid="kpi-cost"
-        @retry="analytics.retrySummary()"
-      />
-      <StatTile
-        label="Tokens"
-        metric="tokens"
-        :value="totalTokens"
-        :loading="analytics.summary.loading"
-        :error="analytics.summary.error"
-        data-testid="kpi-tokens"
-        @retry="analytics.retrySummary()"
-      />
-      <StatTile
         label="LOC added"
         :value="summary?.loc?.added ?? null"
         :reason="tileReason('loc')"
+        :delta="analytics.summaryFieldDelta('locAdded')"
+        :trend-reason="NO_TREND_SERIES"
         :loading="analytics.summary.loading"
         :error="analytics.summary.error"
         data-testid="kpi-loc-added"
@@ -377,6 +432,8 @@ function tileReason(field: string): string | undefined {
         label="LOC removed"
         :value="summary?.loc?.removed ?? null"
         :reason="tileReason('loc')"
+        :delta="analytics.summaryFieldDelta('locRemoved')"
+        :trend-reason="NO_TREND_SERIES"
         :loading="analytics.summary.loading"
         :error="analytics.summary.error"
         data-testid="kpi-loc-removed"
@@ -387,6 +444,8 @@ function tileReason(field: string): string | undefined {
         metric="duration"
         :value="activeMs"
         :reason="tileReason('active_seconds')"
+        :delta="activeTimeDelta"
+        :trend-reason="NO_TREND_SERIES"
         :loading="analytics.summary.loading"
         :error="analytics.summary.error"
         data-testid="kpi-active-time"
@@ -415,6 +474,13 @@ function tileReason(field: string): string | undefined {
             v-else
             :reason="tileReason('reject_rate')"
           />
+          <p
+            v-if="formattedRejectRateDelta"
+            class="text-muted-foreground mt-0.5 text-xs tabular-nums"
+            data-testid="stat-tile-delta"
+          >
+            {{ formattedRejectRateDelta }} vs previous window
+          </p>
         </CardContent>
       </Card>
     </div>

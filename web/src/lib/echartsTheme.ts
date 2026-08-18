@@ -13,6 +13,16 @@ import { useUiStore } from '@/stores/ui'
 
 export interface ChartTheme {
   backgroundColor: string
+  /**
+   * `theme.css`'s `--card` — every analytics chart lives inside a `Card`
+   * (`bg-card`), one step lighter than the page's own `--background`
+   * (round-5 UI pass, gap: "the inner plot panel sits on a darker box
+   * than its card creating an unintended seam"). A chart's own
+   * `backgroundColor` should read this, not `backgroundColor` above,
+   * whenever it's painting the inside of a `Card` — which is every chart
+   * this product has today.
+   */
+  cardBackgroundColor: string
   textStyle: { color: string }
   /** Border/axis-line color — theme.css's `--border`. */
   borderColor: string
@@ -41,6 +51,7 @@ export interface ChartTheme {
  */
 const FALLBACKS: Record<string, string> = {
   '--background': 'oklch(0.145 0 0)',
+  '--card': 'oklch(0.205 0 0)',
   '--foreground': 'oklch(0.985 0 0)',
   '--muted-foreground': 'oklch(0.708 0 0)',
   '--border': 'oklch(1 0 0 / 10%)',
@@ -73,6 +84,7 @@ function readToken(name: string): string {
 export function buildChartTheme(): ChartTheme {
   return {
     backgroundColor: readToken('--background'),
+    cardBackgroundColor: readToken('--card'),
     textStyle: { color: readToken('--foreground') },
     borderColor: readToken('--border'),
     mutedColor: readToken('--muted-foreground'),

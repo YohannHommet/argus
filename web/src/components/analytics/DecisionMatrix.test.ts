@@ -77,12 +77,14 @@ describe('DecisionMatrix', () => {
     const ui = useUiStore()
     ui.setTheme('dark')
     document.documentElement.style.setProperty('--background', 'oklch(0.145 0 0)')
+    document.documentElement.style.setProperty('--card', 'oklch(0.205 0 0)')
     document.documentElement.style.setProperty('--foreground', 'oklch(0.985 0 0)')
     const { chart: darkChart } = mountMatrix({ data: getAnalyticsDecisions200Default })
     const darkOption = darkChart.props('option') as { backgroundColor: string; textStyle: { color: string } }
 
     ui.setTheme('light')
     document.documentElement.style.setProperty('--background', 'oklch(1 0 0)')
+    document.documentElement.style.setProperty('--card', 'oklch(1 0 0)')
     document.documentElement.style.setProperty('--foreground', 'oklch(0.145 0 0)')
     const { chart: lightChart } = mountMatrix({ data: getAnalyticsDecisions200Default })
     const lightOption = lightChart.props('option') as { backgroundColor: string; textStyle: { color: string } }
@@ -91,6 +93,7 @@ describe('DecisionMatrix', () => {
     expect(lightOption.textStyle.color).not.toBe(darkOption.textStyle.color)
 
     document.documentElement.style.removeProperty('--background')
+    document.documentElement.style.removeProperty('--card')
     document.documentElement.style.removeProperty('--foreground')
   })
 

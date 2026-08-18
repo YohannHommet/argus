@@ -68,12 +68,19 @@ const option = computed<BreakdownOption>(() => {
   const d = props.data
   const t = theme.value
   if (!d) {
-    return { backgroundColor: t.backgroundColor, textStyle: t.textStyle, series: [] }
+    return { backgroundColor: t.cardBackgroundColor, textStyle: t.textStyle, series: [] }
   }
 
   const labels = d.rows.map((row) => rowLabel(row.key))
+
+  // Same rule as `TimeSeriesChart`: "unattributed" is muted/neutral, never a cycled palette
+  // color — a palette slot means one fixed thing (a real, named entity) across every chart on
+  // this screen (round-5 UI pass, gap: "blue means different things in adjacent charts").
+  let paletteIndex = 0
+  const rowColor = d.rows.map((row) => (row.key === '' ? t.mutedColor : paletteColor(t, paletteIndex++)))
+
   const base = {
-    backgroundColor: t.backgroundColor,
+    backgroundColor: t.cardBackgroundColor,
     textStyle: t.textStyle,
     tooltip: {
       trigger: props.variant === 'pie' ? ('item' as const) : ('axis' as const),
@@ -81,26 +88,29 @@ const option = computed<BreakdownOption>(() => {
     },
   }
 
+  // A single-row legend carries no information — there's nothing else to distinguish it from.
+  const showLegend = d.rows.length > 1
+
   if (props.variant === 'pie') {
     const series: PieSeriesOption = {
       type: 'pie',
       radius: ['45%', '70%'],
-      itemStyle: { borderColor: t.backgroundColor, borderWidth: 2 },
+      itemStyle: { borderColor: t.cardBackgroundColor, borderWidth: 2 },
       data: d.rows.map((row, index) => ({
         name: labels[index],
         value: row.value,
-        itemStyle: { color: paletteColor(t, index) },
+        itemStyle: { color: rowColor[index] },
       })),
       label: { color: t.mutedColor, fontSize: 11 },
       emphasis: { scaleSize: 4 },
     }
-    return { ...base, legend: chartLegend(t), series: [series] }
+    return { ...base, ...(showLegend ? { legend: chartLegend(t) } : {}), series: [series] }
   }
 
   const series: BarSeriesOption = {
     type: 'bar',
     barMaxWidth: 24,
-    data: d.rows.map((row, index) => ({ value: row.value, itemStyle: { color: paletteColor(t, index), borderRadius: [0, 3, 3, 0] } })),
+    data: d.rows.map((row, index) => ({ value: row.value, itemStyle: { color: rowColor[index], borderRadius: [0, 3, 3, 0] } })),
     emphasis: { focus: 'series' },
   }
 

@@ -59,16 +59,42 @@ describe('BreakdownChart', () => {
     expect(option.yAxis.data).not.toContain('')
   })
 
+  it('renders the unattributed row muted rather than a cycled palette color, and never spends a palette slot on it', () => {
+    const { chart } = mountChart({ data: breakdownWithUnknownQuerySource, metric: 'cost' })
+    const option = chart.props('option') as { yAxis: { data: string[] }; series: { data: { itemStyle: { color: string } }[] }[] }
+    const rows = option.yAxis.data
+    const colors = option.series[0].data.map((d) => d.itemStyle.color)
+    const sdkColor = colors[rows.indexOf('sdk')]
+    const unattributedColor = colors[rows.indexOf('unattributed')]
+    const futureColor = colors[rows.indexOf('a_future_query_source')]
+    expect(unattributedColor).not.toBe(sdkColor)
+    // The two real named rows get distinct, cycled palette colors — the unattributed one never
+    // takes a slot in that cycle (round-5 UI pass, gap: "blue means different things").
+    expect(sdkColor).not.toBe(futureColor)
+  })
+
+  it('hides the legend for a single-row pie (nothing else to distinguish it from)', () => {
+    const { chart } = mountChart({ data: getAnalyticsBreakdown200Default, variant: 'pie' })
+    const option = chart.props('option') as { legend?: unknown }
+    expect(option.legend).toBeUndefined()
+
+    const { chart: multiRow } = mountChart({ data: breakdownWithUnknownQuerySource, variant: 'pie', metric: 'cost' })
+    const multiOption = multiRow.props('option') as { legend?: unknown }
+    expect(multiOption.legend).toBeDefined()
+  })
+
   it('changes backgroundColor and textStyle.color in the regenerated option when the theme toggles', () => {
     const ui = useUiStore()
     ui.setTheme('dark')
     document.documentElement.style.setProperty('--background', 'oklch(0.145 0 0)')
+    document.documentElement.style.setProperty('--card', 'oklch(0.205 0 0)')
     document.documentElement.style.setProperty('--foreground', 'oklch(0.985 0 0)')
     const { chart: darkChart } = mountChart({ data: getAnalyticsBreakdown200Default })
     const darkOption = darkChart.props('option') as { backgroundColor: string; textStyle: { color: string } }
 
     ui.setTheme('light')
     document.documentElement.style.setProperty('--background', 'oklch(1 0 0)')
+    document.documentElement.style.setProperty('--card', 'oklch(1 0 0)')
     document.documentElement.style.setProperty('--foreground', 'oklch(0.145 0 0)')
     const { chart: lightChart } = mountChart({ data: getAnalyticsBreakdown200Default })
     const lightOption = lightChart.props('option') as { backgroundColor: string; textStyle: { color: string } }
@@ -77,6 +103,7 @@ describe('BreakdownChart', () => {
     expect(lightOption.textStyle.color).not.toBe(darkOption.textStyle.color)
 
     document.documentElement.style.removeProperty('--background')
+    document.documentElement.style.removeProperty('--card')
     document.documentElement.style.removeProperty('--foreground')
   })
 

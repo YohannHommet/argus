@@ -1,11 +1,16 @@
 import { mount } from '@vue/test-utils'
-import { describe, expect, it } from 'vitest'
+import { createPinia, setActivePinia } from 'pinia'
+import { beforeEach, describe, expect, it } from 'vitest'
 
 import { ApiError } from '@/api/errors'
 import { NOT_ATTRIBUTABLE_TO_MODEL, NOT_MEASURED } from '@/lib/nullReasons'
 import StatTile from './StatTile.vue'
 
 describe('StatTile', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+  })
+
   it('renders a measured zero as "0", not "—" (null vs. zero is the whole point)', () => {
     const wrapper = mount(StatTile, { props: { label: 'Tool rejects', value: 0 } })
     const value = wrapper.get('[data-testid="stat-tile-value"]')
@@ -60,5 +65,46 @@ describe('StatTile', () => {
   it('renders a Skeleton while loading, not the value', () => {
     const wrapper = mount(StatTile, { props: { label: 'Cost', value: 71.44, loading: true } })
     expect(wrapper.find('[data-testid="stat-tile-value"]').exists()).toBe(false)
+  })
+
+  it('renders a sparkline when 2+ bucket values are given', () => {
+    const wrapper = mount(StatTile, { props: { label: 'Cost', value: 71.44, sparkline: [1, 2, 3] } })
+    expect(wrapper.find('[data-testid="stat-tile-sparkline"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="stat-tile-trend-reason"]').exists()).toBe(false)
+  })
+
+  it('renders neither a sparkline nor a trend-reason note when sparkline is omitted and no reason is given', () => {
+    const wrapper = mount(StatTile, { props: { label: 'Cost', value: 71.44 } })
+    expect(wrapper.find('[data-testid="stat-tile-sparkline"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="stat-tile-trend-reason"]').exists()).toBe(false)
+  })
+
+  it('renders a "no trend data" tooltip instead of a fabricated flat sparkline when there is no per-bucket series', () => {
+    const wrapper = mount(StatTile, {
+      props: { label: 'Active time', value: 0, metric: 'duration', sparkline: null, trendReason: 'No per-bucket series for this metric' },
+      global: { stubs: { teleport: true } },
+    })
+    expect(wrapper.find('[data-testid="stat-tile-sparkline"]').exists()).toBe(false)
+    const note = wrapper.get('[data-testid="stat-tile-trend-reason"]')
+    expect(note.find('[title]').attributes('title')).toBe('No per-bucket series for this metric')
+  })
+
+  it('renders a single-point sparkline array as no sparkline at all (nothing to draw a trend from)', () => {
+    const wrapper = mount(StatTile, { props: { label: 'Cost', value: 5, sparkline: [1] } })
+    expect(wrapper.find('[data-testid="stat-tile-sparkline"]').exists()).toBe(false)
+  })
+
+  it('never shows a sparkline or trend-reason note for a null (not-attributable) value', () => {
+    const wrapper = mount(StatTile, {
+      props: { label: 'Sessions', value: null, sparkline: [1, 2, 3], trendReason: 'irrelevant' },
+      global: { stubs: { teleport: true } },
+    })
+    expect(wrapper.find('[data-testid="stat-tile-sparkline"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="stat-tile-trend-reason"]').exists()).toBe(false)
+  })
+
+  it('renders a larger value with size="lg" (the promoted primary tiles)', () => {
+    const wrapper = mount(StatTile, { props: { label: 'Cost', value: 71.44, metric: 'cost', size: 'lg' } })
+    expect(wrapper.get('[data-testid="stat-tile-value"]').classes()).toContain('text-3xl')
   })
 })

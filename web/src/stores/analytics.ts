@@ -7,6 +7,7 @@ import { unwrap } from '@/api/client'
 import { useApiClient } from '@/api/context'
 import { ApiError } from '@/api/errors'
 import type { components } from '@/api/schema'
+import { computeDelta, seriesDelta, sparklineValues } from '@/lib/analyticsDelta'
 
 export type Summary = components['schemas']['Summary']
 export type Series = components['schemas']['Series']
@@ -26,6 +27,32 @@ const PRESET_FROM: Record<Exclude<AnalyticsPreset, 'custom'>, string> = {
   '7d': '-7d',
   '30d': '-30d',
 }
+
+/** Same presets, as milliseconds — used only to size the *preceding* window for KPI deltas (below). */
+const PRESET_DURATION_MS: Record<Exclude<AnalyticsPreset, 'custom'>, number> = {
+  '24h': 24 * 60 * 60 * 1000,
+  '7d': 7 * 24 * 60 * 60 * 1000,
+  '30d': 30 * 24 * 60 * 60 * 1000,
+}
+
+/**
+ * `TimeseriesMetric`s the KPI strip can plot a sparkline for (round-5 UI
+ * pass). `cost`/`tokens` are deliberately excluded here — the strip reuses
+ * `costSeries`/`tokenSeries`, already fetched for the two chart panels
+ * (the "sum(series)+other" total is invariant under `group_by`, see
+ * `lib/analyticsDelta.ts`, so no separate current-window fetch is needed
+ * for those two). `sessions`/`turns`/`api_requests`/`api_errors`/
+ * `tool_calls`/`tool_rejects` have no other consumer, so they get their
+ * own dedicated (always `group_by=none`) current+previous fetch pair.
+ * `loc` is excluded too: the API only reports it as one combined
+ * added+removed number (SPEC), which would misrepresent either the "LOC
+ * added" or "LOC removed" tile's own trend — those two tiles get a delta
+ * (from `previousSummary`, which *does* split added/removed) but no
+ * sparkline. `active_seconds`/`reject_rate` have no `TimeseriesMetric` at
+ * all (they're summary-only derived figures) — same treatment.
+ */
+export const KPI_SPARKLINE_METRICS = ['sessions', 'turns', 'api_requests', 'api_errors', 'tool_calls', 'tool_rejects'] as const
+export type KpiSparklineMetric = (typeof KPI_SPARKLINE_METRICS)[number]
 
 /** `group_by` switch on the cost timeseries chart. */
 export const GROUP_BY_OPTIONS = ['model', 'project', 'vendor', 'none'] as const
@@ -304,21 +331,88 @@ export const useAnalyticsStore = defineStore('analytics', () => {
     vendor: filters.value.vendor,
   }))
 
+  /**
+   * The window immediately preceding the current one, same length, for
+   * every KPI tile's period-over-period delta (round-5 UI pass). `null`
+   * when it can't be computed at all (a custom range missing either
+   * bound, or an inverted/zero-length one) — every delta then reads
+   * `null` too (see `lib/analyticsDelta.ts`'s `computeDelta`), rather than
+   * a fabricated comparison.
+   *
+   * Resolved to absolute ISO instants rather than `PRESET_FROM`'s relative
+   * shorthand (`-24h`) because the current window's own `-24h` is resolved
+   * server-side against the server's own "now" — this store has no way to
+   * ask for "the 24h immediately before that" without first anchoring to
+   * a concrete instant itself. `Date.now()` here and the server's "now"
+   * for the current window can drift by network latency (milliseconds,
+   * not enough to matter for a period-over-period comparison).
+   */
+  const previousWindowParams = computed<{ from: string; to: string } | null>(() => {
+    if (preset.value === 'custom') {
+      if (!customFrom.value || !customTo.value) return null
+      const fromMs = Date.parse(customFrom.value)
+      const toMs = Date.parse(customTo.value)
+      if (Number.isNaN(fromMs) || Number.isNaN(toMs)) return null
+      const duration = toMs - fromMs
+      if (duration <= 0) return null
+      return { from: new Date(fromMs - duration).toISOString(), to: customFrom.value }
+    }
+    const duration = PRESET_DURATION_MS[preset.value]
+    const currentFromMs = Date.now() - duration
+    return { from: new Date(currentFromMs - duration).toISOString(), to: new Date(currentFromMs).toISOString() }
+  })
+
+  const previousQuery = computed(() => {
+    const w = previousWindowParams.value
+    if (!w) return null
+    return { from: w.from, to: w.to, project: filters.value.project, model: filters.value.model, vendor: filters.value.vendor }
+  })
+
   const summary = createResource<Summary>()
+  /** The preceding window's summary — read only for KPI deltas the timeseries endpoint can't back (LOC added/removed, active time, reject rate; see `KPI_SPARKLINE_METRICS`'s doc comment). */
+  const previousSummary = createResource<Summary>()
   const costSeries = createResource<Series>()
   const tokenSeries = createResource<Series>()
+  /** Preceding-window counterparts to `costSeries`/`tokenSeries`, always `group_by=none` — only their bucket totals are read (delta math), never rendered as their own chart. */
+  const costPreviousSeries = createResource<Series>()
+  const tokenPreviousSeries = createResource<Series>()
   const modelBreakdown = createResource<Breakdown>()
   const projectBreakdown = createResource<Breakdown>()
   const toolBreakdown = createResource<Breakdown>()
   const errorBreakdown = createResource<Breakdown>()
   const decisions = createResource<DecisionMatrix>()
 
+  /** One current+previous `Series` pair per {@link KPI_SPARKLINE_METRICS} entry — the KPI strip's sparkline/delta source for metrics no other panel already fetches. */
+  const kpiSeries: Record<KpiSparklineMetric, { current: AnalyticsResource<Series>; previous: AnalyticsResource<Series> }> = {
+    sessions: { current: createResource<Series>(), previous: createResource<Series>() },
+    turns: { current: createResource<Series>(), previous: createResource<Series>() },
+    api_requests: { current: createResource<Series>(), previous: createResource<Series>() },
+    api_errors: { current: createResource<Series>(), previous: createResource<Series>() },
+    tool_calls: { current: createResource<Series>(), previous: createResource<Series>() },
+    tool_rejects: { current: createResource<Series>(), previous: createResource<Series>() },
+  }
+
   function fetchSummary(): Promise<void> {
     const client = useApiClient()
     return summary.run((signal) => unwrap(client.GET('/api/v1/analytics/summary', { params: { query: commonQuery.value }, signal })))
   }
 
-  function fetchTimeseries(resource: AnalyticsResource<Series>, metric: TimeseriesMetric, gb: GroupBy): Promise<void> {
+  function fetchPreviousSummary(): Promise<void> {
+    const q = previousQuery.value
+    if (!q) {
+      previousSummary.skip()
+      return Promise.resolve()
+    }
+    const client = useApiClient()
+    return previousSummary.run((signal) => unwrap(client.GET('/api/v1/analytics/summary', { params: { query: q }, signal })))
+  }
+
+  function fetchTimeseries(
+    resource: AnalyticsResource<Series>,
+    metric: TimeseriesMetric,
+    gb: GroupBy,
+    query: { from?: string; to?: string; project: string[]; model: string[]; vendor: string[] } = commonQuery.value,
+  ): Promise<void> {
     if (!isRequestAttributable({ endpoint: 'timeseries', metric, hasModelFilter: hasModelFilter.value })) {
       resource.skip()
       return Promise.resolve()
@@ -327,11 +421,34 @@ export const useAnalyticsStore = defineStore('analytics', () => {
     return resource.run((signal) =>
       unwrap(
         client.GET('/api/v1/analytics/timeseries', {
-          params: { query: { ...commonQuery.value, metric, group_by: gb } },
+          params: { query: { ...query, metric, group_by: gb } },
           signal,
         }),
       ),
     )
+  }
+
+  /**
+   * Fetches both halves of one {@link KPI_SPARKLINE_METRICS} entry: the
+   * current window (the sparkline) and the immediately preceding one of
+   * equal length (the delta's baseline). Both always `group_by=none` —
+   * these resources back a single-number delta and a single trend line,
+   * never a per-dimension breakdown. The preceding-window half is skipped
+   * outright when {@link previousQuery} can't be computed (custom range
+   * missing a bound) — its `data` then stays `null`, which
+   * `lib/analyticsDelta.ts`'s `seriesDelta` already reads as "no delta".
+   */
+  function fetchKpiSeries(metric: KpiSparklineMetric): Promise<void[]> {
+    const entry = kpiSeries[metric]
+    const previousQ = previousQuery.value
+    let previousFetch: Promise<void>
+    if (previousQ) {
+      previousFetch = fetchTimeseries(entry.previous, metric, 'none', previousQ)
+    } else {
+      entry.previous.skip()
+      previousFetch = Promise.resolve()
+    }
+    return Promise.all([fetchTimeseries(entry.current, metric, 'none'), previousFetch])
   }
 
   function fetchBreakdown(resource: AnalyticsResource<Breakdown>, dimension: BreakdownDimension, metric: BreakdownMetric): Promise<void> {
@@ -365,6 +482,21 @@ export const useAnalyticsStore = defineStore('analytics', () => {
 
   const retryCostSeries = () => fetchTimeseries(costSeries, 'cost', groupBy.value)
   const retryTokenSeries = () => fetchTimeseries(tokenSeries, 'tokens', 'none')
+
+  /** Preceding-window `cost`/`tokens` totals for the Cost/Tokens KPI tiles' deltas — always `group_by=none`, independent of the chart's own `groupBy`. */
+  function fetchPreviousCostAndTokenSeries(): Promise<void[]> {
+    const previousQ = previousQuery.value
+    if (!previousQ) {
+      costPreviousSeries.skip()
+      tokenPreviousSeries.skip()
+      return Promise.resolve([])
+    }
+    return Promise.all([
+      fetchTimeseries(costPreviousSeries, 'cost', 'none', previousQ),
+      fetchTimeseries(tokenPreviousSeries, 'tokens', 'none', previousQ),
+    ])
+  }
+
   const retryModelBreakdown = () => fetchBreakdown(modelBreakdown, 'model', 'cost')
   const retryProjectBreakdown = () => fetchBreakdown(projectBreakdown, 'project', 'cost')
   const retryToolBreakdown = () => fetchBreakdown(toolBreakdown, 'tool', 'calls')
@@ -382,8 +514,11 @@ export const useAnalyticsStore = defineStore('analytics', () => {
   async function fetchAll(): Promise<void> {
     await Promise.allSettled([
       fetchSummary(),
+      fetchPreviousSummary(),
       retryCostSeries(),
       retryTokenSeries(),
+      fetchPreviousCostAndTokenSeries(),
+      ...KPI_SPARKLINE_METRICS.map((metric) => fetchKpiSeries(metric)),
       retryModelBreakdown(),
       retryProjectBreakdown(),
       retryToolBreakdown(),
@@ -451,6 +586,52 @@ export const useAnalyticsStore = defineStore('analytics', () => {
     return summary.data?.not_attributable.includes(field) ?? false
   }
 
+  /**
+   * Round-5 UI pass: every KPI tile's period-over-period delta + inline
+   * sparkline, computed from real per-bucket data (never fabricated) —
+   * `lib/analyticsDelta.ts`'s pure math applied to whichever pair of
+   * `Series` resources backs a given metric. `cost`/`tokens` read off the
+   * chart panels' own resources (see `KPI_SPARKLINE_METRICS`'s doc
+   * comment); the rest read their dedicated {@link kpiSeries} entry.
+   */
+  const costDelta = computed(() => seriesDelta(costSeries.data, costPreviousSeries.data))
+  const costSparkline = computed(() => sparklineValues(costSeries.data))
+  const tokenDelta = computed(() => seriesDelta(tokenSeries.data, tokenPreviousSeries.data))
+  const tokenSparkline = computed(() => sparklineValues(tokenSeries.data))
+
+  function kpiDelta(metric: KpiSparklineMetric): number | null {
+    const entry = kpiSeries[metric]
+    return seriesDelta(entry.current.data, entry.previous.data)
+  }
+
+  function kpiSparkline(metric: KpiSparklineMetric): number[] | null {
+    return sparklineValues(kpiSeries[metric].current.data)
+  }
+
+  /**
+   * Delta for the four KPIs the timeseries endpoint can't back at all —
+   * LOC added/removed (only reported combined per-bucket, SPEC) and
+   * active time / reject rate (summary-only derived figures, no
+   * `TimeseriesMetric` exists for either) — computed from
+   * {@link previousSummary} instead. Still real preceding-window data,
+   * just via the summary endpoint rather than timeseries buckets.
+   */
+  function summaryFieldDelta(field: 'locAdded' | 'locRemoved' | 'activeSeconds' | 'rejectRate'): number | null {
+    const current = summary.data
+    const previous = previousSummary.data
+    if (!current || !previous) return null
+    switch (field) {
+      case 'locAdded':
+        return computeDelta(current.loc?.added ?? null, previous.loc?.added ?? null)
+      case 'locRemoved':
+        return computeDelta(current.loc?.removed ?? null, previous.loc?.removed ?? null)
+      case 'activeSeconds':
+        return computeDelta(current.active_seconds, previous.active_seconds)
+      case 'rejectRate':
+        return computeDelta(current.reject_rate, previous.reject_rate)
+    }
+  }
+
   // Initial load: the very first render already has window/filter state
   // (parsed from route.query above), so it fetches immediately.
   void fetchAll()
@@ -471,6 +652,7 @@ export const useAnalyticsStore = defineStore('analytics', () => {
     setGroupBy,
     // resources
     summary,
+    previousSummary,
     costSeries,
     tokenSeries,
     modelBreakdown,
@@ -490,5 +672,13 @@ export const useAnalyticsStore = defineStore('analytics', () => {
     // derived
     isNotAttributable,
     fetchAll,
+    // KPI strip deltas + sparklines (round-5 UI pass)
+    costDelta,
+    costSparkline,
+    tokenDelta,
+    tokenSparkline,
+    kpiDelta,
+    kpiSparkline,
+    summaryFieldDelta,
   }
 })

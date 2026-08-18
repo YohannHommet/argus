@@ -73,19 +73,28 @@ const option = computed<TimeSeriesOption>(() => {
   const d = props.data
   const t = theme.value
   if (!d) {
-    return { backgroundColor: t.backgroundColor, textStyle: t.textStyle, series: [] }
+    return { backgroundColor: t.cardBackgroundColor, textStyle: t.textStyle, series: [] }
   }
 
-  const series: LineSeriesOption[] = d.series.map((point, index) => ({
-    type: 'line',
-    name: seriesLabel(point.key),
-    data: point.values,
-    showSymbol: false,
-    smooth: 0.2,
-    lineStyle: { color: paletteColor(t, index), width: 2 },
-    itemStyle: { color: paletteColor(t, index) },
-    emphasis: { focus: 'series', lineStyle: { width: 3 } },
-  }))
+  // A palette index is only ever spent on a real, named series — "unattributed" (`key === ''`)
+  // always renders muted/dashed, the same treatment `other` gets below, so blue (palette index 0)
+  // means the same thing in every chart on this screen: a real, named entity, never "no model"
+  // (round-5 UI pass, gap: "blue means different things in adjacent charts").
+  let paletteIndex = 0
+  const series: LineSeriesOption[] = d.series.map((point) => {
+    const isUnattributed = point.key === ''
+    const color = isUnattributed ? t.mutedColor : paletteColor(t, paletteIndex++)
+    return {
+      type: 'line',
+      name: seriesLabel(point.key),
+      data: point.values,
+      showSymbol: false,
+      smooth: 0.2,
+      lineStyle: { color, width: 2, type: isUnattributed ? 'dashed' : 'solid' },
+      itemStyle: { color },
+      emphasis: { focus: 'series', lineStyle: { width: 3 } },
+    }
+  })
 
   if (d.other) {
     series.push({
@@ -99,15 +108,19 @@ const option = computed<TimeSeriesOption>(() => {
     })
   }
 
+  // A single-series legend ("unattributed" alone, e.g. the tokens chart with no group_by
+  // dimension) carries no information — there's nothing to distinguish it from (round-5 UI pass).
+  const showLegend = series.length > 1
+
   return {
-    backgroundColor: t.backgroundColor,
+    backgroundColor: t.cardBackgroundColor,
     textStyle: t.textStyle,
     grid: { left: 56, right: 16, top: 40, bottom: 40 },
     tooltip: {
       trigger: 'axis',
       valueFormatter: (value) => valueFormatter.value(typeof value === 'number' ? value : Number(value)),
     },
-    legend: chartLegend(t),
+    ...(showLegend ? { legend: chartLegend(t) } : {}),
     dataZoom: slimDataZoom(t),
     xAxis: {
       type: 'category',

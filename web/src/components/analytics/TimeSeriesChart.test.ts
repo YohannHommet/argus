@@ -54,6 +54,46 @@ describe('TimeSeriesChart', () => {
     expect(names).not.toContain('')
   })
 
+  it('renders the unattributed series muted/dashed rather than a cycled palette color, so blue always means the same thing across charts', () => {
+    const { chart } = mountChart({ data: timeseriesWithUnattributedSeries, metric: 'cost' })
+    const option = chart.props('option') as {
+      series: { name: string; lineStyle: { color: string; type?: string } }[]
+    }
+    const namedSeries = option.series.find((s) => s.name === 'claude-opus-5')!
+    const unattributed = option.series.find((s) => s.name === 'unattributed')!
+    const other = option.series.find((s) => s.name === 'Other')!
+
+    expect(namedSeries.lineStyle.type).toBe('solid')
+    expect(unattributed.lineStyle.type).toBe('dashed')
+    expect(unattributed.lineStyle.color).toBe(other.lineStyle.color)
+    expect(unattributed.lineStyle.color).not.toBe(namedSeries.lineStyle.color)
+  })
+
+  it('assigns the first palette color to the first real named series, not to "unattributed" even when it sorts first', () => {
+    const { chart } = mountChart({
+      data: { bucket: 'day', buckets: ['2026-08-11T08:00:00Z'], series: [{ key: '', values: [1] }, { key: 'claude-opus-5', values: [2] }] },
+    })
+    const option = chart.props('option') as { series: { name: string; lineStyle: { color: string } }[] }
+    const namedSeries = option.series.find((s) => s.name === 'claude-opus-5')!
+    // Whatever palette color index 0 resolves to (theme-dependent), the real named series gets it
+    // — "unattributed" never occupies a palette slot regardless of its position in the response.
+    const unattributedSeries = option.series.find((s) => s.name === 'unattributed')!
+    expect(namedSeries.lineStyle.color).not.toBe(unattributedSeries.lineStyle.color)
+  })
+
+  it('hides the legend entirely for a single-series chart (a lone "unattributed" legend carries no information)', () => {
+    const { chart } = mountChart({ data: getAnalyticsTimeseries200Default, metric: 'cost' })
+    // fixture: 1 named series + `other` -> 2 series, legend should show.
+    const twoSeriesOption = chart.props('option') as { legend?: unknown }
+    expect(twoSeriesOption.legend).toBeDefined()
+
+    const { chart: singleChart } = mountChart({
+      data: { bucket: 'day', buckets: ['2026-08-11T08:00:00Z', '2026-08-11T09:00:00Z'], series: [{ key: '', values: [1, 2] }] },
+    })
+    const singleSeriesOption = singleChart.props('option') as { legend?: unknown }
+    expect(singleSeriesOption.legend).toBeUndefined()
+  })
+
   it('changes backgroundColor and textStyle.color in the regenerated option when the theme toggles', () => {
     // jsdom never applies theme.css's cascade (see echartsTheme.test.ts),
     // so the dark/light values here are simulated the same way as there:
@@ -61,12 +101,14 @@ describe('TimeSeriesChart', () => {
     const ui = useUiStore()
     ui.setTheme('dark')
     document.documentElement.style.setProperty('--background', 'oklch(0.145 0 0)')
+    document.documentElement.style.setProperty('--card', 'oklch(0.205 0 0)')
     document.documentElement.style.setProperty('--foreground', 'oklch(0.985 0 0)')
     const { chart: darkChart } = mountChart({ data: getAnalyticsTimeseries200Default })
     const darkOption = darkChart.props('option') as { backgroundColor: string; textStyle: { color: string } }
 
     ui.setTheme('light')
     document.documentElement.style.setProperty('--background', 'oklch(1 0 0)')
+    document.documentElement.style.setProperty('--card', 'oklch(1 0 0)')
     document.documentElement.style.setProperty('--foreground', 'oklch(0.145 0 0)')
     const { chart: lightChart } = mountChart({ data: getAnalyticsTimeseries200Default })
     const lightOption = lightChart.props('option') as { backgroundColor: string; textStyle: { color: string } }
@@ -75,6 +117,7 @@ describe('TimeSeriesChart', () => {
     expect(lightOption.textStyle.color).not.toBe(darkOption.textStyle.color)
 
     document.documentElement.style.removeProperty('--background')
+    document.documentElement.style.removeProperty('--card')
     document.documentElement.style.removeProperty('--foreground')
   })
 

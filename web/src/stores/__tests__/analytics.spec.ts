@@ -162,13 +162,17 @@ describe('analytics store — window/filter <-> URL query (pure helpers)', () =>
 })
 
 describe('useAnalyticsStore', () => {
-  it('fetches all eight resources exactly once on creation', async () => {
+  it('fetches all resources exactly once on creation, including the preceding-window pair every KPI delta needs', async () => {
     const { store } = await setupStore()
-    expect(getSummary).toHaveBeenCalledTimes(1)
-    expect(getTimeseries).toHaveBeenCalledTimes(2) // cost + tokens
+    // summary: current + previous window (round-5 UI pass — KPI tile deltas).
+    expect(getSummary).toHaveBeenCalledTimes(2)
+    // timeseries: cost + tokens (current) + cost + tokens (previous)
+    // + 6 KPI_SPARKLINE_METRICS x (current + previous) = 4 + 12 = 16.
+    expect(getTimeseries).toHaveBeenCalledTimes(16)
     expect(getBreakdown).toHaveBeenCalledTimes(4) // model + project + tool + error_type
     expect(getDecisions).toHaveBeenCalledTimes(1)
     expect(store.summary.data).toEqual(getAnalyticsSummary200Default)
+    expect(store.previousSummary.data).toEqual(getAnalyticsSummary200Default)
   })
 
   it('restores window preset and filters from the initial route query (reload stability)', async () => {
@@ -196,8 +200,9 @@ describe('useAnalyticsStore', () => {
 
     store.setPreset('7d')
     await flushPromises()
-    expect(getSummary).toHaveBeenCalledTimes(1)
-    expect(getTimeseries).toHaveBeenCalledTimes(2)
+    // getSummary backs both `summary` and `previousSummary` (round-5 UI pass) — 2 calls, one per resource.
+    expect(getSummary).toHaveBeenCalledTimes(2)
+    expect(getTimeseries).toHaveBeenCalledTimes(16) // (cost + tokens) x (current + previous) + 6 KPI metrics x (current + previous)
     expect(getBreakdown).toHaveBeenCalledTimes(4)
     expect(getDecisions).toHaveBeenCalledTimes(1)
     expect(firstSignal?.aborted).toBe(false)
@@ -210,7 +215,7 @@ describe('useAnalyticsStore', () => {
     await flushPromises()
 
     expect(router.currentRoute.value.query.window).toBe('30d')
-    expect(getTimeseries).toHaveBeenCalledTimes(4)
+    expect(getTimeseries).toHaveBeenCalledTimes(32)
     expect(getBreakdown).toHaveBeenCalledTimes(8)
     expect(getDecisions).toHaveBeenCalledTimes(2)
     expect(firstSignal?.aborted).toBe(true)
@@ -297,11 +302,17 @@ describe('useAnalyticsStore', () => {
     expect(dimensions).not.toContain('error_type')
     expect(dimensions).toEqual(expect.arrayContaining(['model', 'project']))
 
-    // The store never requests a non-attributable timeseries metric like `sessions` at all — the
-    // only two metrics it ever fetches (cost, tokens) both stay attributable under a model filter —
-    // so neither series is skipped, and no `metric=sessions` request is ever constructed to send.
+    // The store never requests a non-attributable timeseries metric at all: `cost`/`tokens` (the
+    // chart panels) and `api_requests`/`api_errors` (round-5 UI pass's KPI sparklines) all stay
+    // attributable under a model filter, so none of those series is skipped; `sessions`/`turns`/
+    // `tool_calls`/`tool_rejects` (the other KPI sparklines) are not attributable and are skipped
+    // client-side — no request for any of them is ever constructed to send.
     const metrics = getTimeseries.mock.calls.map((c) => (c[0] as { params: { query: Record<string, unknown> } }).params.query.metric)
     expect(metrics).not.toContain('sessions')
+    expect(metrics).not.toContain('turns')
+    expect(metrics).not.toContain('tool_calls')
+    expect(metrics).not.toContain('tool_rejects')
+    expect(metrics).toEqual(expect.arrayContaining(['cost', 'tokens', 'api_requests', 'api_errors']))
     expect(store.costSeries.notAttributable).toBe(false)
     expect(store.tokenSeries.notAttributable).toBe(false)
   })
@@ -336,5 +347,83 @@ describe('useAnalyticsStore', () => {
     const { store } = await setupStore()
     expect(store.isNotAttributable('sessions')).toBe(false)
     expect(store.isNotAttributable('loc')).toBe(false)
+  })
+})
+
+describe('useAnalyticsStore — KPI deltas + sparklines (round-5 UI pass)', () => {
+  /**
+   * `commonQuery`'s current window uses the preset's relative shorthand
+   * (`-24h`) unchanged; `previousQuery` always resolves to an absolute ISO
+   * `from` (see `previousWindowParams`) — so a mock can tell the two
+   * apart by that shape alone, without needing to know the real clock.
+   */
+  function isPreviousWindowQuery(query: { from?: string }): boolean {
+    return typeof query.from === 'string' && query.from !== '-24h' && query.from !== '-7d' && query.from !== '-30d'
+  }
+
+  it('costDelta/tokenDelta/kpiDelta are real current-minus-previous totals from two separate fetches', async () => {
+    getTimeseries = vi.fn((init: { params: { query: { metric: string; from?: string } } }) => {
+      const { metric, from } = init.params.query
+      const previous = isPreviousWindowQuery({ from })
+      if (metric === 'cost') return okResponse(previous ? { bucket: 'hour', buckets: ['t0'], series: [{ key: '', values: [10] }] } : { bucket: 'hour', buckets: ['t0'], series: [{ key: '', values: [15] }] })
+      if (metric === 'api_requests')
+        return okResponse(previous ? { bucket: 'hour', buckets: ['t0'], series: [{ key: '', values: [50] }] } : { bucket: 'hour', buckets: ['t0'], series: [{ key: '', values: [70] }] })
+      return okResponse(getAnalyticsTimeseries200Default)
+    })
+
+    const { store } = await setupStore()
+
+    expect(store.costDelta).toBe(5) // 15 - 10
+    expect(store.kpiDelta('api_requests')).toBe(20) // 70 - 50
+  })
+
+  it('costSparkline/kpiSparkline plot the current window only, never the preceding one', async () => {
+    const { store } = await setupStore()
+    // getAnalyticsTimeseries200Default: series [1.2, 0] + other [0.4, 0.1] -> per-bucket totals.
+    expect(store.costSparkline).toEqual([1.6, 0.1])
+  })
+
+  it('a metric skipped as not-attributable under a model filter has null delta and null sparkline, never a fabricated flat line', async () => {
+    const { store } = await setupStore()
+    store.setFilters({ model: ['claude-opus-5'] })
+    await flushPromises()
+
+    // sessions/turns/tool_calls/tool_rejects are not model-attributable -> skipped client-side.
+    expect(store.kpiDelta('sessions')).toBeNull()
+    expect(store.kpiSparkline('sessions')).toBeNull()
+  })
+
+  it('summaryFieldDelta compares the current and preceding window summaries for LOC/active-time/reject-rate', async () => {
+    const previous = {
+      ...getAnalyticsSummary200Default,
+      loc: { added: 100, removed: 40 },
+      active_seconds: 500,
+      reject_rate: 0.1,
+    }
+    const current = {
+      ...getAnalyticsSummary200Default,
+      loc: { added: 130, removed: 55 },
+      active_seconds: 620,
+      reject_rate: 0.07,
+    }
+    let call = 0
+    getSummary = vi.fn(() => okResponse(call++ === 0 ? current : previous))
+
+    const { store } = await setupStore()
+
+    expect(store.summaryFieldDelta('locAdded')).toBe(30)
+    expect(store.summaryFieldDelta('locRemoved')).toBe(15)
+    expect(store.summaryFieldDelta('activeSeconds')).toBe(120)
+    expect(store.summaryFieldDelta('rejectRate')).toBeCloseTo(-0.03)
+  })
+
+  it('summaryFieldDelta is null when the preceding window has no data (e.g. a custom range missing a bound)', async () => {
+    const { store, router } = await setupStore()
+    await router.push({ query: { window: 'custom', from: '2026-08-10' } }) // `to` missing -> previousWindowParams can't be computed
+    store.setCustomRange('2026-08-10', null)
+    await flushPromises()
+
+    expect(store.summaryFieldDelta('locAdded')).toBeNull()
+    expect(store.previousSummary.data).toBeNull()
   })
 })
