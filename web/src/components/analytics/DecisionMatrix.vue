@@ -116,13 +116,17 @@ const option = computed<DecisionMatrixOption>(() => {
       type: 'category',
       data: cols.map((c) => (c === '' ? 'unattributed' : c)),
       axisLine: { lineStyle: { color: t.borderColor } },
-      axisLabel: { color: t.mutedColor, rotate: 45 },
+      axisTick: { show: false },
+      axisLabel: { color: t.mutedColor, fontSize: 11, rotate: 45 },
+      splitArea: { areaStyle: { color: [t.backgroundColor] } },
     },
     yAxis: {
       type: 'category',
       data: rows.value.map((r) => r.tool_name),
       axisLine: { lineStyle: { color: t.borderColor } },
-      axisLabel: { color: t.mutedColor },
+      axisTick: { show: false },
+      axisLabel: { color: t.mutedColor, fontSize: 11 },
+      splitArea: { areaStyle: { color: [t.backgroundColor] } },
     },
     visualMap: {
       type: 'continuous',
@@ -132,14 +136,21 @@ const option = computed<DecisionMatrixOption>(() => {
       orient: 'horizontal',
       left: 'center',
       bottom: 0,
-      inRange: { color: [t.borderColor, t.cost] },
+      inRange: { color: [t.borderColor, t.primary] },
       textStyle: { color: t.mutedColor },
     },
     series: [
       {
         type: 'heatmap',
         data,
-        label: { show: true, color: t.textStyle.color, formatter: (p) => formatCount(Array.isArray(p.value) ? (p.value[2] as number) : null) },
+        itemStyle: { borderColor: t.backgroundColor, borderWidth: 2 },
+        emphasis: { itemStyle: { borderColor: t.primary, borderWidth: 2 } },
+        label: {
+          show: true,
+          color: t.textStyle.color,
+          fontSize: 11,
+          formatter: (p) => formatCount(Array.isArray(p.value) ? (p.value[2] as number) : null),
+        },
       },
     ],
   }
@@ -247,19 +258,19 @@ function onClick(params: ECElementEvent) {
           <td class="text-foreground py-1 pr-4 font-medium">
             {{ row.tool_name }}
           </td>
-          <td class="text-accept py-1 pr-4">
+          <td class="text-accept py-1 pr-4 tabular-nums">
             {{ formatCount(row.accept) }}
           </td>
-          <td class="text-reject py-1 pr-4">
+          <td class="text-reject py-1 pr-4 tabular-nums">
             {{ formatCount(row.reject) }}
           </td>
-          <td class="py-1 pr-4">
+          <td class="py-1 pr-4 tabular-nums">
             {{ formatPercent(row.exact_share) }}
           </td>
-          <td class="py-1 pr-4">
+          <td class="py-1 pr-4 tabular-nums">
             {{ formatDuration(row.p50_wait_ms) }}
           </td>
-          <td class="py-1">
+          <td class="py-1 tabular-nums">
             {{ formatDuration(row.p95_wait_ms) }}
           </td>
         </tr>

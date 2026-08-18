@@ -17,7 +17,7 @@ import type { GridComponentOption, LegendComponentOption, TooltipComponentOption
 import { ApiError } from '@/api/errors'
 import type { components } from '@/api/schema'
 import { formatterForMetric, useChartResize, VChart, type ChartMetricKind, type ResizableChart } from '@/lib/echarts'
-import { paletteColor, useChartTheme } from '@/lib/echartsTheme'
+import { chartLegend, paletteColor, useChartTheme } from '@/lib/echartsTheme'
 import ErrorState from '@/components/common/ErrorState.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -84,20 +84,24 @@ const option = computed<BreakdownOption>(() => {
   if (props.variant === 'pie') {
     const series: PieSeriesOption = {
       type: 'pie',
-      radius: '70%',
+      radius: ['45%', '70%'],
+      itemStyle: { borderColor: t.backgroundColor, borderWidth: 2 },
       data: d.rows.map((row, index) => ({
         name: labels[index],
         value: row.value,
         itemStyle: { color: paletteColor(t, index) },
       })),
-      label: { color: t.textStyle.color },
+      label: { color: t.mutedColor, fontSize: 11 },
+      emphasis: { scaleSize: 4 },
     }
-    return { ...base, legend: { top: 0, textStyle: { color: t.textStyle.color } }, series: [series] }
+    return { ...base, legend: chartLegend(t), series: [series] }
   }
 
   const series: BarSeriesOption = {
     type: 'bar',
-    data: d.rows.map((row, index) => ({ value: row.value, itemStyle: { color: paletteColor(t, index) } })),
+    barMaxWidth: 24,
+    data: d.rows.map((row, index) => ({ value: row.value, itemStyle: { color: paletteColor(t, index), borderRadius: [0, 3, 3, 0] } })),
+    emphasis: { focus: 'series' },
   }
 
   return {
@@ -105,16 +109,18 @@ const option = computed<BreakdownOption>(() => {
     grid: { left: 120, right: 24, top: 16, bottom: 32 },
     xAxis: {
       type: 'value',
-      axisLine: { lineStyle: { color: t.borderColor } },
-      axisLabel: { color: t.mutedColor, formatter: (value: number) => valueFormatter.value(value) },
-      splitLine: { lineStyle: { color: t.borderColor } },
+      axisLine: { show: false },
+      axisTick: { show: false },
+      axisLabel: { color: t.mutedColor, fontSize: 11, formatter: (value: number) => valueFormatter.value(value) },
+      splitLine: { lineStyle: { color: t.borderColor, type: 'dashed' } },
     },
     yAxis: {
       type: 'category',
       data: labels,
       inverse: true,
-      axisLine: { lineStyle: { color: t.borderColor } },
-      axisLabel: { color: t.mutedColor },
+      axisLine: { show: false },
+      axisTick: { show: false },
+      axisLabel: { color: t.mutedColor, fontSize: 11 },
     },
     series: [series],
   }

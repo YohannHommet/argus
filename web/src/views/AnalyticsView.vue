@@ -395,16 +395,19 @@ function tileReason(field: string): string | undefined {
 
       <!-- StatTile has no percent ChartMetricKind (SPEC has none for a rate) — reject_rate is
            formatted directly via `formatRejectRate` rather than misrepresented through 'count'. -->
-      <Card data-testid="kpi-reject-rate">
-        <CardHeader class="pb-2">
-          <CardTitle class="text-muted-foreground text-xs font-medium">
+      <Card
+        size="sm"
+        data-testid="kpi-reject-rate"
+      >
+        <CardHeader class="pb-0">
+          <CardTitle class="text-muted-foreground text-xs font-normal">
             Reject rate
           </CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent class="flex min-h-14 flex-col justify-center">
           <p
             v-if="summary && summary.reject_rate !== null"
-            class="text-2xl font-semibold tabular-nums"
+            class="text-reject text-xl leading-tight font-semibold tabular-nums"
           >
             {{ formatRejectRate(summary.reject_rate) }}
           </p>

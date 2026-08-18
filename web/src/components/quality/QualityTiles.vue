@@ -114,7 +114,7 @@ const oldestRawEventReason = computed(() => {
         />
         <template v-else>
           <p
-            class="mt-1 text-2xl font-semibold"
+            class="mt-1 text-2xl leading-tight font-semibold tabular-nums"
             :class="{ 'text-warn': unknownEventsWarn }"
             data-testid="quality-tile-unknown-events-value"
           >
@@ -148,7 +148,7 @@ const oldestRawEventReason = computed(() => {
       </CardHeader>
       <CardContent>
         <p
-          class="mt-1 text-2xl font-semibold"
+          class="mt-1 text-2xl leading-tight font-semibold tabular-nums"
           :class="{ 'text-warn': droppedWarn }"
           data-testid="quality-tile-dropped-total-value"
         >

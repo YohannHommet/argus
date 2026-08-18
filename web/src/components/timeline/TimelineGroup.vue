@@ -63,7 +63,7 @@ const totalTokens = computed(() => {
         v-if="turn"
         class="text-muted-foreground ml-auto flex items-center gap-3 text-xs"
       >
-        <span class="text-cost">{{ formatCost(turn.cost_usd) }}</span>
+        <span class="text-cost tabular-nums">{{ formatCost(turn.cost_usd) }}</span>
         <span>{{ formatTokens(totalTokens) }} tok</span>
       </span>
     </header>

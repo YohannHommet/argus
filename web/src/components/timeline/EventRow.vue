@@ -83,7 +83,7 @@ function openEvent(eventRef: string) {
         <span v-if="item.duration_ms !== null">{{ formatDuration(item.duration_ms) }}</span>
         <span
           v-if="item.cost !== null"
-          class="text-cost"
+          class="text-cost tabular-nums"
         >{{ formatCost(item.cost) }}</span>
         <span v-if="item.tokens">{{ formatTokens(item.tokens.input + item.tokens.output) }} tok</span>
         <span v-if="item.file_path">{{ item.file_path }}</span>

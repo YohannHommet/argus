@@ -79,13 +79,16 @@ const formattedDelta = computed(() => {
 </script>
 
 <template>
-  <Card data-testid="stat-tile">
-    <CardHeader>
+  <Card
+    size="sm"
+    data-testid="stat-tile"
+  >
+    <CardHeader class="pb-0">
       <CardTitle class="text-muted-foreground text-xs font-normal">
         {{ label }}
       </CardTitle>
     </CardHeader>
-    <CardContent>
+    <CardContent class="flex min-h-14 flex-col justify-center">
       <ErrorState
         v-if="error"
         :error="error"
@@ -94,11 +97,11 @@ const formattedDelta = computed(() => {
       />
       <Skeleton
         v-else-if="loading"
-        class="h-8 w-20"
+        class="h-7 w-20"
       />
       <template v-else>
         <p
-          class="text-2xl font-semibold"
+          class="text-xl leading-tight font-semibold tabular-nums"
           data-testid="stat-tile-value"
         >
           <NullValue
@@ -111,7 +114,7 @@ const formattedDelta = computed(() => {
         </p>
         <p
           v-if="showDelta"
-          class="text-muted-foreground mt-1 text-xs"
+          class="text-muted-foreground mt-0.5 text-xs tabular-nums"
           data-testid="stat-tile-delta"
         >
           {{ formattedDelta }} vs previous window

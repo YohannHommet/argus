@@ -90,8 +90,8 @@ const totalCostUsd = computed(() => rows.value.reduce((sum, [, value]) => sum + 
           <RawValue
             :value="data.dominant_query_source"
             kind="query_source"
-          /> — other query sources: <span class="text-cost font-medium">{{ formatCost(data.other_query_source_usd) }}</span> of
-          <span class="text-cost font-medium">{{ formatCost(totalCostUsd) }}</span>.
+          /> — other query sources: <span class="text-cost font-medium tabular-nums">{{ formatCost(data.other_query_source_usd) }}</span> of
+          <span class="text-cost font-medium tabular-nums">{{ formatCost(totalCostUsd) }}</span>.
         </p>
 
         <Table>
@@ -115,7 +115,7 @@ const totalCostUsd = computed(() => rows.value.reduce((sum, [, value]) => sum + 
                   kind="query_source"
                 />
               </TableCell>
-              <TableCell class="text-cost text-right">
+              <TableCell class="text-cost text-right tabular-nums">
                 {{ formatCost(value) }}
               </TableCell>
             </TableRow>

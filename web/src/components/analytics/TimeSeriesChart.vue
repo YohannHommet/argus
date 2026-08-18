@@ -20,7 +20,7 @@ import type {
 import { ApiError } from '@/api/errors'
 import type { components } from '@/api/schema'
 import { formatterForMetric, useChartResize, VChart, type ChartMetricKind, type ResizableChart } from '@/lib/echarts'
-import { paletteColor, useChartTheme } from '@/lib/echartsTheme'
+import { chartLegend, paletteColor, slimDataZoom, useChartTheme } from '@/lib/echartsTheme'
 import ErrorState from '@/components/common/ErrorState.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -81,8 +81,10 @@ const option = computed<TimeSeriesOption>(() => {
     name: seriesLabel(point.key),
     data: point.values,
     showSymbol: false,
+    smooth: 0.2,
+    lineStyle: { color: paletteColor(t, index), width: 2 },
     itemStyle: { color: paletteColor(t, index) },
-    lineStyle: { color: paletteColor(t, index) },
+    emphasis: { focus: 'series', lineStyle: { width: 3 } },
   }))
 
   if (d.other) {
@@ -91,32 +93,35 @@ const option = computed<TimeSeriesOption>(() => {
       name: 'Other',
       data: d.other.values,
       showSymbol: false,
+      lineStyle: { color: t.mutedColor, type: 'dashed', width: 2 },
       itemStyle: { color: t.mutedColor },
-      lineStyle: { color: t.mutedColor, type: 'dashed' },
+      emphasis: { focus: 'series', lineStyle: { width: 3 } },
     })
   }
 
   return {
     backgroundColor: t.backgroundColor,
     textStyle: t.textStyle,
-    grid: { left: 56, right: 16, top: 40, bottom: 56 },
+    grid: { left: 56, right: 16, top: 40, bottom: 40 },
     tooltip: {
       trigger: 'axis',
       valueFormatter: (value) => valueFormatter.value(typeof value === 'number' ? value : Number(value)),
     },
-    legend: { top: 0, textStyle: { color: t.textStyle.color } },
-    dataZoom: [{ type: 'inside' }, { type: 'slider', height: 16 }],
+    legend: chartLegend(t),
+    dataZoom: slimDataZoom(t),
     xAxis: {
       type: 'category',
       data: axisLabels(d),
       axisLine: { lineStyle: { color: t.borderColor } },
-      axisLabel: { color: t.mutedColor },
+      axisTick: { show: false },
+      axisLabel: { color: t.mutedColor, fontSize: 11 },
     },
     yAxis: {
       type: 'value',
-      axisLine: { lineStyle: { color: t.borderColor } },
-      axisLabel: { color: t.mutedColor, formatter: (value: number) => valueFormatter.value(value) },
-      splitLine: { lineStyle: { color: t.borderColor } },
+      axisLine: { show: false },
+      axisTick: { show: false },
+      axisLabel: { color: t.mutedColor, fontSize: 11, formatter: (value: number) => valueFormatter.value(value) },
+      splitLine: { lineStyle: { color: t.borderColor, type: 'dashed' } },
     },
     series,
   }

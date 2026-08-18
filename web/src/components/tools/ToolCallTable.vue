@@ -288,7 +288,10 @@ function onRowClick(row: ToolCall): void {
               </div>
             </TableCell>
 
-            <TableCell data-testid="cell-wait-ms">
+            <TableCell
+              data-testid="cell-wait-ms"
+              class="tabular-nums"
+            >
               <NullValue
                 v-if="row.wait_ms === null"
                 :reason="NOT_MEASURED"
@@ -296,7 +299,10 @@ function onRowClick(row: ToolCall): void {
               <span v-else>{{ formatDuration(row.wait_ms) }}</span>
             </TableCell>
 
-            <TableCell data-testid="cell-duration-ms">
+            <TableCell
+              data-testid="cell-duration-ms"
+              class="tabular-nums"
+            >
               <NullValue
                 v-if="row.duration_ms === null"
                 :reason="NOT_MEASURED"

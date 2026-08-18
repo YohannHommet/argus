@@ -18,17 +18,19 @@ describe('buildChartTheme', () => {
     const theme = buildChartTheme()
     expect(theme.backgroundColor).toBe('oklch(0.145 0 0)')
     expect(theme.textStyle.color).toBe('oklch(0.985 0 0)')
+    expect(theme.primary).toBe('oklch(0.65 0.19 258)')
     expect(theme.categoricalPalette).toEqual([
-      'oklch(0.488 0.243 264.376)',
-      'oklch(0.696 0.17 162.48)',
-      'oklch(0.769 0.188 70.08)',
-      'oklch(0.627 0.265 303.9)',
-      'oklch(0.645 0.246 16.439)',
+      'oklch(0.65 0.19 258)',
+      'oklch(0.75 0.14 200)',
+      'oklch(0.78 0.15 85)',
+      'oklch(0.68 0.18 305)',
+      'oklch(0.7 0.17 350)',
     ])
-    expect(theme.accept).toBe('oklch(0.696 0.17 162.48)')
+    expect(theme.accept).toBe('oklch(0.72 0.17 155)')
     expect(theme.reject).toBe('oklch(0.704 0.191 22.216)')
-    expect(theme.cost).toBe('oklch(0.645 0.246 16.439)')
-    expect(theme.warn).toBe('oklch(0.769 0.188 70.08)')
+    // cost is neutral foreground text, never a second (red) hue — gap #1.
+    expect(theme.cost).toBe('oklch(0.985 0 0)')
+    expect(theme.warn).toBe('oklch(0.78 0.15 85)')
     expect(theme.unknown).toBe('oklch(0.708 0 0)')
   })
 

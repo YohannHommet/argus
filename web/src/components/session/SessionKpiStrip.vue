@@ -56,60 +56,60 @@ const rejectRateReason = computed(() => {
     data-testid="session-kpi-strip"
     class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6"
   >
-    <div class="border-border rounded-lg border p-3">
+    <div class="border-border rounded-lg border p-2.5">
       <p class="text-muted-foreground text-xs">
         Cost
       </p>
       <p
-        class="text-cost mt-1 text-lg font-semibold"
+        class="text-cost mt-0.5 text-lg leading-tight font-semibold tabular-nums"
         data-testid="kpi-cost"
       >
         {{ formatCost(session?.cost.usd) }}
       </p>
     </div>
 
-    <div class="border-border rounded-lg border p-3">
+    <div class="border-border rounded-lg border p-2.5">
       <p class="text-muted-foreground text-xs">
         Tokens
       </p>
       <p
-        class="mt-1 text-lg font-semibold"
+        class="mt-0.5 text-lg leading-tight font-semibold tabular-nums"
         data-testid="kpi-tokens"
       >
         {{ formatTokens(totalTokens) }}
       </p>
     </div>
 
-    <div class="border-border rounded-lg border p-3">
+    <div class="border-border rounded-lg border p-2.5">
       <p class="text-muted-foreground text-xs">
         Turns
       </p>
       <p
-        class="mt-1 text-lg font-semibold"
+        class="mt-0.5 text-lg leading-tight font-semibold tabular-nums"
         data-testid="kpi-turns"
       >
         {{ formatCount(session?.turn_count) }}
       </p>
     </div>
 
-    <div class="border-border rounded-lg border p-3">
+    <div class="border-border rounded-lg border p-2.5">
       <p class="text-muted-foreground text-xs">
         Tool calls
       </p>
       <p
-        class="mt-1 text-lg font-semibold"
+        class="mt-0.5 text-lg leading-tight font-semibold tabular-nums"
         data-testid="kpi-tools"
       >
         {{ formatCount(session?.tool_call_count) }}
       </p>
     </div>
 
-    <div class="border-border rounded-lg border p-3">
+    <div class="border-border rounded-lg border p-2.5">
       <p class="text-muted-foreground text-xs">
         Reject rate
       </p>
       <p
-        class="text-reject mt-1 text-lg font-semibold"
+        class="text-reject mt-0.5 text-lg leading-tight font-semibold tabular-nums"
         data-testid="kpi-reject-rate"
       >
         <NullValue
@@ -122,12 +122,12 @@ const rejectRateReason = computed(() => {
       </p>
     </div>
 
-    <div class="border-border rounded-lg border p-3">
+    <div class="border-border rounded-lg border p-2.5">
       <p class="text-muted-foreground text-xs">
         Duration
       </p>
       <p
-        class="mt-1 text-lg font-semibold"
+        class="mt-0.5 text-lg leading-tight font-semibold tabular-nums"
         data-testid="kpi-duration"
       >
         {{ formatDuration(session?.duration_ms) }}

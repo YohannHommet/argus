@@ -184,7 +184,7 @@ function onChildSelect(agentId: string): void {
       </span>
 
       <span
-        class="text-cost ml-auto text-xs font-medium"
+        class="text-cost ml-auto text-xs font-medium tabular-nums"
         data-testid="subagent-node-cost"
       >
         <NullValue
