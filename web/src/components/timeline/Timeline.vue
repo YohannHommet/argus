@@ -49,7 +49,7 @@
  *   the guaranteed-reliable, directly-testable trigger — jsdom has no
  *   `IntersectionObserver`, so the button is what the test suite drives.
  */
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { X } from '@lucide/vue'
 
 import { type TimelineItem, collapseEvents } from '@/lib/collapseEvents'
@@ -252,6 +252,42 @@ watch(sentinelRef, (el, prev) => {
   if (el) setupObserver()
 })
 
+// --- scroll anchoring (PLAN.md P5-06 AC) -----------------------------------
+
+const scrollContainerRef = ref<HTMLElement | null>(null)
+
+/** Slack for "already at the bottom" (px) — real scroll positions rarely land on exactly 0. */
+const SCROLL_BOTTOM_THRESHOLD_PX = 4
+
+/**
+ * A live event append (or an out-of-order insert landing above the fold) must not yank whatever the
+ * user is currently reading. If they're already at the bottom, new rows extending the scrollable area
+ * below the fold is exactly what "following along live" means — nothing to compensate for. If they've
+ * scrolled up (reading history, or `order: 'desc'`'s newest-first insert landing near the top), the
+ * DOM growing *above or within* the visible area would otherwise shift already-read content out from
+ * under the viewport at the same pixel `scrollTop`, which reads as the page jumping. Compensating
+ * `scrollTop` by exactly however much `scrollHeight` grew keeps the same content under the same
+ * pixels — the standard reverse-infinite-scroll technique (chat logs, log tails).
+ *
+ * Captures `oldScrollHeight` synchronously, before `nextTick` — `watch`'s default `flush: 'pre'`
+ * timing runs this callback *before* Vue patches the DOM, so `el.scrollHeight` here is still the
+ * pre-insert layout; awaiting `nextTick()` is what advances to the post-patch one.
+ */
+watch(
+  () => items.value.length,
+  async (newLength, oldLength) => {
+    const el = scrollContainerRef.value
+    if (!el || newLength <= oldLength) return
+    const wasAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= SCROLL_BOTTOM_THRESHOLD_PX
+    if (wasAtBottom) return
+
+    const oldScrollHeight = el.scrollHeight
+    await nextTick()
+    const delta = el.scrollHeight - oldScrollHeight
+    if (delta > 0) el.scrollTop += delta
+  },
+)
+
 /**
  * `agentId` is the one timeline filter this component does not itself own:
  * P4-05's subagent tree sets it (a node click routes to
@@ -380,6 +416,8 @@ watch(
 
       <div
         v-else
+        ref="scrollContainerRef"
+        data-testid="timeline-scroll-container"
         class="min-w-0 flex-1 overflow-auto"
       >
         <TimelineGroup

@@ -3,10 +3,13 @@ import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import LiveDot from '@/components/session/LiveDot.vue'
 import SessionRow from '@/components/session/SessionRow.vue'
 import SessionTable from '@/components/session/SessionTable.vue'
 import StatusDot from '@/components/session/StatusDot.vue'
 import SessionListView from '@/views/SessionListView.vue'
+import { resetEventSourceFactory, setEventSourceFactory } from '@/lib/sse'
+import type { EventSourceLike } from '@/lib/sse'
 import { getFacets200Default, getMeta200Default, listSessions200Default } from '@/test/fixtures'
 import {
   criticalRejectRateSessionSummary,
@@ -231,6 +234,27 @@ describe('StatusDot', () => {
   })
 })
 
+// PLAN.md P5-06: SessionListView now subscribes to the firehose while mounted, which would otherwise
+// construct a real `EventSource` — unavailable in jsdom (see stores/__tests__/live.spec.ts's own doc
+// comment on this). A trivial stub is enough for every describe block below that mounts it: none of
+// them drive a live frame through it (that wiring is asserted in stores/__tests__/sessions.spec.ts and
+// views/SessionDetailView.test.ts).
+function stubEventSource(): EventSourceLike {
+  return { readyState: 0, addEventListener: () => {}, close: () => {}, onopen: null, onerror: null }
+}
+
+describe('LiveDot', () => {
+  it.each([
+    ['active', true],
+    ['ended', false],
+    ['abandoned', false],
+    ['unknown', false],
+  ])('renders for status %s: %s', (status, shouldRender) => {
+    const wrapper = mount(LiveDot, { props: { status } })
+    expect(wrapper.find('[data-testid="live-dot"]').exists()).toBe(shouldRender)
+  })
+})
+
 describe('SessionListView — error + retry integration (Phase-4 exit criterion 1)', () => {
   function okResponse<T>(data: T) {
     return Promise.resolve({ data, error: undefined, response: new Response(null, { status: 200, headers: { 'Content-Length': '0' } }) })
@@ -247,9 +271,11 @@ describe('SessionListView — error + retry integration (Phase-4 exit criterion 
 
   beforeEach(() => {
     setActivePinia(createPinia())
+    setEventSourceFactory(stubEventSource)
   })
 
   afterEach(() => {
+    resetEventSourceFactory()
     vi.restoreAllMocks()
   })
 
@@ -312,10 +338,14 @@ describe('SessionFilterBar — time range control (round-4 UI gap)', () => {
 
   beforeEach(() => {
     setActivePinia(createPinia())
+    // This describe block mounts the full SessionListView (for the real popover/teleport markup —
+    // see mountAt's own comment below), which now subscribes to the firehose on mount.
+    setEventSourceFactory(stubEventSource)
     sessionListGetSessions = vi.fn(() => okResponse({ data: listSessions200Default.data, page: { next_cursor: null, has_more: false } }))
   })
 
   afterEach(() => {
+    resetEventSourceFactory()
     vi.restoreAllMocks()
     mountedWrapper?.unmount()
     mountedWrapper = null

@@ -248,6 +248,27 @@ describe('useSessionsStore', () => {
     expect(store.sessions).toEqual(before)
   })
 
+  // PLAN.md P5-06 / SPEC §6.4: the store itself reacts to `liveStore.sessions` (SessionListView.vue
+  // owns the actual `subscribe()` call — see sessions.ts's own doc comment on this watcher), so a
+  // frame can be asserted here by writing straight into `liveStore.sessions`, with no EventSource or
+  // fake factory involved at all.
+  it('applies a live session frame onto an already-loaded row, and never inserts a row outside the loaded page', async () => {
+    const { store } = await setupStore()
+    const { useLiveStore } = await import('../live')
+    const live = useLiveStore()
+    const original = listSessions200Default.data[0]!
+
+    live.sessions.set(original.id, { ...original, event_count: original.event_count + 5 })
+    await flushPromises()
+    expect(store.sessions.find((s) => s.id === original.id)?.event_count).toBe(original.event_count + 5)
+
+    const before = store.sessions.length
+    live.sessions.set('session-not-in-the-loaded-page', { ...original, id: 'session-not-in-the-loaded-page' })
+    await flushPromises()
+    expect(store.sessions).toHaveLength(before)
+    expect(store.sessions.some((s) => s.id === 'session-not-in-the-loaded-page')).toBe(false)
+  })
+
   it('refresh() re-fetches and retry from an error clears it', async () => {
     getSessions = vi.fn(() => apiErrorResponse(500))
     const { store } = await setupStore()

@@ -1,7 +1,10 @@
+import { flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@/api/errors'
+import { resetEventSourceFactory, setEventSourceFactory } from '@/lib/sse'
+import type { EventSourceLike } from '@/lib/sse'
 import {
   getEvent200Default,
   getSession200Default,
@@ -10,6 +13,7 @@ import {
   listSessionToolCalls200Default,
   listSessionTurns200Default,
 } from '@/test/fixtures'
+import { makeTimelineEvent } from '@/test/fixtures.extra'
 
 // Same style as stores/__tests__/meta.spec.ts: mock `useApiClient()` directly
 // with a fake `GET` that dispatches on path, rather than exercising real Vue
@@ -52,6 +56,41 @@ function apiErrorResponse(status: number) {
 
 function sessionWithId(id: string) {
   return { ...getSession200Default, id }
+}
+
+/** Structural fake for `EventSourceLike`, same pattern as `stores/__tests__/live.spec.ts` — never touches the network, lets a test drive frames by hand. */
+class FakeEventSource implements EventSourceLike {
+  readyState = 0
+  onopen: ((ev: Event) => void) | null = null
+  onerror: ((ev: Event) => void) | null = null
+  closed = false
+  private readonly listeners = new Map<string, ((ev: MessageEvent) => void)[]>()
+
+  constructor(public readonly url: string) {}
+
+  addEventListener(type: string, listener: (ev: MessageEvent) => void): void {
+    const list = this.listeners.get(type) ?? []
+    list.push(listener)
+    this.listeners.set(type, list)
+  }
+
+  close(): void {
+    this.closed = true
+    this.readyState = 2
+  }
+
+  emit(type: string, data: unknown): void {
+    const ev = new MessageEvent(type, { data: JSON.stringify(data) })
+    for (const listener of this.listeners.get(type) ?? []) listener(ev)
+  }
+}
+
+let liveInstances: FakeEventSource[] = []
+
+function fakeEventSourceFactory(url: string): EventSourceLike {
+  const instance = new FakeEventSource(url)
+  liveInstances.push(instance)
+  return instance
 }
 
 describe('useSessionDetailStore', () => {
@@ -165,6 +204,26 @@ describe('useSessionDetailStore', () => {
     expect(getEvent).toHaveBeenCalledTimes(1)
   })
 
+  // P5-05 integration gap: on `/live` there is no current session (a firehose
+  // has none), and loadEvent used to `return null` in that case — so clicking a
+  // live-feed row opened the detail sheet with the correct event_ref and
+  // permanently blank content. GET /events/{ref} is addressed by event_ref
+  // alone (SPEC §4.1: "there is no lookup by id"), so the session was never
+  // required; only the choice of cache slot was.
+  it('loadEvent works with no session open at all (the /live firehose) and caches by event_ref', async () => {
+    const { useSessionDetailStore } = await import('../sessionDetail')
+    const store = useSessionDetailStore()
+
+    expect(store.currentId).toBeNull()
+
+    const first = await store.loadEvent(getEvent200Default.event_ref)
+    const second = await store.loadEvent(getEvent200Default.event_ref)
+
+    expect(first).toEqual(getEvent200Default)
+    expect(second).toEqual(getEvent200Default)
+    expect(getEvent).toHaveBeenCalledTimes(1)
+  })
+
   it('LRU of 3: back-navigation within the cache does not refetch the session', async () => {
     const { useSessionDetailStore } = await import('../sessionDetail')
     const store = useSessionDetailStore()
@@ -204,5 +263,168 @@ describe('useSessionDetailStore', () => {
 
     await store.loadSession('b')
     expect(getSession).toHaveBeenCalledTimes(5) // evicted -> refetched
+  })
+})
+
+describe('useSessionDetailStore — live (PLAN.md P5-06)', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    liveInstances = []
+    setEventSourceFactory(fakeEventSourceFactory)
+    getSession = vi.fn((id: string) => okResponse(sessionWithId(id)))
+    getTimeline = vi.fn(() => okResponse({ data: [], page: { next_cursor: null, has_more: false } }))
+    getTurns = vi.fn(() => okResponse(listSessionTurns200Default))
+    getToolCalls = vi.fn(() => okResponse(listSessionToolCalls200Default))
+    getSubagents = vi.fn(() => okResponse(getSessionSubagents200Default))
+    getEvent = vi.fn(() => okResponse(getEvent200Default))
+  })
+
+  afterEach(() => {
+    resetEventSourceFactory()
+    vi.restoreAllMocks()
+  })
+
+  it('a live event for the open session appends exactly once, and a later REST page redelivering the same event_ref does not duplicate it (live-then-REST)', async () => {
+    getTimeline = vi
+      .fn()
+      .mockReturnValueOnce(okResponse({ data: [], page: { next_cursor: 'c1', has_more: true } }))
+    const { useSessionDetailStore } = await import('../sessionDetail')
+    const store = useSessionDetailStore()
+    await store.loadSession('s1')
+    await store.loadTimeline()
+    store.startLive('s1')
+
+    const event = makeTimelineEvent({ session_id: 's1', event_ref: 'dup-ref', ts: '2026-08-14T01:00:00.000Z' })
+    liveInstances[0]!.emit('event', event)
+    // The events watcher is a default (pre-flush) Vue watcher, not `flush: 'sync'` — its callback is
+    // scheduled, not run synchronously inside `emit()`, so a real reactive tick has to be awaited.
+    await flushPromises()
+    expect(store.timelineItems.map((e) => e.event_ref)).toEqual(['dup-ref'])
+
+    // A later "load more" page re-delivers the very ref the live frame already appended.
+    getTimeline.mockReturnValueOnce(okResponse({ data: [event], page: { next_cursor: null, has_more: false } }))
+    await store.loadMoreTimeline()
+
+    expect(store.timelineItems.map((e) => e.event_ref)).toEqual(['dup-ref'])
+  })
+
+  it('a REST page delivers an event_ref, and the same event later arriving live does not duplicate it (REST-then-live)', async () => {
+    const event = makeTimelineEvent({ session_id: 's1', event_ref: 'dup-ref', ts: '2026-08-14T01:00:00.000Z' })
+    getTimeline = vi
+      .fn()
+      .mockReturnValueOnce(okResponse({ data: [], page: { next_cursor: 'c1', has_more: true } }))
+      .mockReturnValueOnce(okResponse({ data: [event], page: { next_cursor: null, has_more: false } }))
+    const { useSessionDetailStore } = await import('../sessionDetail')
+    const store = useSessionDetailStore()
+    await store.loadSession('s1')
+    await store.loadTimeline()
+    await store.loadMoreTimeline()
+    expect(store.timelineItems.map((e) => e.event_ref)).toEqual(['dup-ref'])
+
+    store.startLive('s1')
+    liveInstances[0]!.emit('event', event)
+    await flushPromises()
+
+    expect(store.timelineItems.map((e) => e.event_ref)).toEqual(['dup-ref'])
+  })
+
+  it('ignores a live event for a different session', async () => {
+    const { useSessionDetailStore } = await import('../sessionDetail')
+    const store = useSessionDetailStore()
+    await store.loadSession('s1')
+    await store.loadTimeline()
+    store.startLive('s1')
+
+    liveInstances[0]!.emit('event', makeTimelineEvent({ session_id: 'some-other-session', event_ref: 'ref-x' }))
+    await flushPromises()
+
+    expect(store.timelineItems).toHaveLength(0)
+  })
+
+  it('a live session frame updates the KPI counters (merged into the SessionDetail, not replacing it)', async () => {
+    const { useSessionDetailStore } = await import('../sessionDetail')
+    const store = useSessionDetailStore()
+    await store.loadSession('s1')
+    store.startLive('s1')
+
+    liveInstances[0]!.emit('session', { ...sessionWithId('s1'), event_count: 999, tool_call_count: 42 })
+    await flushPromises()
+
+    expect(store.session?.event_count).toBe(999)
+    expect(store.session?.tool_call_count).toBe(42)
+    // Detail-only fields (absent from the `SessionSummary`-shaped frame) survive the merge — this is
+    // exactly what lets SessionKpiStrip.vue need no change of its own.
+    expect(store.session?.raw_events_expired).toBe(getSession200Default.raw_events_expired)
+  })
+
+  it('toggling live off stops appending, but loadMoreTimeline still works and already-loaded rows stay', async () => {
+    getTimeline = vi
+      .fn()
+      .mockReturnValueOnce(okResponse({ data: [makeTimelineEvent({ session_id: 's1', event_ref: 'r1' })], page: { next_cursor: 'c1', has_more: true } }))
+      .mockReturnValueOnce(okResponse({ data: [makeTimelineEvent({ session_id: 's1', event_ref: 'r2' })], page: { next_cursor: null, has_more: false } }))
+    const { useSessionDetailStore } = await import('../sessionDetail')
+    const store = useSessionDetailStore()
+    await store.loadSession('s1')
+    await store.loadTimeline()
+    store.startLive('s1')
+    store.setLiveEnabled(false)
+
+    liveInstances[0]!.emit('event', makeTimelineEvent({ session_id: 's1', event_ref: 'live-ref' }))
+    await flushPromises()
+    expect(store.timelineItems.map((e) => e.event_ref)).toEqual(['r1'])
+
+    await store.loadMoreTimeline()
+    expect(store.timelineItems.map((e) => e.event_ref)).toEqual(['r1', 'r2'])
+  })
+
+  it('an out-of-order live event is inserted at the correct position for the active order, not merely appended', async () => {
+    const { useSessionDetailStore } = await import('../sessionDetail')
+    const store = useSessionDetailStore()
+    await store.loadSession('s1')
+    await store.loadTimeline()
+    store.startLive('s1')
+
+    const early = makeTimelineEvent({ session_id: 's1', event_ref: 'early', ts: '2026-08-14T01:00:00.000Z', seq: 100 })
+    const late = makeTimelineEvent({ session_id: 's1', event_ref: 'late', ts: '2026-08-14T01:00:10.000Z', seq: 200 })
+
+    // Arrives out of chronological order: "late" first, "early" second.
+    liveInstances[0]!.emit('event', late)
+    await flushPromises()
+    liveInstances[0]!.emit('event', early)
+    await flushPromises()
+
+    // `order` defaults to 'asc' — a naive push would leave this as ['late', 'early'].
+    expect(store.timelineItems.map((e) => e.event_ref)).toEqual(['early', 'late'])
+  })
+
+  it('a live event whose kind is excluded by the active kinds filter does not appear', async () => {
+    const { useSessionDetailStore } = await import('../sessionDetail')
+    const store = useSessionDetailStore()
+    store.setTimelineFilters({ kinds: ['tool.result'] })
+    await store.loadSession('s1')
+    await store.loadTimeline()
+    store.startLive('s1')
+
+    liveInstances[0]!.emit('event', makeTimelineEvent({ session_id: 's1', kind: 'llm.request', tool_use_id: null, event_ref: 'filtered-out' }))
+    await flushPromises()
+    expect(store.timelineItems).toHaveLength(0)
+
+    liveInstances[0]!.emit('event', makeTimelineEvent({ session_id: 's1', kind: 'tool.result', event_ref: 'kept' }))
+    await flushPromises()
+    expect(store.timelineItems.map((e) => e.event_ref)).toEqual(['kept'])
+  })
+
+  it('a reset frame triggers exactly one loadTimeline({reset:true}) refetch', async () => {
+    const { useSessionDetailStore } = await import('../sessionDetail')
+    const store = useSessionDetailStore()
+    await store.loadSession('s1')
+    await store.loadTimeline()
+    store.startLive('s1')
+    getTimeline.mockClear()
+
+    liveInstances[0]!.emit('reset', { reason: 'replay_window_exceeded', from: '2026-08-18T00:00:00.000Z' })
+    await flushPromises()
+
+    expect(getTimeline).toHaveBeenCalledTimes(1)
   })
 })
