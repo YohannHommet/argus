@@ -169,32 +169,40 @@ function hasActiveFilters(): boolean {
       </Select>
     </div>
 
-    <div class="flex flex-col gap-1">
-      <label
-        for="session-from"
-        class="text-muted-foreground text-xs"
-      >From</label>
-      <Input
-        id="session-from"
-        type="date"
-        :model-value="sessions.filters.from ?? ''"
-        data-testid="filter-from"
-        @change="onFromChange"
-      />
-    </div>
+    <!--
+      Grouped so "From" and "To" wrap as one atomic pair when the toolbar
+      runs out of width — two independent top-level flex children would let
+      the row wrap *between* them, stranding "To" alone on its own line with
+      a large dead gap where the rest of the row used to be.
+    -->
+    <div class="flex gap-2">
+      <div class="flex flex-col gap-1">
+        <label
+          for="session-from"
+          class="text-muted-foreground text-xs"
+        >From</label>
+        <Input
+          id="session-from"
+          type="date"
+          :model-value="sessions.filters.from ?? ''"
+          data-testid="filter-from"
+          @change="onFromChange"
+        />
+      </div>
 
-    <div class="flex flex-col gap-1">
-      <label
-        for="session-to"
-        class="text-muted-foreground text-xs"
-      >To</label>
-      <Input
-        id="session-to"
-        type="date"
-        :model-value="sessions.filters.to ?? ''"
-        data-testid="filter-to"
-        @change="onToChange"
-      />
+      <div class="flex flex-col gap-1">
+        <label
+          for="session-to"
+          class="text-muted-foreground text-xs"
+        >To</label>
+        <Input
+          id="session-to"
+          type="date"
+          :model-value="sessions.filters.to ?? ''"
+          data-testid="filter-to"
+          @change="onToChange"
+        />
+      </div>
     </div>
 
     <Button
