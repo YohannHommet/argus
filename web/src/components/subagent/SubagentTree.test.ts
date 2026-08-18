@@ -9,6 +9,7 @@ import {
   getSessionSubagentsDepth2Live,
   getSessionSubagentsFiftyNodes,
 } from '@/test/fixtures.extra'
+import { listSessionToolCalls200Default } from '@/test/fixtures'
 
 async function mountTree(props: Record<string, unknown>): Promise<{ router: Router; wrapper: ReturnType<typeof mount> }> {
   const router = createRouter({
@@ -115,5 +116,24 @@ describe('SubagentTree', () => {
 
     expect(wrapper.get('[data-testid="subagent-tree-duration-scale"]').text()).toContain('3s')
     expect(wrapper.find('[data-testid="subagent-node-duration-track"]').exists()).toBe(true)
+  })
+
+  // Round-6 critic gap ("tool-breakdown"): SubagentTree, not SubagentNode,
+  // owns turning the session's flat ToolCall list into a per-agent_id
+  // breakdown map (grouping logic belongs at the tree level so every node
+  // computes it once, not once per node in the recursion).
+  it('groups toolCalls by agent_id into a per-node tool-name breakdown, ignoring calls with a null agent_id', async () => {
+    const toolCalls = [
+      { ...listSessionToolCalls200Default.data[0]!, tool_name: 'Read', agent_id: 'agent-107d2cba-explore-1' },
+      { ...listSessionToolCalls200Default.data[0]!, tool_name: 'Read', agent_id: 'agent-107d2cba-explore-1' },
+      { ...listSessionToolCalls200Default.data[0]!, tool_name: 'Bash', agent_id: 'agent-107d2cba-explore-1' },
+      { ...listSessionToolCalls200Default.data[0]!, tool_name: 'Edit', agent_id: null },
+    ]
+    const { wrapper } = await mountTree({ nodes: getSessionSubagentsDepth2Live.data, toolCalls })
+
+    const breakdown = wrapper.get('[data-agent-id="agent-107d2cba-explore-1"] [data-testid="subagent-node-tool-breakdown"]')
+    expect(breakdown.attributes('title')).toBe('Read×2, Bash×1')
+    // The null-agent_id Edit call is unattributable and must not leak onto any node.
+    expect(wrapper.find('[data-agent-id="agent-e090ede7-explore-2"] [data-testid="subagent-node-tool-breakdown"]').exists()).toBe(false)
   })
 })

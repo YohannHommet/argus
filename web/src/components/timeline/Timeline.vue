@@ -50,6 +50,7 @@
  *   `IntersectionObserver`, so the button is what the test suite drives.
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { X } from '@lucide/vue'
 
 import { type TimelineItem, collapseEvents } from '@/lib/collapseEvents'
 import { eventKindMeta } from '@/lib/eventKinds'
@@ -68,6 +69,16 @@ import EventInspector from './EventInspector.vue'
 import TimelineGroup from './TimelineGroup.vue'
 
 const store = useSessionDetailStore()
+
+/**
+ * Round-6 critic gap: an agent filter applied from the Subagents tree
+ * (`?tab=timeline&agent_id=…`) had no visible chip and no way to clear it
+ * short of editing the URL. Per the module doc above, `agentId` is the one
+ * timeline filter this component does not own the source of — so clearing
+ * it is an emit, not a direct `store.setTimelineFilters` call, exactly like
+ * routing that filter in is SessionDetailView's job via the route watcher.
+ */
+const emit = defineEmits<{ 'clear-agent-filter': [] }>()
 
 const collapseEnabled = ref(true)
 
@@ -286,6 +297,28 @@ watch(
         @click="toggleKind(kind)"
       >
         {{ eventKindMeta(kind).label }}
+      </Badge>
+
+      <Badge
+        v-if="store.agentId"
+        variant="outline"
+        class="gap-1 pr-1"
+        data-testid="timeline-agent-filter-chip"
+      >
+        Agent:
+        <span
+          class="max-w-32 truncate font-mono"
+          :title="store.agentId"
+        >{{ store.agentId }}</span>
+        <button
+          type="button"
+          class="hover:bg-muted shrink-0 rounded-full p-0.5"
+          data-testid="timeline-agent-filter-clear"
+          aria-label="Clear agent filter"
+          @click="emit('clear-agent-filter')"
+        >
+          <X class="size-3" />
+        </button>
       </Badge>
 
       <!--

@@ -4,8 +4,10 @@ import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import SessionDetailView from './SessionDetailView.vue'
+import Timeline from '@/components/timeline/Timeline.vue'
 import { getSession200Default } from '@/test/fixtures'
 import { partialSessionDetail, rawEventsExpiredSessionDetail } from '@/test/fixtures.extra'
+import { useSessionDetailStore } from '@/stores/sessionDetail'
 
 let getSession: ReturnType<typeof vi.fn>
 let getSubagents: ReturnType<typeof vi.fn>
@@ -138,5 +140,23 @@ describe('SessionDetailView', () => {
     const { wrapper } = await mountAt('/sessions/does-not-exist')
 
     expect(wrapper.find('[data-testid="error-state"]').exists()).toBe(true)
+  })
+
+  // Round-6 critic gap: clicking a Subagents node routes to
+  // `?tab=timeline&agent_id=…` (SubagentTree.vue), but there was no way to
+  // clear that filter short of hand-editing the URL. This view owns the
+  // route, so clearing it is this view's job — Timeline.vue only emits.
+  it('clears ?agent_id from the URL when Timeline emits clear-agent-filter, which the existing route watcher turns into a cleared store filter', async () => {
+    const { router, wrapper } = await mountAt('/sessions/3f7a3b1e-0000-0000-0000-000000000001?tab=timeline&agent_id=agent-107d2cba')
+    const store = useSessionDetailStore()
+
+    expect(router.currentRoute.value.query.agent_id).toBe('agent-107d2cba')
+    expect(store.agentId).toBe('agent-107d2cba')
+
+    await wrapper.findComponent(Timeline).vm.$emit('clear-agent-filter')
+    await flushPromises()
+
+    expect(router.currentRoute.value.query.agent_id).toBeUndefined()
+    expect(store.agentId).toBeNull()
   })
 })

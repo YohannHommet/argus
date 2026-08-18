@@ -261,4 +261,31 @@ describe('Timeline', () => {
     expect(getTimeline.mock.calls.length).toBeGreaterThan(callsWhileFiltered)
     expect(store.agentId).toBeNull()
   })
+
+  // Round-6 critic gap: an agent filter applied via a Subagents node click
+  // had no visible chip and no way to clear it. Per the module doc,
+  // Timeline does not own this filter's source of truth — SessionDetailView
+  // does (it owns the route) — so clearing is an emit, not a direct store
+  // write; see SessionDetailView.vue's `clearAgentFilter`.
+  it('shows no agent-filter chip when no agent filter is set', async () => {
+    const { wrapper } = await mountTimeline()
+
+    expect(wrapper.find('[data-testid="timeline-agent-filter-chip"]').exists()).toBe(false)
+  })
+
+  it('shows an agent-filter chip once store.agentId is set, and emits clear-agent-filter on its (x) click without touching the store itself', async () => {
+    const { wrapper, store } = await mountTimeline()
+    store.setTimelineFilters({ agentId: 'agent-107d2cba' })
+    await flushPromises()
+
+    const chip = wrapper.get('[data-testid="timeline-agent-filter-chip"]')
+    expect(chip.text()).toContain('agent-107d2cba')
+
+    await wrapper.get('[data-testid="timeline-agent-filter-clear"]').trigger('click')
+
+    expect(wrapper.emitted('clear-agent-filter')).toHaveLength(1)
+    // Timeline itself never clears the store — that would fight
+    // SessionDetailView's route-driven watcher (see the module doc).
+    expect(store.agentId).toBe('agent-107d2cba')
+  })
 })

@@ -91,7 +91,17 @@ watch(
 watch(
   activeTab,
   (tab) => {
-    if (tab === 'subagents') void store.loadSubagents()
+    // Round-6 critic gap ("tool-breakdown" per subagent node): the tree's
+    // tool_call_count is a total with no per-tool detail, but ToolCall rows
+    // already carry a real (hook-sourced) agent_id — SubagentTree can derive
+    // a genuine per-node tool-name breakdown from the same toolCalls the
+    // Tools tab uses, provided they're loaded. `loadToolCalls` is
+    // load-once/cached (see the store), so activating the Tools tab later
+    // does not refetch.
+    if (tab === 'subagents') {
+      void store.loadSubagents()
+      void store.loadToolCalls()
+    }
     if (tab === 'tools') void store.loadToolCalls()
   },
   { immediate: true },
@@ -99,6 +109,20 @@ watch(
 
 function retry(): void {
   if (props.id) void store.loadSession(props.id)
+}
+
+/**
+ * Round-6 critic gap: the Timeline tab's agent filter (set by a Subagents
+ * node click, see SubagentTree.vue) had no visible chip and no way to clear
+ * it. `Timeline.vue` deliberately does not own this filter (its own doc
+ * comment: routing is this view's job), so it only emits; clearing the URL
+ * query here is what the existing `route.query.agent_id` watcher above
+ * turns back into `store.setTimelineFilters({ agentId: null })`.
+ */
+function clearAgentFilter(): void {
+  const query = { ...route.query }
+  delete query.agent_id
+  void router.replace({ name: route.name ?? undefined, params: route.params, query })
 }
 
 // The screenshot harness blocks on this. "Ready" = the initial session
@@ -216,7 +240,10 @@ const hasSessionYet = computed(() => store.session !== null)
             aggregates above were computed before expiry and remain accurate.
           </p>
         </div>
-        <Timeline v-else />
+        <Timeline
+          v-else
+          @clear-agent-filter="clearAgentFilter"
+        />
       </TabsContent>
 
       <TabsContent value="subagents">
@@ -238,6 +265,7 @@ const hasSessionYet = computed(() => store.session !== null)
               :loading="store.subagentsLoading"
               :error="store.subagentsError"
               :cost-note="store.costAttribution?.note ?? null"
+              :tool-calls="store.toolCalls"
               @retry="store.loadSubagents({ force: true })"
             />
           </div>

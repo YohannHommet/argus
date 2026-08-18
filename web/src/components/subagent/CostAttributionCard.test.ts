@@ -64,4 +64,37 @@ describe('CostAttributionCard', () => {
   // Deliberately absent: no test here asserts a per-node/per-agent cost
   // number — this card only ever renders the by_query_source split, which
   // is a whole-session aggregate, never a per-node figure (SPEC §1.9).
+
+  // Round-6 critic gap: this card was surrendering roughly two-thirds of
+  // the Subagents tab to an always-expanded table plus three disclaimer
+  // sentences. It is now a collapsed-by-default secondary section.
+  it('renders the table collapsed (not visible) by default, with an aria-expanded=false toggle', () => {
+    const wrapper = mount(CostAttributionCard, { props: { data: getSessionSubagentsDepth2Live.cost_attribution } })
+
+    const toggle = wrapper.get('[data-testid="cost-attribution-toggle"]')
+    expect(toggle.attributes('aria-expanded')).toBe('false')
+    const tableWrap = wrapper.get('[data-testid="cost-attribution-table-wrap"]')
+    expect(tableWrap.isVisible()).toBe(false)
+    // Rows stay in the DOM while collapsed (v-show, not v-if) — this is a
+    // display-only collapse, not conditional rendering, so the data is
+    // still directly queryable/testable without simulating a click.
+    expect(wrapper.findAll('[data-testid="cost-attribution-row"]').length).toBeGreaterThan(0)
+  })
+
+  it('expands the table on toggle click', async () => {
+    const wrapper = mount(CostAttributionCard, { props: { data: getSessionSubagentsDepth2Live.cost_attribution } })
+
+    await wrapper.get('[data-testid="cost-attribution-toggle"]').trigger('click')
+
+    expect(wrapper.get('[data-testid="cost-attribution-toggle"]').attributes('aria-expanded')).toBe('true')
+    expect(wrapper.get('[data-testid="cost-attribution-table-wrap"]').isVisible()).toBe(true)
+  })
+
+  it('collapses the per-node-unavailable and description disclaimers into tooltip triggers, not standalone sentences', () => {
+    const wrapper = mount(CostAttributionCard, { props: { data: getSessionSubagentsDepth2Live.cost_attribution } })
+
+    expect(wrapper.text()).not.toContain('Per-node cost is not available for this session')
+    const hint = wrapper.get('[data-testid="cost-attribution-per-node-hint"]')
+    expect(hint.attributes('title')).toContain('Per-node cost is not available')
+  })
 })

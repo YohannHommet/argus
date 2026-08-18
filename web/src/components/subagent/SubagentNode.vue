@@ -43,6 +43,12 @@ import { NO_HOOK_COVERAGE, NO_PER_AGENT_COST } from '@/lib/nullReasons'
 
 export type SubagentNodeData = components['schemas']['SubagentNode']
 
+/** One `{ tool_name, count }` bucket of a node's real (ToolCall.agent_id-derived) tool-name breakdown — see `SubagentTree`'s `toolBreakdownByAgent` doc. */
+export interface ToolBreakdownEntry {
+  name: string
+  count: number
+}
+
 interface Props {
   node: SubagentNodeData
   /** This component's own recursion depth (0 for a tree root). Distinct from `node.depth` — see file doc comment. */
@@ -59,6 +65,10 @@ interface Props {
   showDurationBar?: boolean
   /** Tooltip text for the (always-null, SPEC §1.9) cost column. Prefer `cost_attribution.note` when the caller has one. */
   costNote?: string | null
+  /** `agent_id -> tool-name breakdown`, computed once for the whole tree by `SubagentTree`. Absent/empty for an agent_id with no attributable tool calls loaded — renders as a plain count, same as before this existed. */
+  toolBreakdownByAgent?: Record<string, ToolBreakdownEntry[]>
+  /** `"i/n"` when this node's parent has 2+ children sharing its `agent_type`, `""` otherwise — set by the parent's own `childOrdinalLabel` (see below). Empty for a tree root, which has no parent to disambiguate it from. */
+  siblingOrdinal?: string
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -66,6 +76,8 @@ const props = withDefaults(defineProps<Props>(), {
   maxDurationMs: null,
   showDurationBar: true,
   costNote: null,
+  toolBreakdownByAgent: () => ({}),
+  siblingOrdinal: '',
 })
 
 const emit = defineEmits<{
@@ -91,6 +103,46 @@ const durationBarPercent = computed(() => {
 })
 
 const effectiveCostNote = computed(() => props.costNote ?? NO_PER_AGENT_COST)
+
+/** This node's own tool-name breakdown, if any tool call was attributed to its `agent_id`. */
+const toolBreakdown = computed<ToolBreakdownEntry[]>(() => props.toolBreakdownByAgent[props.node.agent_id] ?? [])
+
+/** Top entries shown inline; the rest are summarised as "+N more" and folded into the hover title alongside them. */
+const TOOL_BREAKDOWN_INLINE_MAX = 2
+
+const toolBreakdownInlineText = computed(() => {
+  const entries = toolBreakdown.value
+  if (entries.length === 0) return null
+  const shown = entries.slice(0, TOOL_BREAKDOWN_INLINE_MAX).map((e) => `${e.name}×${e.count}`)
+  const remaining = entries.length - TOOL_BREAKDOWN_INLINE_MAX
+  return remaining > 0 ? `${shown.join(', ')}, +${remaining} more` : shown.join(', ')
+})
+
+const toolBreakdownFullText = computed(() => toolBreakdown.value.map((e) => `${e.name}×${e.count}`).join(', '))
+
+/**
+ * Round-6 critic gap ("task label"): SubagentNode schema has no task/name
+ * field to promote (SPEC §1.9 has none) — inventing one would violate the
+ * project's own honesty rule. What *is* real and derivable without
+ * inventing anything: when two-or-more of this node's own children share an
+ * `agent_type` (e.g. two "explore" runs), their position among same-typed
+ * siblings disambiguates them beyond the agent_type badge they'd otherwise
+ * render identically under. A lone child of its type gets no ordinal — it
+ * is already unambiguous.
+ */
+const childOrdinalLabel = computed<Record<string, string>>(() => {
+  const totals: Record<string, number> = {}
+  for (const child of props.node.children) totals[child.agent_type] = (totals[child.agent_type] ?? 0) + 1
+
+  const seen: Record<string, number> = {}
+  const result: Record<string, string> = {}
+  for (const child of props.node.children) {
+    const total = totals[child.agent_type]!
+    seen[child.agent_type] = (seen[child.agent_type] ?? 0) + 1
+    result[child.agent_id] = total > 1 ? `${seen[child.agent_type]}/${total}` : ''
+  }
+  return result
+})
 
 function toggle(): void {
   if (hasChildren.value) expanded.value = !expanded.value
@@ -153,7 +205,11 @@ function onChildSelect(agentId: string): void {
         <RawValue
           :value="node.agent_type"
           kind="agent_type"
-        />
+        /><span
+          v-if="siblingOrdinal"
+          class="opacity-70"
+          data-testid="subagent-node-sibling-ordinal"
+        > {{ siblingOrdinal }}</span>
       </Badge>
 
       <Badge
@@ -177,7 +233,7 @@ function onChildSelect(agentId: string): void {
         inventing a name that isn't there.
       -->
       <span
-        class="text-muted-foreground hidden min-w-0 items-center gap-1 font-mono text-[0.6875rem] sm:flex"
+        class="text-muted-foreground flex min-w-0 items-center gap-1 font-mono text-[0.6875rem]"
         data-testid="subagent-node-agent-id"
       >
         <span
@@ -203,6 +259,12 @@ function onChildSelect(agentId: string): void {
           v-else
           data-testid="subagent-node-tool-count"
         >{{ formatCount(node.tool_call_count) }}</span>
+        <span
+          v-if="toolBreakdownInlineText"
+          class="cursor-help underline decoration-dotted underline-offset-2"
+          data-testid="subagent-node-tool-breakdown"
+          :title="toolBreakdownFullText"
+        > ({{ toolBreakdownInlineText }})</span>
       </span>
 
       <span class="text-muted-foreground flex min-w-24 items-center gap-1.5 text-xs">
@@ -248,6 +310,8 @@ function onChildSelect(agentId: string): void {
         :max-duration-ms="maxDurationMs"
         :show-duration-bar="showDurationBar"
         :cost-note="costNote"
+        :tool-breakdown-by-agent="toolBreakdownByAgent"
+        :sibling-ordinal="childOrdinalLabel[child.agent_id]"
         @select-agent="onChildSelect"
       />
     </ul>

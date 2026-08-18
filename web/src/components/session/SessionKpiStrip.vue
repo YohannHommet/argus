@@ -60,7 +60,7 @@ const rejectRateReason = computed(() => {
   -->
   <div
     data-testid="session-kpi-strip"
-    class="border-border divide-border flex flex-wrap divide-x rounded-lg border"
+    class="border-border divide-border bg-card flex flex-wrap divide-x rounded-lg border"
   >
     <div class="min-w-20 flex-1 px-3 py-1.5">
       <p class="text-muted-foreground text-[0.6875rem]">

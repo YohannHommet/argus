@@ -83,6 +83,7 @@ const meta = computed(() => (detail.value ? eventKindMeta(detail.value.kind) : n
   <div class="flex flex-col gap-4">
     <EmptyState
       v-if="!eventRef"
+      class="bg-card"
       title="No event selected"
       description="Click a timeline row to inspect its full payload here."
       data-testid="event-detail-empty"

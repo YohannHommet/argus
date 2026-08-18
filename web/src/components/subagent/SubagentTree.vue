@@ -17,10 +17,13 @@ import ErrorState from '@/components/common/ErrorState.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import { Skeleton } from '@/components/ui/skeleton'
 import SubagentNode from './SubagentNode.vue'
-import type { SubagentNodeData } from './SubagentNode.vue'
+import type { SubagentNodeData, ToolBreakdownEntry } from './SubagentNode.vue'
 import type { ApiError } from '@/api/errors'
+import type { components } from '@/api/schema'
 import { formatDuration } from '@/lib/format'
 import { useSessionDetailStore } from '@/stores/sessionDetail'
+
+type ToolCall = components['schemas']['ToolCall']
 
 interface Props {
   nodes?: SubagentNodeData[]
@@ -28,6 +31,17 @@ interface Props {
   error?: ApiError | Error | null
   /** `cost_attribution.note`, when the caller has one — passed through to every node's cost tooltip in place of the generic constant. */
   costNote?: string | null
+  /**
+   * Round-6 critic gap ("tool-breakdown"): `SubagentNode.tool_call_count` is
+   * a bare total with no per-tool detail. `ToolCall.agent_id` is
+   * hook-sourced but real (SPEC §1.9) — grouping the session's already-loaded
+   * tool calls by that field gives every node a genuine per-tool-name
+   * breakdown without inventing anything the server didn't say. Optional:
+   * a caller that hasn't loaded tool calls yet (or a unit test exercising
+   * the tree in isolation) simply gets nodes with no breakdown, which reads
+   * identically to today's plain tool count.
+   */
+  toolCalls?: ToolCall[]
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -35,6 +49,7 @@ const props = withDefaults(defineProps<Props>(), {
   loading: false,
   error: null,
   costNote: null,
+  toolCalls: () => [],
 })
 
 const emit = defineEmits<{
@@ -68,6 +83,23 @@ function walkMaxDuration(nodes: SubagentNodeData[]): number {
 }
 
 const maxDurationMs = computed(() => walkMaxDuration(props.nodes))
+
+/** Per-agent tool-name breakdown (see the `toolCalls` prop doc), sorted by count descending. `null` agent_id (no hook coverage on that call) is excluded — it cannot be attributed to any node. */
+const toolBreakdownByAgent = computed<Record<string, ToolBreakdownEntry[]>>(() => {
+  const counts: Record<string, Record<string, number>> = {}
+  for (const call of props.toolCalls) {
+    if (!call.agent_id) continue
+    const byName = (counts[call.agent_id] ??= {})
+    byName[call.tool_name] = (byName[call.tool_name] ?? 0) + 1
+  }
+  const result: Record<string, ToolBreakdownEntry[]> = {}
+  for (const [agentId, byName] of Object.entries(counts)) {
+    result[agentId] = Object.entries(byName)
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count)
+  }
+  return result
+})
 
 /**
  * Round-5 critic gap: "the Subagents duration scale reads '0-4ms' —
@@ -152,6 +184,7 @@ function onSelectAgent(agentId: string): void {
           :max-duration-ms="maxDurationMs"
           :show-duration-bar="hasMeaningfulDurationSpread"
           :cost-note="costNote"
+          :tool-breakdown-by-agent="toolBreakdownByAgent"
           @select-agent="onSelectAgent"
         />
       </ul>
