@@ -37,7 +37,10 @@ out_dir="$(mkdir -p "$1" && cd "$1" && pwd)"
 port="${ARGUS_CAPTURE_PORT:-18080}"
 seed="${ARGUS_CAPTURE_SEED:-42}"
 base_url="http://localhost:${port}"
-project_name="argus-capture"
+# Overridable so two capture runs (e.g. sibling gauntlet builders) can use
+# distinct compose projects concurrently without colliding on container
+# names, even when they also use distinct ports.
+project_name="${COMPOSE_PROJECT_NAME:-argus-capture}"
 min_sessions=20
 
 export ARGUS_HTTP_PORT="$port"
