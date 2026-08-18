@@ -52,64 +52,70 @@ const rejectRateReason = computed(() => {
 </script>
 
 <template>
+  <!--
+    A single-row band, not six individually-bordered cards: the KPI strip
+    is a caption for the tabs below it, not a dashboard in its own right, so
+    it gets one thin bordered container with divider lines between stats
+    instead of six boxes' worth of border/padding eating vertical space.
+  -->
   <div
     data-testid="session-kpi-strip"
-    class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6"
+    class="border-border divide-border flex flex-wrap divide-x rounded-lg border"
   >
-    <div class="border-border rounded-lg border p-2.5">
-      <p class="text-muted-foreground text-xs">
+    <div class="min-w-20 flex-1 px-3 py-1.5">
+      <p class="text-muted-foreground text-[0.6875rem]">
         Cost
       </p>
       <p
-        class="text-cost mt-0.5 text-lg leading-tight font-semibold tabular-nums"
+        class="text-cost text-sm leading-tight font-semibold tabular-nums"
         data-testid="kpi-cost"
       >
         {{ formatCost(session?.cost.usd) }}
       </p>
     </div>
 
-    <div class="border-border rounded-lg border p-2.5">
-      <p class="text-muted-foreground text-xs">
+    <div class="min-w-20 flex-1 px-3 py-1.5">
+      <p class="text-muted-foreground text-[0.6875rem]">
         Tokens
       </p>
       <p
-        class="mt-0.5 text-lg leading-tight font-semibold tabular-nums"
+        class="text-sm leading-tight font-semibold tabular-nums"
         data-testid="kpi-tokens"
       >
         {{ formatTokens(totalTokens) }}
       </p>
     </div>
 
-    <div class="border-border rounded-lg border p-2.5">
-      <p class="text-muted-foreground text-xs">
+    <div class="min-w-20 flex-1 px-3 py-1.5">
+      <p class="text-muted-foreground text-[0.6875rem]">
         Turns
       </p>
       <p
-        class="mt-0.5 text-lg leading-tight font-semibold tabular-nums"
+        class="text-sm leading-tight font-semibold tabular-nums"
         data-testid="kpi-turns"
       >
         {{ formatCount(session?.turn_count) }}
       </p>
     </div>
 
-    <div class="border-border rounded-lg border p-2.5">
-      <p class="text-muted-foreground text-xs">
+    <div class="min-w-20 flex-1 px-3 py-1.5">
+      <p class="text-muted-foreground text-[0.6875rem]">
         Tool calls
       </p>
       <p
-        class="mt-0.5 text-lg leading-tight font-semibold tabular-nums"
+        class="text-sm leading-tight font-semibold tabular-nums"
         data-testid="kpi-tools"
       >
         {{ formatCount(session?.tool_call_count) }}
       </p>
     </div>
 
-    <div class="border-border rounded-lg border p-2.5">
-      <p class="text-muted-foreground text-xs">
+    <div class="min-w-20 flex-1 px-3 py-1.5">
+      <p class="text-muted-foreground text-[0.6875rem]">
         Reject rate
       </p>
       <p
-        class="text-reject mt-0.5 text-lg leading-tight font-semibold tabular-nums"
+        class="text-reject text-sm leading-tight font-semibold tabular-nums"
         data-testid="kpi-reject-rate"
       >
         <NullValue
@@ -122,12 +128,12 @@ const rejectRateReason = computed(() => {
       </p>
     </div>
 
-    <div class="border-border rounded-lg border p-2.5">
-      <p class="text-muted-foreground text-xs">
+    <div class="min-w-20 flex-1 px-3 py-1.5">
+      <p class="text-muted-foreground text-[0.6875rem]">
         Duration
       </p>
       <p
-        class="mt-0.5 text-lg leading-tight font-semibold tabular-nums"
+        class="text-sm leading-tight font-semibold tabular-nums"
         data-testid="kpi-duration"
       >
         {{ formatDuration(session?.duration_ms) }}

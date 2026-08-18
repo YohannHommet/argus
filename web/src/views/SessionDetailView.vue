@@ -135,9 +135,9 @@ const hasSessionYet = computed(() => store.session !== null)
     v-else
     class="flex flex-col gap-4"
   >
-    <header class="flex flex-col gap-2">
+    <header class="flex flex-col gap-1">
       <div class="flex flex-wrap items-center gap-2">
-        <h1 class="text-2xl font-semibold">
+        <h1 class="text-xl font-semibold">
           {{ store.session!.project }}
         </h1>
         <Badge variant="secondary">
@@ -152,11 +152,18 @@ const hasSessionYet = computed(() => store.session !== null)
         </Badge>
       </div>
 
-      <p class="text-muted-foreground text-sm">
+      <p class="text-muted-foreground text-xs">
         {{ store.session!.vendor }} · {{ store.session!.id }} · {{ store.session!.cwd }}
       </p>
 
-      <p class="text-muted-foreground text-sm">
+      <!--
+        Started/last-event and decision_summary.exact_share (SPEC §4.3 — the
+        fraction of this session's accept/reject decisions whose correlation
+        is exact rather than heuristic) share one compact meta line instead
+        of three stacked paragraphs, so the header stays a caption for the
+        tabs below rather than a block competing with them for height.
+      -->
+      <p class="text-muted-foreground text-xs">
         Started
         <time :title="formatAbsoluteTime(store.session!.started_at)">
           {{ formatRelativeTime(store.session!.started_at) }}
@@ -165,19 +172,8 @@ const hasSessionYet = computed(() => store.session !== null)
         <time :title="formatAbsoluteTime(store.session!.last_event_at)">
           {{ formatRelativeTime(store.session!.last_event_at) }}
         </time>
-      </p>
-
-      <!--
-        decision_summary.exact_share (SPEC §4.3): the fraction of this
-        session's accept/reject decisions whose correlation is exact rather
-        than heuristic — surfaced so the UI states its own confidence
-        rather than presenting every decision as equally certain.
-      -->
-      <p
-        class="text-muted-foreground text-sm"
-        data-testid="decision-confidence"
-      >
-        Decision confidence: {{ formatPercent(store.session!.decision_summary.exact_share) }} exact
+        ·
+        <span data-testid="decision-confidence">Decision confidence: {{ formatPercent(store.session!.decision_summary.exact_share) }} exact</span>
       </p>
     </header>
 
@@ -224,15 +220,25 @@ const hasSessionYet = computed(() => store.session !== null)
       </TabsContent>
 
       <TabsContent value="subagents">
-        <div class="flex flex-col gap-4">
-          <SubagentTree
-            :nodes="store.subagents"
-            :loading="store.subagentsLoading"
-            :error="store.subagentsError"
-            :cost-note="store.costAttribution?.note ?? null"
-            @retry="store.loadSubagents({ force: true })"
-          />
+        <!--
+          The tree is this tab's primary content (it's the structural view —
+          the differentiator the cost table can't show); the cost table is
+          reference material, so it gets a fixed, scrollable, visually
+          secondary slot below rather than growing to whatever height its
+          own row count wants, which previously let it dwarf the tree.
+        -->
+        <div class="flex flex-col gap-3">
+          <div class="min-h-[22rem]">
+            <SubagentTree
+              :nodes="store.subagents"
+              :loading="store.subagentsLoading"
+              :error="store.subagentsError"
+              :cost-note="store.costAttribution?.note ?? null"
+              @retry="store.loadSubagents({ force: true })"
+            />
+          </div>
           <CostAttributionCard
+            class="shrink-0"
             :data="store.costAttribution"
             :loading="store.subagentsLoading"
             :error="store.subagentsError"

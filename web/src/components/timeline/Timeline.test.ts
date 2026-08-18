@@ -114,6 +114,33 @@ describe('Timeline', () => {
     expect(headers[1]!.text()).toContain('p_88f1')
   })
 
+  /**
+   * Regression for the "turn headers appear after events they own" bug: the
+   * old `groups` computed keyed by a `Map<prompt_id, Group>` bucketed *every*
+   * item sharing a `prompt_id` together, wherever in the sequence it
+   * occurred — so a no-turn event that happened chronologically *after* a
+   * turn's own events still rendered inside the single leading "no turn"
+   * block, ahead of the turn header it should follow. Grouping must instead
+   * split on contiguous runs of the same `prompt_id`, so groups render in
+   * the exact order the (already chronological) event sequence provides.
+   */
+  it('groups by contiguous runs, not a global bucket, so an interleaved no-turn event after a turn does not get pulled ahead of that turn (ordering bug)', async () => {
+    getTimeline = vi.fn(() =>
+      timelinePage([
+        makeTimelineEvent({ prompt_id: null, tool_use_id: null, kind: 'hook.registered', ts: '2026-08-14T01:00:00.000Z' }),
+        makeTimelineEvent({ prompt_id: 'p_1', tool_use_id: null, kind: 'turn.start', ts: '2026-08-14T01:00:05.000Z' }),
+        makeTimelineEvent({ prompt_id: null, tool_use_id: null, kind: 'llm.request', ts: '2026-08-14T01:00:10.000Z' }),
+      ]),
+    )
+    const { wrapper } = await mountTimeline()
+
+    const headers = wrapper.findAll('[data-testid="timeline-group-header"]')
+    expect(headers).toHaveLength(3)
+    expect(headers[0]!.text()).toContain('No turn')
+    expect(headers[1]!.text()).toContain('p_1')
+    expect(headers[2]!.text()).toContain('No turn')
+  })
+
   it("shows the turn's cost/tokens from the turns store in its sticky header", async () => {
     const turn = listSessionTurns200Default.data[0]!
     getTurns = vi.fn(() => okResponse({ data: [turn], page: { next_cursor: null, has_more: false } }))

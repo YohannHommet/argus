@@ -19,6 +19,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import SubagentNode from './SubagentNode.vue'
 import type { SubagentNodeData } from './SubagentNode.vue'
 import type { ApiError } from '@/api/errors'
+import { formatDuration } from '@/lib/format'
 import { useSessionDetailStore } from '@/stores/sessionDetail'
 
 interface Props {
@@ -117,19 +118,26 @@ function onSelectAgent(agentId: string): void {
       description="This session made no subagent calls, or hook coverage was unavailable for this run."
     />
 
-    <ul
-      v-else
-      class="flex flex-col gap-0.5"
-    >
-      <SubagentNode
-        v-for="root in nodes"
-        :key="root.agent_id"
-        :node="root"
-        :render-depth="0"
-        :max-duration-ms="maxDurationMs"
-        :cost-note="costNote"
-        @select-agent="onSelectAgent"
-      />
-    </ul>
+    <template v-else>
+      <p
+        v-if="maxDurationMs > 0"
+        class="text-muted-foreground mb-1 flex justify-end text-[0.6875rem]"
+        data-testid="subagent-tree-duration-scale"
+      >
+        Duration scale: 0 – {{ formatDuration(maxDurationMs) }}
+      </p>
+
+      <ul class="flex flex-col gap-0.5">
+        <SubagentNode
+          v-for="root in nodes"
+          :key="root.agent_id"
+          :node="root"
+          :render-depth="0"
+          :max-duration-ms="maxDurationMs"
+          :cost-note="costNote"
+          @select-agent="onSelectAgent"
+        />
+      </ul>
+    </template>
   </div>
 </template>

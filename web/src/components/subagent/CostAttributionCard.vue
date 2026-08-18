@@ -94,33 +94,40 @@ const totalCostUsd = computed(() => rows.value.reduce((sum, [, value]) => sum + 
           <span class="text-cost font-medium tabular-nums">{{ formatCost(totalCostUsd) }}</span>.
         </p>
 
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Query source</TableHead>
-              <TableHead class="text-right">
-                Cost
-              </TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            <TableRow
-              v-for="[key, value] in rows"
-              :key="key"
-              data-testid="cost-attribution-row"
-            >
-              <TableCell>
-                <RawValue
-                  :value="key"
-                  kind="query_source"
-                />
-              </TableCell>
-              <TableCell class="text-cost text-right tabular-nums">
-                {{ formatCost(value) }}
-              </TableCell>
-            </TableRow>
-          </TableBody>
-        </Table>
+        <!--
+          Secondary reference material next to the tree (this tab's primary
+          content) — capped and scrollable so a long `by_query_source`
+          vocabulary can't push the tree out of view.
+        -->
+        <div class="max-h-48 overflow-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Query source</TableHead>
+                <TableHead class="text-right">
+                  Cost
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              <TableRow
+                v-for="[key, value] in rows"
+                :key="key"
+                data-testid="cost-attribution-row"
+              >
+                <TableCell>
+                  <RawValue
+                    :value="key"
+                    kind="query_source"
+                  />
+                </TableCell>
+                <TableCell class="text-cost text-right tabular-nums">
+                  {{ formatCost(value) }}
+                </TableCell>
+              </TableRow>
+            </TableBody>
+          </Table>
+        </div>
 
         <p
           v-if="data.note"

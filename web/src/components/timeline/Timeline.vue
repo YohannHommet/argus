@@ -22,11 +22,20 @@
  *   events**, not the full 43-value `Kind` union — a session realistically
  *   emits a dozen or so kinds, and 43 chips would be an unusable wall (same
  *   reasoning as `DecisionMatrix`'s dynamic columns).
- * - **Grouping key is `prompt_id`, with `null` collapsed into one explicit
- *   "no turn" group** wherever it first occurs in the sequence — the same
- *   first-occurrence-wins algorithm `collapseEvents` itself uses, so a
- *   no-turn event appearing before, between, or after real turns still
- *   lands in the single no-turn group rather than fragmenting into several.
+ * - **Grouping is by contiguous run of `prompt_id`** (including `null`,
+ *   rendered as an explicit "No turn" header) — NOT a global bucket keyed by
+ *   `prompt_id` across the whole session. A global bucket was tried first
+ *   and was a real bug: `store.timelineItems` is chronological, but bucketing
+ *   by "every item with this prompt_id, wherever it occurs" pulled a
+ *   no-turn event that happened *after* a turn started into the leading
+ *   no-turn block anyway, so that turn's header rendered below events later
+ *   than its own — SPEC's whole point of a turn-grouped timeline is a
+ *   readable top-to-bottom chronology, which a global bucket silently broke.
+ *   Splitting on contiguous runs instead means groups render in exactly the
+ *   input order; the (rare) session whose events for one turn are truly
+ *   non-contiguous renders that turn as more than one block instead of
+ *   reordering the timeline to hide it — an honest reflection of what
+ *   happened, per SPEC's raw-data-first stance.
  * - **`correlationFor` is a local proxy, not `ToolCall.correlation`.**
  *   Fetching the tool-calls list to join by `tool_use_id` is P4-06's
  *   endpoint, out of this ticket's scope. Here, an item's decision is
@@ -63,26 +72,44 @@ const collapseEnabled = ref(true)
 const items = computed<TimelineItem[]>(() => collapseEvents(store.timelineItems, { collapse: collapseEnabled.value }))
 
 interface Group {
+  /** Stable across re-renders: the group's anchor (first) item's key — unique even when two runs share the same `promptId` (see module doc). */
+  id: string
   promptId: string | null
   items: TimelineItem[]
 }
 
-/** First-occurrence-ordered groups, `prompt_id === null` folded into one "no turn" group wherever it first appears. */
+/** Contiguous runs of the same `prompt_id` — see the module doc for why this is a run split, not a global bucket keyed by prompt_id. */
 const groups = computed<Group[]>(() => {
-  const order: (string | null)[] = []
-  const byKey = new Map<string | null, Group>()
+  const result: Group[] = []
   for (const item of items.value) {
     const key = item.prompt_id
-    let group = byKey.get(key)
-    if (!group) {
-      group = { promptId: key, items: [] }
-      byKey.set(key, group)
-      order.push(key)
+    const current = result[result.length - 1]
+    if (current && current.promptId === key) {
+      current.items.push(item)
+    } else {
+      result.push({ id: item.key, promptId: key, items: [item] })
     }
-    group.items.push(item)
   }
-  return order.map((key) => byKey.get(key)!)
+  return result
 })
+
+// Per-turn collapse (default expanded), keyed by Group.id — local/display-only,
+// same as `collapseEnabled` above, never sent to the server.
+const collapsedGroups = ref<Set<string>>(new Set())
+
+function isGroupCollapsed(groupId: string): boolean {
+  return collapsedGroups.value.has(groupId)
+}
+
+function toggleGroup(groupId: string) {
+  const next = new Set(collapsedGroups.value)
+  if (next.has(groupId)) {
+    next.delete(groupId)
+  } else {
+    next.add(groupId)
+  }
+  collapsedGroups.value = next
+}
 
 function turnFor(promptId: string | null) {
   if (promptId === null) return null
@@ -261,11 +288,13 @@ watch(
     >
       <TimelineGroup
         v-for="group in groups"
-        :key="group.promptId ?? '__no_turn__'"
+        :key="group.id"
         :prompt-id="group.promptId"
         :turn="turnFor(group.promptId)"
         :items="group.items"
         :correlation-for="correlationFor"
+        :collapsed="isGroupCollapsed(group.id)"
+        @toggle-collapse="toggleGroup(group.id)"
         @open="openDetail"
       />
 
