@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import type { ApiError } from '@/api/errors'
+import { computeCostThresholds } from '@/lib/severity'
 import type { SessionSummary, SortKey } from '@/stores/sessions'
 import SessionRow from './SessionRow.vue'
 import { SESSION_ROW_GRID_COLS, VIRTUALIZATION_THRESHOLD } from './sessionRowGrid'
@@ -23,20 +24,27 @@ interface Column {
   class?: string
 }
 
+// Magnitude columns (SPEC gap: "numeric columns should be right-aligned with tabular figures so
+// magnitudes compare down a column") get `text-right` on both header and cell so the digits stack.
+// Reject % is deliberately excluded — it renders as a badge/chip, not a bare number.
+const NUMERIC_COLUMN_CLASS = 'text-right'
+
 const COLUMNS: Column[] = [
   { key: 'status', label: 'Status' },
   { key: 'project', label: 'Project' },
   { key: 'vendor', label: 'Vendor' },
   { key: 'started', label: 'Started', sort: 'started_at' },
   { key: 'last_event', label: 'Last event', sort: 'last_event_at' },
-  { key: 'duration', label: 'Duration' },
-  { key: 'turns', label: 'Turns' },
-  { key: 'events', label: 'Events', sort: 'event_count' },
-  { key: 'tools', label: 'Tools' },
+  { key: 'duration', label: 'Duration', class: NUMERIC_COLUMN_CLASS },
+  { key: 'turns', label: 'Turns', class: NUMERIC_COLUMN_CLASS },
+  { key: 'events', label: 'Events', sort: 'event_count', class: NUMERIC_COLUMN_CLASS },
+  { key: 'tools', label: 'Tools', class: NUMERIC_COLUMN_CLASS },
   { key: 'reject_rate', label: 'Reject %' },
-  { key: 'tokens', label: 'Tokens' },
-  { key: 'cost', label: 'Cost', sort: 'cost_usd' },
+  { key: 'tokens', label: 'Tokens', class: NUMERIC_COLUMN_CLASS },
+  { key: 'cost', label: 'Cost', sort: 'cost_usd', class: NUMERIC_COLUMN_CLASS },
 ]
+
+const costThresholds = computed(() => computeCostThresholds(props.sessions.map((s) => s.cost.usd)))
 
 interface Props {
   sessions: SessionSummary[]
@@ -107,7 +115,7 @@ function onHeaderClick(column: Column): void {
             <TableHead
               v-for="column in COLUMNS"
               :key="column.key"
-              :class="column.sort ? 'cursor-pointer select-none' : undefined"
+              :class="[column.sort ? 'cursor-pointer select-none' : undefined, column.class]"
               @click="onHeaderClick(column)"
             >
               {{ column.label }}
@@ -123,6 +131,7 @@ function onHeaderClick(column: Column): void {
             v-for="session in sessions"
             :key="session.id"
             :session="session"
+            :cost-thresholds="costThresholds"
             @activate="emit('selectSession', session.id)"
           />
         </TableBody>
@@ -151,7 +160,7 @@ function onHeaderClick(column: Column): void {
             :key="column.key"
             role="columnheader"
             class="text-foreground h-10 px-2 text-left align-middle text-sm font-medium"
-            :class="column.sort ? 'cursor-pointer select-none' : undefined"
+            :class="[column.sort ? 'cursor-pointer select-none' : undefined, column.class]"
             @click="onHeaderClick(column)"
           >
             {{ column.label }}
@@ -171,6 +180,7 @@ function onHeaderClick(column: Column): void {
               :key="row.data.id"
               :session="row.data"
               layout="grid"
+              :cost-thresholds="costThresholds"
               @activate="emit('selectSession', row.data.id)"
             />
           </div>

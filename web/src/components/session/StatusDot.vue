@@ -14,10 +14,19 @@ interface Props {
 
 const props = withDefaults(defineProps<Props>(), { status: undefined })
 
+/**
+ * Round-4 UI gap: "the status dot [needs] a real semantic accent" — not four arbitrary hues, but
+ * dots that read in the same vocabulary as the rest of the product. `active` gets the product's one
+ * accent color plus a pulse (it's the only status still changing right now); `ended` is a muted
+ * positive (the common, unremarkable outcome — full-saturation green would outshout every other
+ * signal in the row); `abandoned` is a warn tint, not destructive red — an abandoned session is a
+ * caveat on the data, not a failure the way a `--destructive` reject actually is; `unknown` stays
+ * the flat muted gray it already was.
+ */
 const STATUS_DOT_CLASS: Record<string, string> = {
-  active: 'bg-pending',
-  ended: 'bg-accept',
-  abandoned: 'bg-reject',
+  active: 'bg-primary animate-pulse',
+  ended: 'bg-accept/60',
+  abandoned: 'bg-warn',
   unknown: 'bg-unknown',
 }
 

@@ -14,6 +14,12 @@ import {
   formatRelativeTime,
   formatTokens,
 } from '@/lib/format'
+import {
+  classifyCostSeverity,
+  classifyRejectRateSeverity,
+  severityTextClass,
+} from '@/lib/severity'
+import type { CostThresholds } from '@/lib/severity'
 import { computeRejectRate } from '@/stores/sessions'
 import type { SessionSummary } from '@/stores/sessions'
 import { SESSION_ROW_GRID_COLS } from './sessionRowGrid'
@@ -29,9 +35,20 @@ interface Props {
    * "real table always" ideal — see SessionTable.vue's own note.
    */
   layout?: 'row' | 'grid'
+  /**
+   * Warn/critical cost cutoffs for the *visible* session set (round-4 UI gap: "give Reject % and
+   * Cost graded warn/critical color"). Computed once per table render by `SessionTable.vue`
+   * (`computeCostThresholds`) rather than per-row, so every row in a page grades against the same
+   * distribution. Defaults to "never" so a row rendered without this prop (e.g. in isolation, in a
+   * test) never fabricates an outlier out of a set of one.
+   */
+  costThresholds?: CostThresholds
 }
 
-const props = withDefaults(defineProps<Props>(), { layout: 'row' })
+const props = withDefaults(defineProps<Props>(), {
+  layout: 'row',
+  costThresholds: () => ({ warn: Infinity, critical: Infinity }),
+})
 
 const emit = defineEmits<{ activate: [] }>()
 
@@ -47,6 +64,16 @@ const rejectRate = computed(() => computeRejectRate(props.session))
 const rejectReason = computed(() =>
   props.session.tool_call_count === 0 ? 'No tool calls recorded for this session' : NO_HOOK_COVERAGE,
 )
+
+const rejectSeverity = computed(() => classifyRejectRateSeverity(rejectRate.value))
+/** `outline` (neutral/warn) vs `destructive` (critical) — the latter is the shared Badge's own subtle bg-destructive/10 tint. */
+const rejectBadgeVariant = computed(() => (rejectSeverity.value === 'critical' ? 'destructive' : 'outline'))
+const rejectBadgeClass = computed(() =>
+  rejectSeverity.value === 'warn' ? 'border-warn/40 bg-warn/10 text-warn' : undefined,
+)
+
+const costSeverity = computed(() => classifyCostSeverity(props.session.cost.usd, props.costThresholds))
+const costClass = computed(() => ['p-2 align-middle font-mono text-right', severityTextClass(costSeverity.value) ?? 'text-cost'])
 
 function activate(): void {
   emit('activate')
@@ -105,28 +132,28 @@ function activate(): void {
     <component
       :is="cellTag"
       role="cell"
-      class="p-2 align-middle font-mono"
+      class="p-2 text-right align-middle font-mono"
     >
       {{ formatDuration(session.duration_ms) }}
     </component>
     <component
       :is="cellTag"
       role="cell"
-      class="p-2 align-middle font-mono"
+      class="p-2 text-right align-middle font-mono"
     >
       {{ formatCount(session.turn_count) }}
     </component>
     <component
       :is="cellTag"
       role="cell"
-      class="p-2 align-middle font-mono"
+      class="p-2 text-right align-middle font-mono"
     >
       {{ formatCount(session.event_count) }}
     </component>
     <component
       :is="cellTag"
       role="cell"
-      class="p-2 align-middle font-mono"
+      class="p-2 text-right align-middle font-mono"
     >
       {{ formatCount(session.tool_call_count) }}
     </component>
@@ -144,7 +171,9 @@ function activate(): void {
       <span data-testid="reject-rate-badge">
         <Badge
           v-if="rejectRate !== null"
-          variant="outline"
+          :variant="rejectBadgeVariant"
+          :class="rejectBadgeClass"
+          :data-severity="rejectSeverity"
         >
           {{ formatRejectRate(rejectRate) }}
         </Badge>
@@ -157,14 +186,15 @@ function activate(): void {
     <component
       :is="cellTag"
       role="cell"
-      class="p-2 align-middle font-mono"
+      class="p-2 text-right align-middle font-mono"
     >
       {{ formatTokens(totalTokens) }}
     </component>
     <component
       :is="cellTag"
       role="cell"
-      class="text-cost p-2 align-middle font-mono"
+      :class="costClass"
+      :data-severity="costSeverity"
     >
       {{ formatCost(session.cost.usd) }}
     </component>

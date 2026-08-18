@@ -68,6 +68,17 @@ export const secondSessionSummary = {
   },
 } satisfies components['schemas']['SessionSummary']
 
+// Round-4 UI gap ("no severity in color"): a session whose reject rate clears the 15% critical
+// threshold (`classifyRejectRateSeverity`), for asserting the badge actually grades destructive.
+export const criticalRejectRateSessionSummary = {
+  ...baseSession,
+  id: '3f7a3b1e-0000-0000-0000-000000000004',
+  project: 'gateway',
+  status: 'ended',
+  tool_call_count: 20,
+  tool_reject_count: 4,
+} satisfies components['schemas']['SessionSummary']
+
 export const zeroToolCallsSessionSummary = {
   ...baseSession,
   id: '3f7a3b1e-0000-0000-0000-000000000003',

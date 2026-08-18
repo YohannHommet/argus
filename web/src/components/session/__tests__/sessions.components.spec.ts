@@ -8,7 +8,12 @@ import SessionTable from '@/components/session/SessionTable.vue'
 import StatusDot from '@/components/session/StatusDot.vue'
 import SessionListView from '@/views/SessionListView.vue'
 import { getFacets200Default, getMeta200Default, listSessions200Default } from '@/test/fixtures'
-import { partialSessionSummary, secondSessionSummary, zeroToolCallsSessionSummary } from '@/test/fixtures.extra'
+import {
+  criticalRejectRateSessionSummary,
+  partialSessionSummary,
+  secondSessionSummary,
+  zeroToolCallsSessionSummary,
+} from '@/test/fixtures.extra'
 
 // Referenced (not called) by the mock factory below, then assigned per-test — vi.mock is hoisted
 // above these imports at execution time, but the factory itself only runs lazily, on first import of
@@ -132,6 +137,66 @@ describe('SessionTable / SessionRow — rendering', () => {
     expect(wrapper.emitted('sort')).toEqual([['cost_usd']])
   })
 
+  it('grades the reject-rate badge neutral/warn/critical by its actual rate (round-4 UI gap)', () => {
+    const sessions = [listSessions200Default.data[0]!, secondSessionSummary, criticalRejectRateSessionSummary]
+    const wrapper = mount(SessionTable, {
+      props: { sessions, sort: 'last_event_at' },
+      global: { stubs: { teleport: true } },
+    })
+
+    const badges = wrapper.findAll('[data-testid="reject-rate-badge"] [data-severity]')
+    // Session 0: 3/96 = 3.125% — below the 5% warn threshold.
+    expect(badges[0]!.attributes('data-severity')).toBe('neutral')
+    // secondSessionSummary: 1/20 = 5.0% — at the warn threshold.
+    expect(badges[1]!.attributes('data-severity')).toBe('warn')
+    // criticalRejectRateSessionSummary: 4/20 = 20% — past the 15% critical threshold.
+    expect(badges[2]!.attributes('data-severity')).toBe('critical')
+    expect(badges[2]!.classes()).toContain('text-destructive')
+  })
+
+  it('grades Cost against the visible set\'s own distribution, not a fixed dollar figure', () => {
+    const makeSession = (id: string, usd: number) => ({ ...listSessions200Default.data[0]!, id, cost: { ...listSessions200Default.data[0]!.cost, usd } })
+    // 10 rows, evenly spread $0.10..$1.00: p75=$0.775, p90=$0.91 — only the top one or two rows
+    // should grade as outliers, not the whole page.
+    const sessions = Array.from({ length: 10 }, (_, i) => makeSession(`cost-${i}`, (i + 1) / 10))
+
+    const wrapper = mount(SessionTable, {
+      props: { sessions, sort: 'last_event_at' },
+      global: { stubs: { teleport: true } },
+    })
+
+    const costCells = wrapper.findAll('[data-severity]').filter((c) => c.text().startsWith('$'))
+    expect(costCells.map((c) => c.attributes('data-severity'))).toEqual([
+      'neutral', 'neutral', 'neutral', 'neutral', 'neutral', 'neutral', 'neutral', 'warn', 'warn', 'critical',
+    ])
+  })
+
+  it('does not flag any cost as an outlier when every visible session costs the same', () => {
+    const makeSession = (id: string) => ({ ...listSessions200Default.data[0]!, id, cost: { ...listSessions200Default.data[0]!.cost, usd: 1.5 } })
+    const sessions = Array.from({ length: 5 }, (_, i) => makeSession(`flat-${i}`))
+
+    const wrapper = mount(SessionTable, {
+      props: { sessions, sort: 'last_event_at' },
+      global: { stubs: { teleport: true } },
+    })
+
+    const costCells = wrapper.findAll('[data-severity]').filter((c) => c.text().startsWith('$'))
+    expect(costCells.every((c) => c.attributes('data-severity') === 'neutral')).toBe(true)
+  })
+
+  it('right-aligns the magnitude column headers and cells (Turns, Events, Tools, Tokens, Cost, Duration)', () => {
+    const wrapper = mount(SessionTable, {
+      props: { sessions: [listSessions200Default.data[0]!], sort: 'last_event_at' },
+    })
+    const headers = wrapper.findAll('th')
+    for (const label of ['Duration', 'Turns', 'Events', 'Tools', 'Tokens', 'Cost']) {
+      const header = headers.find((h) => h.text().includes(label))!
+      expect(header.classes()).toContain('text-right')
+    }
+    // Reject % is a badge/chip, not a bare number — deliberately not right-aligned.
+    expect(headers.find((h) => h.text().includes('Reject'))!.classes()).not.toContain('text-right')
+  })
+
   it('a row click and an Enter keypress both emit selectSession with the session id', async () => {
     const session = listSessions200Default.data[0]!
     const wrapper = mount(SessionRow, { props: { session } })
@@ -146,13 +211,18 @@ describe('SessionTable / SessionRow — rendering', () => {
 
 describe('StatusDot', () => {
   it.each([
-    ['active', 'bg-pending'],
-    ['ended', 'bg-accept'],
-    ['abandoned', 'bg-reject'],
+    ['active', 'bg-primary'],
+    ['ended', 'bg-accept/60'],
+    ['abandoned', 'bg-warn'],
     ['unknown', 'bg-unknown'],
   ])('maps status %s to %s', (status, expectedClass) => {
     const wrapper = mount(StatusDot, { props: { status } })
-    expect(wrapper.find(`.${expectedClass}`).exists()).toBe(true)
+    expect(wrapper.find('[data-testid="status-dot"] > span').classes()).toContain(expectedClass)
+  })
+
+  it('pulses the active dot — the only status that is still changing right now', () => {
+    const wrapper = mount(StatusDot, { props: { status: 'active' } })
+    expect(wrapper.find('.animate-pulse').exists()).toBe(true)
   })
 
   it('falls back to the neutral/unknown token for a status outside the documented 4-value vocabulary', () => {
