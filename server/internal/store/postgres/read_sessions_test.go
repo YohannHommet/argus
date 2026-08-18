@@ -564,6 +564,71 @@ func TestGetSession_RawEventsExpired(t *testing.T) {
 	require.False(t, newDetail.RawEventsExpired)
 }
 
+// --- SessionSummary (P5-03) -------------------------------------------------
+
+// TestSessionSummary_MatchesListSessions pins that SessionSummary and
+// ListSessions can never drift: both scan sessionListColumns into
+// sessionRowData and build the wire shape through the same toSummary()
+// call, so a session's cost/duration/partial fields must be byte-for-byte
+// identical whichever path read it.
+func TestSessionSummary_MatchesListSessions(t *testing.T) {
+	st, pool := newStore(t)
+	sessionID := nextTestSessionID("summary-match")
+	started := time.Now().UTC().Add(-time.Hour)
+	seedSession(t, pool, sessionSeed{
+		ID:                sessionID,
+		Project:           "proj-summary",
+		StartedAt:         &started,
+		LastEventAt:       started.Add(30 * time.Minute),
+		EventCount:        7,
+		CostUSD:           1.25,
+		CostEstimatedUSD:  0.5,
+		CostByQuerySource: map[string]float64{"anthropic": 1.75},
+		Models:            []string{"claude-opus"},
+	})
+
+	fromList, _, err := st.ListSessions(context.Background(), store.SessionFilter{}, store.Page{Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, fromList, 1)
+
+	fromSummary, err := st.SessionSummary(context.Background(), sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, fromSummary)
+
+	require.Equal(t, fromList[0], *fromSummary,
+		"SessionSummary must report the exact same model.SessionSummary ListSessions reports for the same row")
+}
+
+// TestSessionSummary_NotFound pins the store.ErrSessionNotFound sentinel
+// (the same one GetSession returns) for an id with no row.
+func TestSessionSummary_NotFound(t *testing.T) {
+	st, _ := newStore(t)
+	_, err := st.SessionSummary(context.Background(), "does-not-exist")
+	require.ErrorIs(t, err, postgres.ErrSessionNotFound)
+}
+
+// --- ActiveSessionCount (P5-03) ---------------------------------------------
+
+// TestActiveSessionCount_IgnoresNonActiveStatuses pins that the count reads
+// the stored status column (SPEC §1.7) exactly, not a re-derived heuristic:
+// only 'active' rows are counted, every other status is ignored. Each test
+// runs against its own freshly migrated, empty schema (newStore's own
+// convention, storetesting.NewPool/NewDSN), so an absolute count is exact
+// here, not a heuristic delta.
+func TestActiveSessionCount_IgnoresNonActiveStatuses(t *testing.T) {
+	st, pool := newStore(t)
+
+	seedSession(t, pool, sessionSeed{ID: nextTestSessionID("active-count-active-1"), Status: "active"})
+	seedSession(t, pool, sessionSeed{ID: nextTestSessionID("active-count-active-2"), Status: "active"})
+	seedSession(t, pool, sessionSeed{ID: nextTestSessionID("active-count-ended"), Status: "ended"})
+	seedSession(t, pool, sessionSeed{ID: nextTestSessionID("active-count-abandoned"), Status: "abandoned"})
+	seedSession(t, pool, sessionSeed{ID: nextTestSessionID("active-count-unknown"), Status: "unknown"})
+
+	n, err := st.ActiveSessionCount(context.Background())
+	require.NoError(t, err)
+	require.EqualValues(t, 2, n, "only the two 'active' rows must be counted; ended/abandoned/unknown must not")
+}
+
 // --- ListTurns -------------------------------------------------------------
 
 func TestListTurns_OrderedBySessionStartedAt(t *testing.T) {

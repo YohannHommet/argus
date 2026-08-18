@@ -653,6 +653,63 @@ func (s *Store) GetSession(ctx context.Context, id string) (*model.SessionDetail
 	}, nil
 }
 
+// SessionSummary returns the wire-shape model.SessionSummary for a single
+// session by primary key (SPEC §5.3, P5-03): HubPublisher's debounced
+// `session` frame needs exactly the same projection ListSessions/GetSession
+// already expose, so this reuses sessionListColumns and
+// sessionRowData.toSummary() verbatim rather than deriving a third copy of
+// the cost/duration/partial logic — read_sessions_test.go's
+// TestSessionSummary_MatchesListSessions pins that the two can never drift.
+//
+// Deliberately NOT added to store.Reader (the httpapi-facing seam, SPEC
+// §3.3): its only consumer is internal/ingest's HubPublisher, reached
+// through its own narrow, consumer-owned SessionReader port
+// (internal/ingest/publish.go) — the same convention
+// MigrationsCurrent/QueueSaturated/ImportPrices already establish for a
+// capability exactly one caller needs, rather than widening a seam every
+// Store implementation (and storetest.Fake) would otherwise have to grow a
+// method for.
+func (s *Store) SessionSummary(ctx context.Context, id string) (*model.SessionSummary, error) {
+	var d sessionRowData
+	err := s.pool.QueryRow(ctx, `SELECT `+sessionListColumns+` FROM sessions WHERE id = $1`, id).Scan(
+		&d.ID, &d.Vendor, &d.Project, &d.CWD, &d.Status, &d.StartType,
+		&d.StartedAt, &d.EndedAt, &d.LastEventAt,
+		&d.TurnCount, &d.EventCount, &d.ToolCallCount, &d.ToolRejectCount, &d.SubagentCount, &d.ErrorCount,
+		&d.InputTokens, &d.OutputTokens, &d.CacheReadTokens, &d.CacheCreateTokens,
+		&d.CostUSD, &d.CostEstimatedUSD, &d.CostByQuerySource, &d.Models,
+		&d.AppVersion, &d.Entrypoint, &d.TerminalType,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrSessionNotFound
+		}
+		return nil, fmt.Errorf("postgres: session summary: %w", err)
+	}
+
+	summary, err := d.toSummary()
+	if err != nil {
+		return nil, fmt.Errorf("postgres: session summary: %w", err)
+	}
+	return &summary, nil
+}
+
+// ActiveSessionCount reports how many sessions currently have
+// status = 'active' (SPEC §1.7's stored status column, kept current by the
+// abandoned-session sweep — internal/app's SweepJob, jobs.go) — the exact
+// same number GET /api/v1/sessions?status=active would count, not a
+// re-derived heuristic. It backs the stats broadcaster's `active_sessions`
+// field (SPEC §5.1) via internal/app's Snapshot-building closure, and rides
+// sessions_status_idx (SPEC §2.1) the same way SweepAbandoned's own WHERE
+// clause does. Not added to store.Reader for the same reason
+// SessionSummary isn't — see that method's doc comment.
+func (s *Store) ActiveSessionCount(ctx context.Context) (int64, error) {
+	var n int64
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM sessions WHERE status = 'active'`).Scan(&n); err != nil {
+		return 0, fmt.Errorf("postgres: active session count: %w", err)
+	}
+	return n, nil
+}
+
 // ListTurns implements store.Reader (SPEC §3.3: "takes no filter/page ...
 // every turn of a session in one page").
 func (s *Store) ListTurns(ctx context.Context, sessionID string) ([]model.Turn, error) {
