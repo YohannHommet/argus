@@ -88,4 +88,32 @@ describe('SubagentTree', () => {
     const trigger = wrapper.get('[data-testid="subagent-node-cost"] [title]')
     expect(trigger.attributes('title')).toBe(getSessionSubagentsDepth2Live.cost_attribution.note)
   })
+
+  // Round-5 critic gap: "the Subagents duration scale reads '0-4ms' —
+  // meaningless at these magnitudes". The live fixture's own spread (root
+  // ~213ms, both children well under a second) is exactly that case: a
+  // legend/bar chart comparing sub-second values is noise, not signal, so
+  // both the scale legend and every node's comparative bar should be
+  // withheld — the duration text itself stays (SubagentNode.test.ts covers
+  // that unconditionally).
+  it('hides the duration-scale legend and every node\'s duration bar when the tree\'s max duration is sub-second (spread not meaningful)', async () => {
+    const { wrapper } = await mountTree({ nodes: getSessionSubagentsDepth2Live.data })
+
+    expect(wrapper.find('[data-testid="subagent-tree-duration-scale"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="subagent-node-duration-track"]').exists()).toBe(false)
+  })
+
+  it('shows the duration-scale legend and duration bars once the tree\'s max duration crosses one second', async () => {
+    const nodes = [
+      {
+        ...getSessionSubagentsDepth2Live.data[0],
+        started_at: '2026-08-17T13:00:20.000000Z',
+        ended_at: '2026-08-17T13:00:23.000000Z',
+      },
+    ]
+    const { wrapper } = await mountTree({ nodes })
+
+    expect(wrapper.get('[data-testid="subagent-tree-duration-scale"]').text()).toContain('3s')
+    expect(wrapper.find('[data-testid="subagent-node-duration-track"]').exists()).toBe(true)
+  })
 })

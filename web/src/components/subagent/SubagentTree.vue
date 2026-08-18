@@ -70,6 +70,22 @@ function walkMaxDuration(nodes: SubagentNodeData[]): number {
 const maxDurationMs = computed(() => walkMaxDuration(props.nodes))
 
 /**
+ * Round-5 critic gap: "the Subagents duration scale reads '0-4ms' —
+ * meaningless at these magnitudes". A bar chart (and its legend) implies the
+ * differences it's drawing are worth comparing; at sub-second magnitudes
+ * across a handful of subagent calls, a few milliseconds of spread is
+ * scheduler/clock-resolution noise, not a real "this one took visibly
+ * longer" signal — the bar would render near-identical widths for values
+ * that differ 4x, which is a worse read than no bar. 1s is the same
+ * order-of-magnitude floor `formatDuration` switches from decimal seconds
+ * to whole seconds at, i.e. the point where a duration starts being a
+ * human-meaningful span rather than noise. Below it, every node still shows
+ * its own honest duration text (never dropped) — only the comparative
+ * bar/legend, which stops being honest at this scale, goes away.
+ */
+const hasMeaningfulDurationSpread = computed(() => maxDurationMs.value >= 1000)
+
+/**
  * PLAN P4-05: "clicking a node navigates to `?tab=timeline&agent_id=…`
  * and the store applies the filter". Both halves are done directly here
  * rather than relying solely on `SessionDetailView.vue`'s own
@@ -120,7 +136,7 @@ function onSelectAgent(agentId: string): void {
 
     <template v-else>
       <p
-        v-if="maxDurationMs > 0"
+        v-if="hasMeaningfulDurationSpread"
         class="text-muted-foreground mb-1 flex justify-end text-[0.6875rem]"
         data-testid="subagent-tree-duration-scale"
       >
@@ -134,6 +150,7 @@ function onSelectAgent(agentId: string): void {
           :node="root"
           :render-depth="0"
           :max-duration-ms="maxDurationMs"
+          :show-duration-bar="hasMeaningfulDurationSpread"
           :cost-note="costNote"
           @select-agent="onSelectAgent"
         />

@@ -49,6 +49,14 @@ interface Props {
   renderDepth?: number
   /** Precomputed max duration (ms) across the whole visible tree, for sizing the duration bar. `null`/0 renders every bar as an indeterminate empty track. */
   maxDurationMs?: number | null
+  /**
+   * Whether the tree's duration spread is large enough for a comparative
+   * bar to mean anything (round-5 critic gap: "0-4ms" scale is noise, not
+   * signal — see `SubagentTree`'s `hasMeaningfulDurationSpread`). `false`
+   * hides the bar/track for every node in the tree; the duration *text*
+   * still renders either way — only the visual comparison is withheld.
+   */
+  showDurationBar?: boolean
   /** Tooltip text for the (always-null, SPEC §1.9) cost column. Prefer `cost_attribution.note` when the caller has one. */
   costNote?: string | null
 }
@@ -56,6 +64,7 @@ interface Props {
 const props = withDefaults(defineProps<Props>(), {
   renderDepth: 0,
   maxDurationMs: null,
+  showDurationBar: true,
   costNote: null,
 })
 
@@ -198,6 +207,7 @@ function onChildSelect(agentId: string): void {
 
       <span class="text-muted-foreground flex min-w-24 items-center gap-1.5 text-xs">
         <span
+          v-if="showDurationBar"
           class="bg-muted relative h-1.5 w-16 overflow-hidden rounded-full"
           :class="durationMs === null ? 'border-border border border-dashed' : ''"
           data-testid="subagent-node-duration-track"
@@ -236,6 +246,7 @@ function onChildSelect(agentId: string): void {
         :node="child"
         :render-depth="renderDepth + 1"
         :max-duration-ms="maxDurationMs"
+        :show-duration-bar="showDurationBar"
         :cost-note="costNote"
         @select-agent="onChildSelect"
       />

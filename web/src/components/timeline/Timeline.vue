@@ -82,6 +82,20 @@ const items = computed<TimelineItem[]>(() => collapseEvents(store.timelineItems,
  */
 const maxDurationMs = computed(() => maxDuration(items.value))
 
+/**
+ * The offset column's origin: the first event in the *currently loaded*
+ * timeline, not `session.started_at` (round-5 critic gap — that anchor
+ * produced multi-day offsets whenever a session's recorded start drifted
+ * from its earliest event, e.g. a real capture with `started_at` ~11 days
+ * after its own earliest events; every row read "+11d 0Xh ..." and the
+ * offset column stopped being useful). `store.timelineItems` is
+ * chronological (see module doc above), so the first collapsed item is
+ * always the earliest one on screen — stable across `loadMoreTimeline`
+ * (appends later items, never earlier ones) and naturally re-derived to a
+ * new origin whenever a filter change resets the loaded set.
+ */
+const originTs = computed<string | null>(() => items.value[0]?.ts ?? null)
+
 interface Group {
   /** Stable across re-renders: the group's anchor (first) item's key — unique even when two runs share the same `promptId` (see module doc). */
   id: string
@@ -345,7 +359,7 @@ watch(
           :collapsed="isGroupCollapsed(group.id)"
           :is-continuation="group.isContinuation"
           :selected-event-ref="selectedEventRef"
-          :session-started-at="store.session?.started_at ?? null"
+          :origin-ts="originTs"
           :max-duration-ms="maxDurationMs"
           @toggle-collapse="toggleGroup(group.id)"
           @open="openDetail"

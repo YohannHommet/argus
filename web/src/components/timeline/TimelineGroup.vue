@@ -60,8 +60,8 @@ interface Props {
   isContinuation?: boolean
   /** The currently-open inspector's event_ref, for highlighting the selected row (SPEC/critic: "row selection state must be visible"). */
   selectedEventRef?: string | null
-  /** The session's `started_at`, forwarded to every `EventRow` for its relative-offset display — see `EventRow`'s own doc. */
-  sessionStartedAt?: string | null
+  /** The first event's `ts` in the loaded timeline, forwarded to every `EventRow` for its relative-offset display (round-5: not `session.started_at` — see `EventRow`'s own doc). */
+  originTs?: string | null
   /** The session's largest observed `duration_ms`, forwarded to every `EventRow` for its duration bar's scale. */
   maxDurationMs?: number
 }
@@ -72,7 +72,7 @@ const props = withDefaults(defineProps<Props>(), {
   collapsed: false,
   isContinuation: false,
   selectedEventRef: null,
-  sessionStartedAt: null,
+  originTs: null,
   maxDurationMs: 0,
 })
 
@@ -123,7 +123,7 @@ function isSelected(item: TimelineItem): boolean {
   <section data-testid="timeline-group">
     <header
       class="bg-muted/95 border-border sticky top-0 z-10 flex cursor-pointer items-center gap-2 border-b backdrop-blur"
-      :class="isCompactSingleton ? 'px-3 py-1' : 'px-3 py-1.5'"
+      :class="isCompactSingleton ? 'px-3 py-0.5 opacity-80' : 'px-3 py-1.5'"
       data-testid="timeline-group-header"
       role="button"
       tabindex="0"
@@ -140,22 +140,28 @@ function isSelected(item: TimelineItem): boolean {
       >
         <ChevronDown
           v-if="!collapsed"
-          class="size-3.5"
+          :class="isCompactSingleton ? 'size-3' : 'size-3.5'"
         />
         <ChevronRight
           v-else
-          class="size-3.5"
+          :class="isCompactSingleton ? 'size-3' : 'size-3.5'"
         />
       </button>
       <component
         :is="isNoTurn ? ListTree : MessageSquare"
-        class="text-muted-foreground size-4 shrink-0"
-        :class="{ 'opacity-60': isCompactSingleton }"
+        class="text-muted-foreground shrink-0"
+        :class="isCompactSingleton ? 'size-3' : 'size-4'"
         aria-hidden="true"
       />
+      <!--
+        A trailing no-turn singleton (round-3/5 critic: it muddies hierarchy
+        against real turns) drops to the plain muted-foreground weight/size a
+        metrics label uses elsewhere, instead of the bold `text-foreground`
+        every real turn header gets — a real "Turn N" should visually win
+        against a run of these, not compete with them.
+      -->
       <span
-        class="text-foreground font-semibold"
-        :class="isCompactSingleton ? 'text-xs' : 'text-sm'"
+        :class="isCompactSingleton ? 'text-muted-foreground text-[0.6875rem] font-normal' : 'text-foreground text-sm font-semibold'"
       >
         {{ isNoTurn ? 'No turn' : `Turn ${turn?.turn_index ?? promptId}` }}
         <template v-if="isContinuation">
@@ -202,7 +208,7 @@ function isSelected(item: TimelineItem): boolean {
           :item="node.item"
           :correlation="correlationFor(node.item)"
           :selected="isSelected(node.item)"
-          :session-started-at="sessionStartedAt"
+          :origin-ts="originTs"
           :max-duration-ms="maxDurationMs"
           @open="emit('open', $event)"
         />
@@ -211,7 +217,7 @@ function isSelected(item: TimelineItem): boolean {
             :item="displayItem(node.thread.primary, node.thread.display)"
             :correlation="correlationFor(node.thread.primary)"
             :selected="isSelected(node.thread.primary)"
-            :session-started-at="sessionStartedAt"
+            :origin-ts="originTs"
             :max-duration-ms="maxDurationMs"
             @open="emit('open', $event)"
           />
@@ -225,7 +231,7 @@ function isSelected(item: TimelineItem): boolean {
               :item="child"
               :correlation="correlationFor(child)"
               :selected="isSelected(child)"
-              :session-started-at="sessionStartedAt"
+              :origin-ts="originTs"
               :max-duration-ms="maxDurationMs"
               nested
               @open="emit('open', $event)"

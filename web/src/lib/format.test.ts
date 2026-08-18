@@ -140,37 +140,31 @@ describe('formatRelativeTime', () => {
 })
 
 describe('formatRelativeOffset', () => {
-  const sessionStart = '2026-08-17T12:00:00.000Z'
+  // Round-5: the origin is the *first event in the loaded timeline*, not
+  // `session.started_at` (round-4's anchor produced multi-day offsets — see
+  // format.ts's module doc). The function itself is anchor-agnostic; this
+  // var is just named for what the caller now passes.
+  const firstEventTs = '2026-08-17T12:00:00.000Z'
 
-  const cases: { name: string; iso: string | null | undefined; start: string | null | undefined; expected: string }[] = [
-    { name: 'sub-second offset', iso: '2026-08-17T12:00:00.450Z', start: sessionStart, expected: '+450ms' },
-    { name: 'seconds offset', iso: '2026-08-17T12:00:04.500Z', start: sessionStart, expected: '+4.5s' },
-    { name: 'minutes+seconds offset (the exact critic example)', iso: '2026-08-17T12:02:14.000Z', start: sessionStart, expected: '+2m 14s' },
-    { name: 'hours+minutes+seconds offset', iso: '2026-08-17T14:04:33.000Z', start: sessionStart, expected: '+2h 04m 33s' },
-    { name: 'zero offset for the session-start event itself', iso: sessionStart, start: sessionStart, expected: '+0ms' },
-    { name: 'negative offset (event before session start, e.g. clock skew) gets a minus sign', iso: '2026-08-17T11:59:58.000Z', start: sessionStart, expected: '-2s' },
-    {
-      name: 'day-scale offset still resolves to seconds — a real capture had a session.started_at ~11 days after its own earliest events, and a day-scale "Nd HHh" (no minutes/seconds) made every row in that window collapse onto the same label',
-      iso: '2026-08-28T13:06:48.000Z',
-      start: sessionStart,
-      expected: '+11d 01h 06m 48s',
-    },
-    {
-      name: 'two day-scale offsets seconds apart stay distinguishable (the regression this format exists to prevent)',
-      iso: '2026-08-28T13:06:51.000Z',
-      start: sessionStart,
-      expected: '+11d 01h 06m 51s',
-    },
-    { name: 'null event timestamp -> EM_DASH', iso: null, start: sessionStart, expected: EM_DASH },
-    { name: 'undefined event timestamp -> EM_DASH', iso: undefined, start: sessionStart, expected: EM_DASH },
-    { name: 'null session start (unknown origin) -> EM_DASH, never a fabricated +0s', iso: '2026-08-17T12:00:04.500Z', start: null, expected: EM_DASH },
-    { name: 'unparseable event timestamp -> EM_DASH', iso: 'not-a-date', start: sessionStart, expected: EM_DASH },
-    { name: 'unparseable session start -> EM_DASH', iso: '2026-08-17T12:00:04.500Z', start: 'not-a-date', expected: EM_DASH },
+  const cases: { name: string; iso: string | null | undefined; origin: string | null | undefined; expected: string }[] = [
+    { name: 'zero offset for the first event itself (the exact critic example)', iso: firstEventTs, origin: firstEventTs, expected: '+0.0s' },
+    { name: 'sub-10s offset (the exact critic example)', iso: '2026-08-17T12:00:03.200Z', origin: firstEventTs, expected: '+3.2s' },
+    { name: 'sub-minute offset always shows one decimal', iso: '2026-08-17T12:00:59.900Z', origin: firstEventTs, expected: '+59.9s' },
+    { name: 'minutes+seconds offset (the exact critic example)', iso: '2026-08-17T12:02:14.000Z', origin: firstEventTs, expected: '+2m 14s' },
+    { name: 'hours+minutes offset drops seconds (the exact critic example)', iso: '2026-08-17T13:02:00.000Z', origin: firstEventTs, expected: '+1h 02m' },
+    { name: 'hours+minutes offset with a non-zero seconds remainder still drops seconds', iso: '2026-08-17T14:04:33.000Z', origin: firstEventTs, expected: '+2h 04m' },
+    { name: 'day-scale offset drops to hours, same coarsening as formatDuration', iso: '2026-08-28T13:06:48.000Z', origin: firstEventTs, expected: '+11d 01h' },
+    { name: 'negative offset (event before the anchor, e.g. clock skew) gets a minus sign', iso: '2026-08-17T11:59:58.000Z', origin: firstEventTs, expected: '-2.0s' },
+    { name: 'null event timestamp -> EM_DASH', iso: null, origin: firstEventTs, expected: EM_DASH },
+    { name: 'undefined event timestamp -> EM_DASH', iso: undefined, origin: firstEventTs, expected: EM_DASH },
+    { name: 'null origin (unknown anchor) -> EM_DASH, never a fabricated +0s', iso: '2026-08-17T12:00:04.500Z', origin: null, expected: EM_DASH },
+    { name: 'unparseable event timestamp -> EM_DASH', iso: 'not-a-date', origin: firstEventTs, expected: EM_DASH },
+    { name: 'unparseable origin -> EM_DASH', iso: '2026-08-17T12:00:04.500Z', origin: 'not-a-date', expected: EM_DASH },
   ]
 
-  for (const { name, iso, start, expected } of cases) {
+  for (const { name, iso, origin, expected } of cases) {
     it(name, () => {
-      expect(formatRelativeOffset(iso, start)).toBe(expected)
+      expect(formatRelativeOffset(iso, origin)).toBe(expected)
     })
   }
 })
