@@ -14,7 +14,11 @@
 #   3. seeds deterministic demo traffic (`sim --mode=demo --seed=42`) and
 #      waits until the read API actually reports the sessions;
 #   4. drives headless chromium over the six routes at 1440x900, dark theme,
-#      writing PNGs plus a capture.json manifest into $1.
+#      writing PNGs plus a capture.json manifest into $1;
+#   5. then, for Phase 5's `live.png`, starts `argusd sim --mode=load` streaming
+#      into the same stack and photographs /live with events actually flowing —
+#      gated on the page's own rendered row count, not a sleep. Strictly after
+#      step 4, because this sim adds sessions the other screenshots must not see.
 #
 # Idempotent: every run starts with `down -v`, so a leftover stack or a
 # half-seeded database from an interrupted run cannot leak into the next
@@ -24,6 +28,10 @@
 #   ARGUS_CAPTURE_PORT   host port for argusd (default 18080)
 #   ARGUS_CAPTURE_KEEP   set to 1 to leave the stack running for debugging
 #   ARGUS_CAPTURE_SEED   sim seed (default 42 — deterministic, >= 20 sessions)
+#   ARGUS_CAPTURE_SKIP_LIVE      set to 1 to skip the live.png pass
+#   ARGUS_CAPTURE_LIVE_RATE      load-sim events/s during the live capture (default 20)
+#   ARGUS_CAPTURE_LIVE_DURATION  load-sim duration (default 180s)
+#   ARGUS_CAPTURE_LIVE_SEED      load-sim seed (default 7)
 set -euo pipefail
 
 if [[ $# -lt 1 || -z "${1:-}" ]]; then
@@ -36,6 +44,14 @@ out_dir="$(mkdir -p "$1" && cd "$1" && pwd)"
 
 port="${ARGUS_CAPTURE_PORT:-18080}"
 seed="${ARGUS_CAPTURE_SEED:-42}"
+# The Phase-5 live pass. The seed fixes the sim's *content*; which frames have
+# arrived when the shutter fires is inherently timing-dependent, so live.png is
+# reproducible in state (>= N rows, >= 1 active session, populated health strip)
+# rather than byte-for-byte. Rate 20/s matches PLAN's Phase-5 exit criterion 1;
+# the duration only has to outlast the capture, which needs seconds.
+live_rate="${ARGUS_CAPTURE_LIVE_RATE:-20}"
+live_duration="${ARGUS_CAPTURE_LIVE_DURATION:-180s}"
+live_seed="${ARGUS_CAPTURE_LIVE_SEED:-7}"
 base_url="http://localhost:${port}"
 # Overridable so two capture runs (e.g. sibling gauntlet builders) can use
 # distinct compose projects concurrently without colliding on container
@@ -179,11 +195,46 @@ if ! (cd "$repo_root/web" && pnpm exec playwright install chromium >/dev/null 2>
   (cd "$repo_root/web" && pnpm exec playwright install chromium --with-deps)
 fi
 
-log "capturing screenshots (1440x900, dark)"
+log "capturing static screenshots (1440x900, dark)"
 (
   cd "$repo_root/web"
-  ARGUS_BASE_URL="$base_url" ARGUS_OUT_DIR="$out_dir" node scripts/ui-capture.mjs
+  ARGUS_BASE_URL="$base_url" ARGUS_OUT_DIR="$out_dir" ARGUS_CAPTURE_ONLY=static \
+    node scripts/ui-capture.mjs
 )
+
+# --- live.png (Phase 5) -----------------------------------------------------
+# The live view is the one screen a static seed cannot photograph: it renders
+# what is arriving right now. So the load sim streams into the stack *while*
+# the browser is on /live, and the shutter is gated on the page's own DOM row
+# count (web/scripts/ui-capture.mjs's captureLive), never on a sleep.
+#
+# Runs strictly after the static pass: this sim adds sessions, and taking it
+# first would silently change every other screenshot.
+#
+# `--mode=load` timestamps events at ~now (unlike --mode=demo's backfill), which
+# is what makes them show up as live traffic at all. `run -d` detaches inside
+# Docker rather than backgrounding a shell job, so this script stays a single
+# foreground process with nothing to `wait` on; the container is torn down with
+# the compose project by cleanup().
+if [[ "${ARGUS_CAPTURE_SKIP_LIVE:-0}" == "1" ]]; then
+  log "ARGUS_CAPTURE_SKIP_LIVE=1 — skipping the live capture"
+else
+  log "starting the load sim (rate=${live_rate}/s, duration=${live_duration}, seed=${live_seed}) for the live capture"
+  dc run --rm --no-deps -d argusd sim \
+    --mode=load \
+    --rate="${live_rate}" \
+    --duration="${live_duration}" \
+    --seed="${live_seed}" \
+    --target "http://argusd:8080" \
+    --flush-immediately >/dev/null
+
+  log "capturing live.png while events stream"
+  (
+    cd "$repo_root/web"
+    ARGUS_BASE_URL="$base_url" ARGUS_OUT_DIR="$out_dir" ARGUS_CAPTURE_ONLY=live \
+      node scripts/ui-capture.mjs
+  )
+fi
 
 log "done — screenshots in ${out_dir}:"
 ls -la "$out_dir" >&2

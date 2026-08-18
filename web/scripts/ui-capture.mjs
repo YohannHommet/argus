@@ -141,9 +141,86 @@ async function captureInspector(page, session) {
   return file
 }
 
+/**
+ * `live.png` (Phase 5): `/live` with events actually flowing. The stack's own
+ * `argusd sim --mode=load` is running while this executes (scripts/ui-capture.sh
+ * starts it detached just before invoking this pass), so the feed, the
+ * active-session cards and the health strip all have real, moving data.
+ *
+ * The shutter is gated on the page's own DOM — `LIVE_MIN_ROWS` rendered
+ * `event-row`s inside the live feed — and never on a sleep. A sleep would make
+ * the screenshot a coin flip between "empty feed" and "populated feed"
+ * depending on how loaded the machine is, which is exactly the failure the
+ * Phase-4 harness already learned the hard way with the analytics rollups
+ * (see scripts/ui-capture.sh's rollup-convergence comment).
+ *
+ * Determinism has a real limit here and it is worth stating: the sim's *content*
+ * is seeded and reproducible, but which frames have arrived at the instant the
+ * shutter fires is timing-dependent, so two runs will not be byte-identical.
+ * What is reproducible is the *state*: >= LIVE_MIN_ROWS rows, at least one
+ * active-session card, and a stats-fed health strip.
+ */
+const LIVE_MIN_ROWS = 25
+const LIVE_MIN_CARDS = 1
+
+async function captureLive(page) {
+  const name = 'live'
+  const url = `${baseUrl}/live`
+  log(`capturing ${name} <- ${url} (waiting for >= ${LIVE_MIN_ROWS} feed rows)`)
+  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60_000 })
+
+  // The view's own readiness contract first: the stream is open and at least
+  // one frame has landed.
+  await page.waitForSelector('[data-capture-ready="true"]', { state: 'visible', timeout: 60_000 })
+
+  const feedRows = page.locator('[data-testid="live-feed"] [data-testid="event-row"]')
+  await page
+    .locator('[data-testid="live-feed"]')
+    .waitFor({ state: 'visible', timeout: 30_000 })
+
+  // Poll the page's own row count rather than sleeping. 90s is generous: at the
+  // harness's default --rate this threshold is reached in a few seconds, and a
+  // timeout here is a real signal (the sim died, or nothing is reaching the
+  // stream) rather than a flake to paper over.
+  const deadline = Date.now() + 90_000
+  let rows, cards
+  for (;;) {
+    rows = await feedRows.count()
+    cards = await page.locator('[data-testid="active-session-card"]').count()
+    if (rows >= LIVE_MIN_ROWS && cards >= LIVE_MIN_CARDS) break
+    if (Date.now() > deadline) {
+      throw new Error(
+        `${name}: only ${rows} feed rows and ${cards} active-session cards after 90s ` +
+          `(need >= ${LIVE_MIN_ROWS} / ${LIVE_MIN_CARDS}) — is the load sim running and reaching /ingest?`,
+      )
+    }
+    await page.waitForTimeout(500)
+  }
+  log(`${name}: ${rows} feed rows, ${cards} active-session card(s)`)
+
+  // Let one more stats frame land (the broadcaster ticks every 2s) so the
+  // health strip shows measured numbers rather than its pre-first-frame dashes.
+  await page.waitForTimeout(2_500)
+  await page.evaluate(
+    () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))),
+  )
+
+  const file = join(outDir, `${name}.png`)
+  await mkdir(dirname(file), { recursive: true })
+  await page.screenshot({ path: file, fullPage: false })
+  return { file, rows, cards }
+}
+
 async function main() {
   await mkdir(outDir, { recursive: true })
-  const session = await pickDetailSession()
+  // `live` runs against a stack with a load sim already streaming into it; the
+  // static pass must run first, on the untouched demo seed, or the sim's extra
+  // sessions would silently change every other screenshot.
+  const only = process.env.ARGUS_CAPTURE_ONLY ?? 'static'
+  if (only !== 'static' && only !== 'live') {
+    throw new Error(`ARGUS_CAPTURE_ONLY must be "static" or "live", got ${only}`)
+  }
+  const session = only === 'static' ? await pickDetailSession() : null
 
   const browser = await chromium.launch({
     // WSL2 headless: no sandbox namespaces available in every configuration,
@@ -180,7 +257,10 @@ async function main() {
   // resolved (loading and skeletons gone). Views own that contract so the
   // harness never has to guess a per-page selector.
   const ready = '[data-capture-ready="true"]'
-  const targets = [
+  // Built only for the static pass: every entry below either needs `session`
+  // (null in the live pass, which picks no detail session) or would photograph a
+  // screen the running load sim is actively changing.
+  const targets = session === null ? [] : [
     { name: 'sessions', path: '/sessions', waitFor: ready },
     { name: 'session-detail-timeline', path: `/sessions/${session.id}?tab=timeline`, waitFor: ready },
     {
@@ -203,26 +283,41 @@ async function main() {
   ]
 
   const written = []
+  let liveResult = null
   try {
-    for (const target of targets) {
-      written.push(await capture(page, target))
+    if (only === 'static') {
+      for (const target of targets) {
+        written.push(await capture(page, target))
+      }
+      written.push(await captureInspector(page, session))
+    } else {
+      liveResult = await captureLive(page)
+      written.push(liveResult.file)
     }
-    written.push(await captureInspector(page, session))
   } finally {
     await context.close()
     await browser.close()
   }
 
+  // Two passes, two manifests: the live pass must not clobber the static pass's
+  // record of which session its detail shots came from.
+  const manifestName = only === 'static' ? 'capture.json' : 'capture-live.json'
   await writeFile(
-    join(outDir, 'capture.json'),
+    join(outDir, manifestName),
     `${JSON.stringify(
       {
         base_url: baseUrl,
+        pass: only,
         viewport: VIEWPORT,
         theme: 'dark',
-        detail_session_id: session.id,
-        detail_session_tool_calls: session.tool_call_count,
-        detail_session_subagents: session.subagent_count,
+        ...(session
+          ? {
+              detail_session_id: session.id,
+              detail_session_tool_calls: session.tool_call_count,
+              detail_session_subagents: session.subagent_count,
+            }
+          : {}),
+        ...(liveResult ? { live_feed_rows: liveResult.rows, live_active_session_cards: liveResult.cards } : {}),
         screenshots: written.map((f) => f.replace(`${outDir}/`, '')),
         console_errors: consoleErrors,
         captured_at: new Date().toISOString(),
