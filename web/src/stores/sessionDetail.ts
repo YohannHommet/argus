@@ -166,6 +166,15 @@ function insertEvent(entry: SessionDetailEntry, event: TimelineEvent, order: Tim
 /** Cap on `docs/PLAN.md` P4-03's "LRU of 3" — one entry per distinct session id visited. */
 export const SESSION_DETAIL_LRU_SIZE = 3
 
+/**
+ * Cap on the sessionless event cache `loadEvent` falls back to when no session
+ * is open — the `/live` firehose, where a user can click through an unbounded
+ * number of distinct events, unlike one session's finite timeline. Exported so
+ * the eviction test asserts against the real bound rather than a duplicated
+ * literal that could drift away from it.
+ */
+export const ORPHAN_EVENT_CACHE_MAX = 200
+
 export const useSessionDetailStore = defineStore('sessionDetail', () => {
   // Plain (non-reactive-collection) Map: reactivity comes from the refs
   // held inside each SessionDetailEntry, not from the Map's own structure.
@@ -430,7 +439,6 @@ export const useSessionDetailStore = defineStore('sessionDetail', () => {
    * refetch, since `attrs` for a persisted event never change.
    */
   const orphanEventCache = new Map<string, EventDetail>()
-  const ORPHAN_EVENT_CACHE_MAX = 200
 
   /**
    * The detail drawer's data source (PLAN P4-04's EventDetailSheet):

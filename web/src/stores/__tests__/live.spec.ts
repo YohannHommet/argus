@@ -278,3 +278,88 @@ describe('useLiveStore — session/stats/malformed frames', () => {
     expect(store.malformedFrames).toBe(1)
   })
 })
+
+describe('useLiveStore — clear() and pending-reconnect cancellation', () => {
+  // `clear()` is the "clear feed" UI action, deliberately distinct from a
+  // `reset` frame: it empties what is on screen but must NOT erase the
+  // lifetime diagnostic counters, which are the record that data was lost.
+  it('clear() empties the buffer but keeps droppedTotal and malformedFrames', () => {
+    const store = useLiveStore()
+    store.subscribe({ kind: 'firehose' })
+    instances[0]!.open()
+    instances[0]!.emit('event', makeTimelineEvent({ event_ref: 'ref-a' }))
+    instances[0]!.emit('event', makeTimelineEvent({ event_ref: 'ref-b' }))
+    instances[0]!.emit('lag', { dropped: 3 })
+    instances[0]!.emitRaw('event', '{broken')
+    expect(store.events.length).toBe(2)
+
+    store.clear()
+
+    expect(store.events.length).toBe(0)
+    expect(store.droppedTotal).toBe(3)
+    expect(store.malformedFrames).toBe(1)
+    expect(store.status).toBe('open')
+  })
+
+  // A scheduled reconnect must be cancelled when the last subscriber goes away,
+  // or the timer fires against a torn-down store and reopens a connection
+  // nobody asked for — an EventSource leak that only shows up after a
+  // navigation that happened to race a network blip.
+  it('unsubscribing cancels a pending reconnect timer instead of letting it fire', () => {
+    vi.useFakeTimers()
+    try {
+      const store = useLiveStore()
+      const handle = store.subscribe({ kind: 'firehose' })
+      const created = instances.length
+
+      instances[0]!.errorClosed()
+      expect(store.status).toBe('reconnecting')
+
+      handle.close()
+      vi.advanceTimersByTime(60_000)
+
+      expect(instances.length).toBe(created)
+      expect(store.status).not.toBe('open')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('useLiveStore — firehose topic identity', () => {
+  // `sameTopic` compares the firehose's `kinds` filter by value, order-insensitively.
+  // It decides whether a new subscription reopens the connection, so getting it wrong
+  // is either a dropped stream on every no-op subscribe, or a stale filter that keeps
+  // serving events the caller asked not to receive.
+  it('re-subscribing to an identical firehose filter reuses the connection; a different one reopens it', () => {
+    const store = useLiveStore()
+    const first = store.subscribe({ kind: 'firehose', kinds: ['tool.pre', 'llm.request'] })
+    expect(instances.length).toBe(1)
+
+    // Same set, different order — must count as the same topic.
+    const second = store.subscribe({ kind: 'firehose', kinds: ['llm.request', 'tool.pre'] })
+    expect(instances.length).toBe(1)
+
+    // A genuinely different filter must reopen.
+    const third = store.subscribe({ kind: 'firehose', kinds: ['tool.result'] })
+    expect(instances.length).toBe(2)
+
+    third.close()
+    second.close()
+    first.close()
+  })
+
+  // Same length, different values — the branch a length-only comparison gets
+  // wrong, leaving the connection serving a filter the caller replaced.
+  it('a same-length but different firehose kinds filter reopens the connection', () => {
+    const store = useLiveStore()
+    const first = store.subscribe({ kind: 'firehose', kinds: ['tool.pre'] })
+    expect(instances.length).toBe(1)
+
+    const second = store.subscribe({ kind: 'firehose', kinds: ['tool.result'] })
+    expect(instances.length).toBe(2)
+
+    second.close()
+    first.close()
+  })
+})

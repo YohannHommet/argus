@@ -166,3 +166,51 @@ describe('LiveView', () => {
     expect(useLiveStore().status).toBe('closed')
   })
 })
+
+describe('LiveView — controls and reset wiring', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    instances = []
+    setEventSourceFactory((): EventSourceLike => {
+      const instance = new FakeEventSource()
+      instances.push(instance)
+      return instance
+    })
+    getMeta = vi.fn(() => okResponse(getMeta200Default))
+    getFacets = vi.fn(() => okResponse(getFacets200Default))
+  })
+
+  afterEach(() => {
+    resetEventSourceFactory()
+    vi.restoreAllMocks()
+  })
+
+  // The pause control lives in LiveFeed but the pause *state* lives in the
+  // store, so the view is the only place that seam is observable.
+  it('wires the feed pause/resume controls through to the store', async () => {
+    const { useLiveStore } = await import('@/stores/live')
+    const wrapper = await mountLiveView()
+    const store = useLiveStore()
+    expect(store.paused).toBe(false)
+
+    await wrapper.get('[data-testid="live-feed-pause-toggle"]').trigger('click')
+    expect(store.paused).toBe(true)
+
+    await wrapper.get('[data-testid="live-feed-pause-toggle"]').trigger('click')
+    expect(store.paused).toBe(false)
+  })
+
+  // SPEC §5.2: a reset means local state is provably incomplete. This view's
+  // only REST-backed content is /api/v1/meta (the exporters-seen tiles), so a
+  // forced meta reload is the whole of its refetch duty — and it must actually
+  // be registered, not just documented.
+  it('a reset frame forces a meta refetch', async () => {
+    await mountLiveView()
+    const callsBefore = getMeta.mock.calls.length
+
+    instances[0]!.emit('reset', { reason: 'replay_window_exceeded', from: '2026-08-18T00:00:00.000Z' })
+    await flushPromises()
+
+    expect(getMeta.mock.calls.length).toBeGreaterThan(callsBefore)
+  })
+})

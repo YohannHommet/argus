@@ -428,3 +428,86 @@ describe('useSessionDetailStore — live (PLAN.md P5-06)', () => {
     expect(getTimeline).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('sessionDetailStore — non-ApiError failures still surface as store errors', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    getSession = vi.fn((id: string) => okResponse(sessionWithId(id)))
+    getTimeline = vi.fn(() => okResponse(getSessionTimeline200Default))
+    getTurns = vi.fn(() => okResponse(listSessionTurns200Default))
+    getToolCalls = vi.fn(() => okResponse(listSessionToolCalls200Default))
+    getSubagents = vi.fn(() => okResponse(getSessionSubagents200Default))
+    getEvent = vi.fn(() => okResponse(getEvent200Default))
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  // A transport-level failure (fetch itself throwing: offline, DNS, CORS) is not
+  // an ApiError, so it takes the other half of every `err instanceof ApiError`
+  // branch. It must still land in the store's error slot — an unhandled
+  // rejection here would leave the tab spinning on `loading` forever with
+  // nothing on screen to say why.
+  it('loadToolCalls records a thrown non-ApiError and clears loading', async () => {
+    const { useSessionDetailStore } = await import('../sessionDetail')
+    const store = useSessionDetailStore()
+    await store.loadSession('s1')
+
+    getToolCalls = vi.fn(() => Promise.reject(new TypeError('Failed to fetch')))
+    await store.loadToolCalls({ force: true })
+
+    expect(store.toolCallsError).toBeInstanceOf(Error)
+    expect(store.toolCallsError?.message).toContain('Failed to fetch')
+    expect(store.toolCallsLoading).toBe(false)
+  })
+
+  it('loadSubagents records a thrown non-ApiError and clears loading', async () => {
+    const { useSessionDetailStore } = await import('../sessionDetail')
+    const store = useSessionDetailStore()
+    await store.loadSession('s1')
+
+    getSubagents = vi.fn(() => Promise.reject(new TypeError('Failed to fetch')))
+    await store.loadSubagents({ force: true })
+
+    expect(store.subagentsError).toBeInstanceOf(Error)
+    expect(store.subagentsError?.message).toContain('Failed to fetch')
+    expect(store.subagentsLoading).toBe(false)
+  })
+})
+
+describe('sessionDetailStore — sessionless event cache bound', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  // The /live path has no current session, so its loadEvent calls land in a
+  // separate, bounded cache (a firehose has no natural limit on how many
+  // distinct events a user can click through, unlike one session's timeline).
+  // This pins the eviction actually happening: without it the map grows for the
+  // lifetime of the tab, and with an off-by-one it would evict the entry it
+  // just inserted.
+  it('evicts the oldest entry past the cap and keeps the newest, refetching only the evicted ref', async () => {
+    const { useSessionDetailStore, ORPHAN_EVENT_CACHE_MAX } = await import('../sessionDetail')
+    const store = useSessionDetailStore()
+    expect(store.currentId).toBeNull()
+
+    getEvent = vi.fn((ref: string) => okResponse({ ...getEvent200Default, event_ref: ref }))
+
+    const refs = Array.from({ length: ORPHAN_EVENT_CACHE_MAX + 1 }, (_, i) => `ref-${i}`)
+    for (const ref of refs) await store.loadEvent(ref)
+    expect(getEvent).toHaveBeenCalledTimes(refs.length)
+
+    // The newest is still cached — no refetch.
+    await store.loadEvent(refs[refs.length - 1]!)
+    expect(getEvent).toHaveBeenCalledTimes(refs.length)
+
+    // The oldest was evicted — one more fetch.
+    await store.loadEvent(refs[0]!)
+    expect(getEvent).toHaveBeenCalledTimes(refs.length + 1)
+  })
+})

@@ -283,6 +283,24 @@ describe('useSessionsStore', () => {
     expect(store.sessions).toEqual(listSessions200Default.data)
   })
 
+  // Re-selecting the sort key already in effect must not touch the URL or spend
+  // a request: the session list's sort headers are clickable repeatedly, and a
+  // no-op that refetched would make every stray click cost a round trip and
+  // reset the user's cursor.
+  it('setSort ignores the sort key already in effect and refetches only on a real change', async () => {
+    const { store } = await setupStore()
+    getSessions.mockClear()
+
+    store.setSort(store.sort)
+    await vi.runAllTimersAsync()
+    expect(getSessions).not.toHaveBeenCalled()
+
+    store.setSort('cost_usd')
+    await vi.runAllTimersAsync()
+    expect(getSessions).toHaveBeenCalledTimes(1)
+    expect(store.sort).toBe('cost_usd')
+  })
+
   it('meta store facets fixture stays importable alongside sessions (sanity: no cross-store drift)', () => {
     expect(getFacets200Default.projects).toContain('argus')
   })

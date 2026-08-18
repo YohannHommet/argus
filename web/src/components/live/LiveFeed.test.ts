@@ -146,3 +146,42 @@ describe('LiveFeed', () => {
     expect(sheet.props('open')).toBe(true)
   })
 })
+
+describe('LiveFeed — pause toggle and sheet lifecycle', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+  })
+
+  // The one button carries both directions, so both branches of its click
+  // handler and its icon have to be exercised — a toggle stuck emitting
+  // 'pause' while already paused is a dead control that still looks alive.
+  it('emits pause when running and resume when paused', async () => {
+    const events = makeFrames(3)
+    const running = mount(LiveFeed, { props: { events, paused: false, bufferedCount: 0 } })
+    await running.get('[data-testid="live-feed-pause-toggle"]').trigger('click')
+    expect(running.emitted('pause')).toHaveLength(1)
+    expect(running.emitted('resume')).toBeUndefined()
+
+    const paused = mount(LiveFeed, { props: { events, paused: true, bufferedCount: 7 } })
+    await paused.get('[data-testid="live-feed-pause-toggle"]').trigger('click')
+    expect(paused.emitted('resume')).toHaveLength(1)
+    expect(paused.emitted('pause')).toBeUndefined()
+    // The resume badge must show what accumulated while frozen.
+    expect(paused.get('[data-testid="live-feed-buffered-badge"]').text()).toContain('7')
+  })
+
+  it('closing the detail sheet clears its open state so the next row click reopens it', async () => {
+    const events = makeFrames(2)
+    const wrapper = mount(LiveFeed, { props: { events, paused: false, bufferedCount: 0 } })
+    const sheet = wrapper.findComponent(EventDetailSheet)
+
+    await wrapper.findAll('[data-testid="event-row"]')[0]!.trigger('click')
+    expect(sheet.props('open')).toBe(true)
+
+    // The sheet owns its own dismissal (overlay click, Escape) and reports it
+    // upward; the host must honour it, or the sheet can never be reopened.
+    sheet.vm.$emit('update:open', false)
+    await nextTick()
+    expect(sheet.props('open')).toBe(false)
+  })
+})
