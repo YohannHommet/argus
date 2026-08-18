@@ -15,11 +15,14 @@ import (
 	"github.com/YohannHommet/argus/server/internal/model"
 	"github.com/YohannHommet/argus/server/internal/query"
 	"github.com/YohannHommet/argus/server/internal/store"
+	"github.com/YohannHommet/argus/server/internal/stream"
 )
 
-// requestTimeout bounds how long a single request may run before chi's
-// Timeout middleware cancels its context. SPEC §3.7 has no dedicated config
-// key for this yet, so it is a constant until one is added.
+// requestTimeout bounds how long a single request may run before
+// StreamAwareTimeout's wrapped chi.Timeout cancels its context. SPEC §3.7
+// has no dedicated config key for this yet, so it is a constant until one
+// is added. See middleware.go's StreamAwareTimeout doc comment for why this
+// is no longer the plain chimw.Timeout middleware (Trap 1, P5-02).
 const requestTimeout = 30 * time.Second
 
 // accessLogSampleRate mirrors SPEC §3.8's ingest-log sampling rule, applied
@@ -92,6 +95,25 @@ type AnalyticsReader interface {
 	query.QualityReader
 }
 
+// Streamer is the narrow hub port GET /api/v1/stream and
+// /api/v1/sessions/{id}/stream need (SPEC §5.3, P5-02): *stream.Hub
+// satisfies it structurally. httpapi depends on this port alone, never
+// stream.Hub's full surface — Publish/PublishStats/Shutdown are the ingest
+// pipeline's and internal/app's job, not a read-only HTTP handler's.
+type Streamer interface {
+	Subscribe(topic stream.Topic, filter stream.Filter) (*stream.Subscription, error)
+}
+
+// Replayer is the narrow store port SSE reconnect replay needs (SPEC
+// §5.2): postgres.Store.EventsSince satisfies it structurally. Kept
+// separate from Reader rather than widening it, per the sibling-interface
+// convention Reader's own doc comment prescribes (AnalyticsReader above is
+// the precedent) — replay is a P5-02-only concern, not something P3-07's
+// existing read handlers call.
+type Replayer interface {
+	EventsSince(ctx context.Context, after model.EventRef, windowStart time.Time, limit int) ([]model.Event, error)
+}
+
 // Mounter lets a not-yet-built package attach its own routes to the router
 // without router.go ever being edited again. P2-10 (OTLP receivers under
 // /v1/*) and P2-11 (the hooks webhook under /ingest/hook) each implement
@@ -130,6 +152,21 @@ type Deps struct {
 	// AnalyticsReader's own doc comment.
 	Analytics AnalyticsReader
 
+	// Stream backs GET /api/v1/stream and /api/v1/sessions/{id}/stream
+	// (SPEC §5, P5-02). nil mounts neither SSE route — the same nil-safe
+	// convention Reader/Analytics/Mounter already establish. P5-03 wires
+	// *stream.Hub in via internal/app/serve.go; this ticket does not touch
+	// that file.
+	Stream Streamer
+
+	// Replay backs SSE reconnect (`Last-Event-ID`/`?after=`, SPEC §5.2).
+	// nil alongside a non-nil Stream still mounts both SSE routes, but
+	// every replay request is answered with `event: reset` instead of a
+	// backlog — the honest degradation when there is no store to query,
+	// rather than silently pretending no backlog was ever requested. See
+	// Streamer's doc comment for why this is a separate port from Reader.
+	Replay Replayer
+
 	OTLPMounter Mounter // future P2-10 (POST /v1/logs, /v1/metrics, /v1/traces); nil = no-op
 	HookMounter Mounter // future P2-11 (POST /ingest/hook); nil = no-op
 
@@ -154,7 +191,7 @@ func New(d Deps) http.Handler {
 	r.Use(chimw.RequestID)
 	r.Use(chimw.Recoverer)
 	r.Use(chimw.RealIP) //nolint:staticcheck // deprecated (IP spoofing risk) with no chi-provided trusted-proxy replacement yet; acceptable for the Phase 1 single-host walking skeleton, revisit before exposing Argus behind an untrusted load balancer
-	r.Use(chimw.Timeout(requestTimeout))
+	r.Use(StreamAwareTimeout(requestTimeout))
 	if d.Logger != nil {
 		r.Use(AccessLog(d.Logger, accessLogSampleRate))
 	}
@@ -208,6 +245,13 @@ func New(d Deps) http.Handler {
 				mountAnalyticsRoutes(v1, d.Analytics, d.Logger)
 				mountFacetRoutes(v1, d.Analytics, d.Logger)
 				mountQualityRoutes(v1, d.Analytics, d.Logger)
+			}
+
+			// P5-02's SSE routes (SPEC §5). A nil Stream (P1-05 through
+			// Phase-4's default) mounts neither, matching Reader/
+			// Analytics' own nil-safe convention above.
+			if d.Stream != nil {
+				mountStreamRoutes(v1, d.Stream, d.Replay, d.Config, d.Logger)
 			}
 		})
 	})
