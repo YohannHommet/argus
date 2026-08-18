@@ -287,4 +287,110 @@ describe('SessionListView — error + retry integration (Phase-4 exit criterion 
     await mountAt('/sessions')
     expect(document.documentElement.getAttribute('data-capture-ready')).toBe('true')
   })
+
+  it('renders a "loaded set" summary strip with cost/tokens/session totals over the fetched page, not a global total', async () => {
+    sessionListGetSessions = vi.fn(() => okResponse({ data: listSessions200Default.data, page: { next_cursor: null, has_more: false } }))
+    const { wrapper } = await mountAt('/sessions')
+
+    const summary = wrapper.find('[data-testid="session-list-summary"]')
+    expect(summary.exists()).toBe(true)
+    expect(summary.text()).toContain('Loaded set')
+    // The single fixture session: cost.usd 4.2711 -> "$4.27"; tokens 41233+18944+1204331+88210 =
+    // 1,352,718 -> formatTokens's SI-suffixed "1.4M"; one session in the loaded page.
+    expect(wrapper.get('[data-testid="summary-cost"]').text()).toBe('$4.27')
+    expect(wrapper.get('[data-testid="summary-tokens"]').text()).toBe('1.4M')
+    expect(wrapper.get('[data-testid="summary-sessions"]').text()).toBe('1')
+  })
+})
+
+describe('SessionFilterBar — time range control (round-4 UI gap)', () => {
+  function okResponse<T>(data: T) {
+    return Promise.resolve({ data, error: undefined, response: new Response(null, { status: 200, headers: { 'Content-Length': '0' } }) })
+  }
+
+  let mountedWrapper: Awaited<ReturnType<typeof mount>> | null = null
+
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    sessionListGetSessions = vi.fn(() => okResponse({ data: listSessions200Default.data, page: { next_cursor: null, has_more: false } }))
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+    mountedWrapper?.unmount()
+    mountedWrapper = null
+  })
+
+  async function mountAt(path: string) {
+    const { flushPromises } = await import('@vue/test-utils')
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/sessions', name: 'sessions', component: SessionListView }],
+    })
+    await router.push(path)
+    await router.isReady()
+    // No teleport stub here (unlike the rendering describe block above): that stub renders an
+    // empty placeholder for `<Teleport>`'s default slot rather than its real content, which would
+    // hide the exact popover markup these tests need to inspect. Real `<Teleport>` moves the
+    // popover into `document.body` (attached here so it actually mounts), so assertions on its
+    // content query the document directly.
+    const wrapper = mount(SessionListView, { attachTo: document.body, global: { plugins: [router] } })
+    mountedWrapper = wrapper
+    await flushPromises()
+    return { router, wrapper }
+  }
+
+  it('has no bare native date inputs at rest — no [type=date] control on the page', async () => {
+    const { wrapper } = await mountAt('/sessions')
+    expect(wrapper.find('input[type="date"]').exists()).toBe(false)
+  })
+
+  it('defaults to the "All" preset selected when no from/to filter is active', async () => {
+    const { wrapper } = await mountAt('/sessions')
+    const all = wrapper.get('[data-testid="filter-range-all"]')
+    expect(all.attributes('data-state')).toBe('active')
+  })
+
+  it('clicking the "7d" preset writes the API\'s own relative shorthand into the from param and refetches', async () => {
+    const { wrapper, router } = await mountAt('/sessions')
+    const { flushPromises } = await import('@vue/test-utils')
+
+    // reka-ui's TabsTrigger selects on `mousedown` (immediate tab-switch feedback), not `click`.
+    await wrapper.get('[data-testid="filter-range-7d"]').trigger('mousedown', { button: 0 })
+    await flushPromises()
+
+    expect(router.currentRoute.value.query.from).toBe('-7d')
+    expect(router.currentRoute.value.query.to).toBeUndefined()
+    expect(wrapper.get('[data-testid="filter-range-7d"]').attributes('data-state')).toBe('active')
+  })
+
+  it('the custom popover applies a typed range as styled text fields, with no native picker chrome visible at rest', async () => {
+    const { wrapper, router } = await mountAt('/sessions')
+    const { DOMWrapper, flushPromises } = await import('@vue/test-utils')
+
+    await wrapper.get('[data-testid="filter-range-custom"]').trigger('click')
+    await flushPromises()
+
+    // PopoverContent teleports into `document.body` (a sibling of the mounted tree, not a
+    // descendant) — `wrapper.get` can't see it, so this queries the real DOM directly.
+    const body = new DOMWrapper(document.body)
+    const fromInput = body.get('[data-testid="filter-from"]')
+    const toInput = body.get('[data-testid="filter-to"]')
+    // Styled text inputs, not native date pickers — no [type=date] UA chrome/placeholder.
+    expect(fromInput.attributes('type')).toBe('text')
+    expect(fromInput.attributes('placeholder')).toBe('2026-08-01')
+    expect(toInput.attributes('placeholder')).toBe('2026-08-17')
+
+    await fromInput.setValue('2026-08-01')
+    await toInput.setValue('2026-08-10')
+    await body.get('[data-testid="filter-range-apply"]').trigger('click')
+    await flushPromises()
+
+    expect(router.currentRoute.value.query.from).toBe('2026-08-01')
+    expect(router.currentRoute.value.query.to).toBe('2026-08-10')
+    // No preset shorthand matches an explicit absolute range -> none of the segmented presets
+    // claim to be active; the custom trigger reflects the applied range instead.
+    expect(wrapper.get('[data-testid="filter-range-all"]').attributes('data-state')).not.toBe('active')
+    expect(wrapper.get('[data-testid="filter-range-custom"]').text()).toContain('2026-08-01')
+  })
 })

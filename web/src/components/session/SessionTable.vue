@@ -116,6 +116,7 @@ function onHeaderClick(column: Column): void {
               <TableHead
                 v-for="column in COLUMNS"
                 :key="column.key"
+                class="px-3"
                 :class="[column.sort ? 'cursor-pointer select-none' : undefined, column.class]"
                 @click="onHeaderClick(column)"
               >
@@ -162,7 +163,7 @@ function onHeaderClick(column: Column): void {
             v-for="column in COLUMNS"
             :key="column.key"
             role="columnheader"
-            class="text-foreground h-10 px-2 text-left align-middle text-sm font-medium"
+            class="text-foreground h-10 px-3 text-left align-middle text-sm font-medium"
             :class="[column.sort ? 'cursor-pointer select-none' : undefined, column.class]"
             @click="onHeaderClick(column)"
           >

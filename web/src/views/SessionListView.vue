@@ -20,6 +20,7 @@ import { computed } from 'vue'
 import { useRouter } from 'vue-router'
 
 import SessionFilterBar from '@/components/session/SessionFilterBar.vue'
+import SessionListSummaryBar from '@/components/session/SessionListSummaryBar.vue'
 import SessionTable from '@/components/session/SessionTable.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import SetupCard from '@/components/common/SetupCard.vue'
@@ -77,6 +78,11 @@ function onLoadMore(): void {
     </div>
 
     <SessionFilterBar />
+
+    <SessionListSummaryBar
+      v-if="sessions.initialized && metaSettled && sessions.sessions.length > 0"
+      :sessions="sessions.sessions"
+    />
 
     <!--
       SessionTable owns its own error/loading/"filtered empty" rendering

@@ -73,7 +73,7 @@ const rejectBadgeClass = computed(() =>
 )
 
 const costSeverity = computed(() => classifyCostSeverity(props.session.cost.usd, props.costThresholds))
-const costClass = computed(() => ['p-2 align-middle font-mono text-right', severityTextClass(costSeverity.value) ?? 'text-cost'])
+const costClass = computed(() => ['px-3 py-2 align-middle font-mono text-right', severityTextClass(costSeverity.value) ?? 'text-cost'])
 
 function activate(): void {
   emit('activate')
@@ -93,14 +93,14 @@ function activate(): void {
     <component
       :is="cellTag"
       role="cell"
-      class="p-2 align-middle"
+      class="px-3 py-2 align-middle"
     >
       <StatusDot :status="session.status" />
     </component>
     <component
       :is="cellTag"
       role="cell"
-      class="truncate p-2 align-middle"
+      class="truncate px-3 py-2 align-middle"
       :title="session.project"
     >
       {{ session.project }}
@@ -108,7 +108,7 @@ function activate(): void {
     <component
       :is="cellTag"
       role="cell"
-      class="p-2 align-middle"
+      class="px-3 py-2 align-middle"
     >
       <RawValue
         :value="session.vendor"
@@ -118,49 +118,49 @@ function activate(): void {
     <component
       :is="cellTag"
       role="cell"
-      class="text-muted-foreground p-2 align-middle"
+      class="text-muted-foreground px-3 py-2 align-middle"
     >
       {{ formatRelativeTime(session.started_at) }}
     </component>
     <component
       :is="cellTag"
       role="cell"
-      class="text-muted-foreground p-2 align-middle"
+      class="text-muted-foreground px-3 py-2 align-middle"
     >
       {{ formatRelativeTime(session.last_event_at) }}
     </component>
     <component
       :is="cellTag"
       role="cell"
-      class="p-2 text-right align-middle font-mono"
+      class="px-3 py-2 text-right align-middle font-mono"
     >
       {{ formatDuration(session.duration_ms) }}
     </component>
     <component
       :is="cellTag"
       role="cell"
-      class="p-2 text-right align-middle font-mono"
+      class="px-3 py-2 text-right align-middle font-mono"
     >
       {{ formatCount(session.turn_count) }}
     </component>
     <component
       :is="cellTag"
       role="cell"
-      class="p-2 text-right align-middle font-mono"
+      class="px-3 py-2 text-right align-middle font-mono"
     >
       {{ formatCount(session.event_count) }}
     </component>
     <component
       :is="cellTag"
       role="cell"
-      class="p-2 text-right align-middle font-mono"
+      class="px-3 py-2 text-right align-middle font-mono"
     >
       {{ formatCount(session.tool_call_count) }}
     </component>
     <component
       :is="cellTag"
       role="cell"
-      class="p-2 align-middle"
+      class="px-3 py-2 align-middle"
     >
       <!--
         The testid is on this wrapping span, not forwarded onto Badge/NullValue themselves: Vue's
@@ -186,7 +186,7 @@ function activate(): void {
     <component
       :is="cellTag"
       role="cell"
-      class="p-2 text-right align-middle font-mono"
+      class="px-3 py-2 text-right align-middle font-mono"
     >
       {{ formatTokens(totalTokens) }}
     </component>
