@@ -53,4 +53,31 @@ describe('EventRow', () => {
     expect(selected.attributes('data-selected')).toBe('true')
     expect(notSelected.attributes('aria-selected')).toBe('false')
   })
+
+  // Round-5 critic gap: no `sessionLabel` (the default, and every existing caller above) must
+  // render no session column at all — a single-session timeline is not the firehose.
+  it('renders no session identity column when sessionLabel is not supplied', () => {
+    const [item] = collapseEvents([otelToolResultEvent])
+    const wrapper = mount(EventRow, { props: { item: item! } })
+    expect(wrapper.find('[data-testid="event-row-session"]').exists()).toBe(false)
+  })
+
+  it('renders the given sessionLabel as its own column when supplied', () => {
+    const [item] = collapseEvents([otelToolResultEvent])
+    const wrapper = mount(EventRow, { props: { item: item!, sessionLabel: 'platform · a1b2c3d4' } })
+    expect(wrapper.get('[data-testid="event-row-session"]').text()).toBe('platform · a1b2c3d4')
+  })
+
+  // Round-5 critic gap: "two identical '3.4s' landed 136px apart" — each fixed metric column must
+  // keep its reserved width whether or not this row kind carries a value, so a `v-if` on the
+  // *value* is fine but a `v-if` that drops the whole column is not.
+  it('always renders the offset/duration/cost/tokens columns, falling back to EM_DASH per-value rather than dropping the column', () => {
+    const [item] = collapseEvents([makeTimelineEvent({ cost: null, tokens: null, duration_ms: null })])
+    const wrapper = mount(EventRow, { props: { item: item! } })
+
+    expect(wrapper.get('[data-testid="event-row-offset"]').text()).toBe('—')
+    expect(wrapper.get('[data-testid="event-row-duration"]').text()).toBe('—')
+    expect(wrapper.get('[data-testid="event-row-cost"]').text()).toBe('—')
+    expect(wrapper.get('[data-testid="event-row-tokens"]').text()).toBe('—')
+  })
 })

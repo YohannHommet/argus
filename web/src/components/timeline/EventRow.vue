@@ -12,7 +12,7 @@ import { AlertTriangle } from '@lucide/vue'
 
 import type { TimelineItem } from '@/lib/collapseEvents'
 import { eventKindMeta } from '@/lib/eventKinds'
-import { formatAbsoluteTime, formatCost, formatDuration, formatRelativeOffset, formatTokens } from '@/lib/format'
+import { EM_DASH, formatAbsoluteTime, formatCost, formatDuration, formatRelativeOffset, formatTokens } from '@/lib/format'
 import { durationBarScale, rowDetail } from '@/lib/timelineDisplay'
 import { Badge } from '@/components/ui/badge'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -39,9 +39,18 @@ interface Props {
   originTs?: string | null
   /** The session's largest observed `duration_ms`, for scaling this row's duration bar — see `durationBarScale`. `0`/absent renders no bar. */
   maxDurationMs?: number
+  /**
+   * Compact "project · shortId" (or just the short id, when the project
+   * isn't known yet) identifying which session this row belongs to.
+   * `null`/absent renders no column at all — a single-session timeline
+   * (`Timeline.vue`) already has its one session in the page header, so
+   * repeating it on every row would be noise; only a multi-session view
+   * (the live firehose, `LiveFeed.vue`) supplies this.
+   */
+  sessionLabel?: string | null
 }
 
-const props = withDefaults(defineProps<Props>(), { correlation: null, selected: false, nested: false, originTs: null, maxDurationMs: 0 })
+const props = withDefaults(defineProps<Props>(), { correlation: null, selected: false, nested: false, originTs: null, maxDurationMs: 0, sessionLabel: null })
 
 const emit = defineEmits<{
   /** The user wants the raw `attrs` for one event_ref — the primary event by default, or a specific source from the "N sources" list. */
@@ -54,6 +63,7 @@ const primaryEventRef = computed(() => props.item.events[0]!.event_ref)
 /** The row's distinguishing detail (tool_name or model — see module doc on `rowDetail`) — `null` renders nothing, never a fake subject. */
 const detail = computed(() => rowDetail(props.item))
 const barScale = computed(() => durationBarScale(props.item.duration_ms, props.maxDurationMs))
+const totalTokens = computed(() => (props.item.tokens ? props.item.tokens.input + props.item.tokens.output : null))
 
 function openPrimary() {
   emit('open', primaryEventRef.value)
@@ -91,6 +101,14 @@ function openEvent(eventRef: string) {
       aria-hidden="true"
     />
 
+    <!-- Session identity column — only a multi-session view (the live firehose) supplies this; a single-session timeline renders no column at all. -->
+    <span
+      v-if="sessionLabel"
+      class="text-muted-foreground w-28 shrink-0 truncate font-mono text-xs"
+      data-testid="event-row-session"
+      :title="sessionLabel"
+    >{{ sessionLabel }}</span>
+
     <!-- Left cluster: identity — label, detail chip, decision pill, skew flag. Truncates before the right-hand metrics ever do. -->
     <div class="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
       <span class="text-foreground shrink-0 font-medium">{{ meta.label }}</span>
@@ -125,6 +143,15 @@ function openEvent(eventRef: string) {
       the list"). The offset leads with its varying digits (round-5: relative
       to the first loaded event, not a repeated absolute date — round-4's
       gap) with the absolute timestamp demoted to a hover/inspector detail.
+
+      Every column slot below is now unconditionally rendered — round-5
+      critic gap (live feed): a `v-if` that dropped the whole width-N span
+      whenever a row had no cost/tokens made the *other* columns slide
+      left/right depending on which fields a given row kind happened to
+      carry, so the same duration value landed at different x-offsets on
+      different rows. Each formatter already renders `EM_DASH` for a
+      null/absent value (SPEC §6.1), so the fix is simply to let it, rather
+      than removing the slot's reserved width.
     -->
     <div class="text-muted-foreground flex shrink-0 items-center gap-3 text-xs">
       <span
@@ -152,19 +179,19 @@ function openEvent(eventRef: string) {
           />
         </span>
         <span
-          v-if="item.duration_ms !== null"
           class="tabular-nums"
+          data-testid="event-row-duration"
         >{{ formatDuration(item.duration_ms) }}</span>
       </span>
 
       <span
-        v-if="item.cost !== null"
         class="text-cost w-14 text-right tabular-nums"
+        data-testid="event-row-cost"
       >{{ formatCost(item.cost) }}</span>
       <span
-        v-if="item.tokens"
         class="w-14 text-right tabular-nums"
-      >{{ formatTokens(item.tokens.input + item.tokens.output) }} tok</span>
+        data-testid="event-row-tokens"
+      >{{ totalTokens !== null ? `${formatTokens(totalTokens)} tok` : EM_DASH }}</span>
     </div>
 
     <Popover v-if="hasMultipleSources">

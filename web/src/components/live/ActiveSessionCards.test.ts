@@ -68,4 +68,69 @@ describe('ActiveSessionCards', () => {
     const link = wrapper.get('[data-testid="active-session-card-follow"]')
     expect(link.attributes('href')).toBe(`/sessions/${firstSession.id}?live=1`)
   })
+
+  // Round-5 critic gap: "the active-session card renders no session identity at all
+  // (empty title row above 'Follow')". The heading now carries the same identity block
+  // SessionRow/SessionDetailView already establish: status, project, vendor, short id,
+  // started/last-event.
+  it('renders the identity heading — status dot, project, vendor, short id, started/last-event', async () => {
+    const wrapper = await mountCards({ sessions: [firstSession], events: [] })
+    const card = wrapper.get('[data-testid="active-session-card"]')
+
+    expect(card.find('[data-testid="status-dot"]').exists()).toBe(true)
+    expect(card.get('[data-testid="active-session-card-title"]').text()).toBe(firstSession.project)
+    expect(card.text()).toContain(firstSession.vendor)
+    expect(card.get('[data-testid="active-session-card-short-id"]').text()).toBe(firstSession.id.slice(0, 8))
+    expect(card.text()).toContain('Started')
+    expect(card.text()).toContain('Last event')
+  })
+
+  // D-31 widened `StreamSessionFrame` to the full `SessionSummary`, so `project` is genuinely
+  // wired end to end — but it is only ever populated from a hook session.start/cwd_changed event
+  // (server/internal/store/postgres/upsert_session.go), so a session still active on other
+  // transports can legitimately arrive with `project: ''`. That must render an honest placeholder,
+  // never blank space (the exact symptom the critic pixel-verified).
+  it('a session with no project signal yet (project: "") shows a placeholder, never a blank title', async () => {
+    const noProjectYet = { ...firstSession, project: '' }
+    const wrapper = await mountCards({ sessions: [noProjectYet], events: [] })
+    const title = wrapper.get('[data-testid="active-session-card-title"]')
+
+    expect(title.text().trim()).not.toBe('')
+    expect(title.text()).toContain('Unknown project')
+  })
+
+  it('the "follow" affordance renders as a button, not a bare link', async () => {
+    const wrapper = await mountCards({ sessions: [firstSession], events: [] })
+    const follow = wrapper.get('[data-testid="active-session-card-follow"]')
+    expect(follow.attributes('data-slot')).toBe('button')
+  })
+
+  describe('grid stretch', () => {
+    function gridClasses(wrapper: Awaited<ReturnType<typeof mountCards>>): string[] {
+      return wrapper.get('[data-testid="active-session-cards"] > div').classes()
+    }
+
+    it('a single active session gets a single-column grid (stretches to fill the row)', async () => {
+      const wrapper = await mountCards({ sessions: [firstSession], events: [] })
+      const classes = gridClasses(wrapper)
+      expect(classes).toContain('grid-cols-1')
+      expect(classes).not.toContain('sm:grid-cols-2')
+      expect(classes).not.toContain('lg:grid-cols-3')
+    })
+
+    it('two active sessions get a two-column grid, not the three-column layout', async () => {
+      const wrapper = await mountCards({ sessions: [firstSession, secondSessionSummary], events: [] })
+      const classes = gridClasses(wrapper)
+      expect(classes).toContain('sm:grid-cols-2')
+      expect(classes).not.toContain('lg:grid-cols-3')
+    })
+
+    it('three or more active sessions keep the responsive 1/2/3-column layout', async () => {
+      const third = { ...firstSession, id: 'third-session-id' }
+      const wrapper = await mountCards({ sessions: [firstSession, secondSessionSummary, third], events: [] })
+      const classes = gridClasses(wrapper)
+      expect(classes).toContain('sm:grid-cols-2')
+      expect(classes).toContain('lg:grid-cols-3')
+    })
+  })
 })

@@ -91,6 +91,16 @@ const exporters = computed(() => [
   { key: 'hooks', label: 'Hooks', seen: props.hooksSeen },
   { key: 'tool-details', label: 'Tool details', seen: props.toolDetailsSeen },
 ])
+
+/**
+ * Round-5 critic gap: every other tile in this strip leads with one
+ * semibold `text-sm` value on its own baseline; this cell instead opened
+ * straight into a wrapped row of 4 chips, breaking the strip's shared value
+ * baseline. A "seen/total" count now fills that same slot, with the chips
+ * kept below as the detail — same information, same scan rhythm as
+ * queue depth/ingest lag/dropped.
+ */
+const exportersSeenCount = computed(() => exporters.value.filter((e) => e.seen).length)
 </script>
 
 <template>
@@ -250,6 +260,12 @@ const exporters = computed(() => [
     >
       <p class="text-muted-foreground text-[0.6875rem]">
         Exporters seen
+      </p>
+      <p
+        class="text-sm leading-tight font-semibold tabular-nums"
+        data-testid="health-strip-exporters-value"
+      >
+        {{ exportersSeenCount }}/{{ exporters.length }}
       </p>
       <ul class="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs">
         <li

@@ -13,7 +13,7 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { ArrowUp, Pause, Play } from '@lucide/vue'
 
-import type { TimelineEvent } from '@/stores/live'
+import type { SessionSummary, TimelineEvent } from '@/stores/live'
 import { collapseEvents, type TimelineItem } from '@/lib/collapseEvents'
 import { ALL_KINDS, eventKindMeta, type Kind } from '@/lib/eventKinds'
 import { formatCount } from '@/lib/format'
@@ -28,13 +28,40 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 interface Props {
   /** Chronological (oldest-first) events to render — same convention as `liveStore.events`; never mutated here. */
   events: TimelineEvent[]
+  /**
+   * `liveStore.sessions.values()` — read only to resolve each row's compact
+   * "project · shortId" identity column (round-5 critic gap: "it's a
+   * fleet-wide firehose", every row needs to say whose session it is).
+   * Defaults to empty so a caller that doesn't track sessions (e.g. a plain
+   * fixture-driven test) still gets a valid feed, just falling back to
+   * short-id-only labels.
+   */
+  sessions?: SessionSummary[]
   /** `liveStore.paused` — see the "freeze" doc below for why this component enforces the freeze itself rather than trusting the host not to update `events` while paused. */
   paused: boolean
   /** `liveStore.bufferedWhilePaused` — shown on the resume badge. */
   bufferedCount: number
 }
 
-const props = defineProps<Props>()
+const props = withDefaults(defineProps<Props>(), { sessions: () => [] })
+
+/**
+ * Keyed by `session_id` so each row can resolve "project · shortId" without
+ * a linear scan per row. `project` can legitimately be empty (a session
+ * still waiting on its hook `session.start`/`workspace.cwd_changed` event —
+ * see `lib/nullReasons.ts`'s `NO_PROJECT_SIGNAL_YET`), in which case the
+ * label falls back to the short id alone rather than rendering a bare "·".
+ * A session this tab has never received a `session` frame for (e.g. it
+ * ended and aged out before this tab connected) gets the same short-id-only
+ * fallback — never a fabricated project name.
+ */
+const sessionsById = computed(() => new Map(props.sessions.map((s) => [s.id, s])))
+
+function sessionLabel(item: TimelineItem): string {
+  const shortId = item.session_id.slice(0, 8)
+  const project = sessionsById.value.get(item.session_id)?.project
+  return project ? `${project} · ${shortId}` : shortId
+}
 
 const emit = defineEmits<{
   /** The user clicked Pause/Resume — the host owns the actual store call (`liveStore.pause()`/`resume()`), since pausing is a store-wide effect (it also freezes `ActiveSessionCards`' "current tool" derivation, which reads the same ring buffer), not something this component can do to itself. */
@@ -283,6 +310,7 @@ function onRowOpen(eventRef: string): void {
         :item="item"
         :selected="item.key === selectedEventRef"
         :max-duration-ms="maxDurationMs"
+        :session-label="sessionLabel(item)"
         @open="onRowOpen"
       />
     </div>

@@ -98,13 +98,19 @@ function onResume(): void {
       :tool-details-seen="meta.toolDetailsSeen"
     />
 
-    <ActiveSessionCards
-      :sessions="activeSessions"
-      :events="live.events"
-    />
+    <section class="flex flex-col gap-2">
+      <h2 class="text-lg font-medium">
+        Active sessions
+      </h2>
+      <ActiveSessionCards
+        :sessions="activeSessions"
+        :events="live.events"
+      />
+    </section>
 
     <LiveFeed
       :events="live.events"
+      :sessions="activeSessions"
       :paused="live.paused"
       :buffered-count="live.bufferedWhilePaused"
       @pause="onPause"

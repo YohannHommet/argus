@@ -19,3 +19,14 @@ export const NOT_MEASURED = 'Not measured'
  * API doesn't expose this yet".
  */
 export const NOT_EXPOSED_BY_API = "Not exposed by Argus's read API yet"
+/**
+ * `SessionSummary.project`/`cwd` are only ever populated from a hook-sourced
+ * `session.start` or `workspace.cwd_changed` event (SPEC §1.5.3 — an
+ * otel_log candidate is explicitly excluded from this field). A session
+ * that is already `active` on other transports (otel logs/metrics arrived
+ * first) can legitimately still carry `project: ''` until that hook event
+ * lands — this is the same underlying gap `SessionDetail.partial` names,
+ * not a wiring bug, so it gets a reason rather than blank space.
+ */
+export const NO_PROJECT_SIGNAL_YET =
+  'No session.start or workspace.cwd_changed hook event has been observed yet for this session (SPEC §1.5.3) — project is not yet known'

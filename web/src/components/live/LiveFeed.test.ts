@@ -3,11 +3,14 @@ import { createPinia, setActivePinia } from 'pinia'
 import { nextTick } from 'vue'
 import { beforeEach, describe, expect, it } from 'vitest'
 
-import { makeTimelineEvent } from '@/test/fixtures.extra'
+import { listSessions200Default } from '@/test/fixtures'
+import { makeTimelineEvent, secondSessionSummary } from '@/test/fixtures.extra'
 import type { TimelineEvent } from '@/stores/live'
 import { Select } from '@/components/ui/select'
 import EventDetailSheet from '@/components/timeline/EventDetailSheet.vue'
 import LiveFeed from './LiveFeed.vue'
+
+const firstSession = listSessions200Default.data[0]!
 
 /**
  * `n` fixture events, chronological (oldest-first, matching `liveStore.events`'s own convention),
@@ -144,6 +147,74 @@ describe('LiveFeed', () => {
     const sheet = wrapper.findComponent(EventDetailSheet)
     expect(sheet.props('eventRef')).toBe('ref-abc')
     expect(sheet.props('open')).toBe(true)
+  })
+
+  // Round-5 critic gap: "it's a fleet-wide firehose" — a row must say whose session it is, since
+  // (unlike the single-session timeline this same EventRow also renders) many sessions interleave.
+  describe('session identity column', () => {
+    it('shows "project · shortId" when the sessions prop resolves that session_id', () => {
+      const events = [makeTimelineEvent({ session_id: firstSession.id })]
+      const wrapper = mount(LiveFeed, { props: { events, sessions: [firstSession], paused: false, bufferedCount: 0 } })
+
+      expect(wrapper.get('[data-testid="event-row-session"]').text()).toBe(`${firstSession.project} · ${firstSession.id.slice(0, 8)}`)
+    })
+
+    it('falls back to the short id alone when no session summary is known for that session_id yet', () => {
+      const events = [makeTimelineEvent({ session_id: 'unresolved-session-id-0001' })]
+      const wrapper = mount(LiveFeed, { props: { events, sessions: [], paused: false, bufferedCount: 0 } })
+
+      expect(wrapper.get('[data-testid="event-row-session"]').text()).toBe('unresolved-session-id-0001'.slice(0, 8))
+    })
+
+    it('falls back to the short id alone when the known session has no project signal yet (project: "")', () => {
+      const noProjectYet = { ...firstSession, project: '' }
+      const events = [makeTimelineEvent({ session_id: noProjectYet.id })]
+      const wrapper = mount(LiveFeed, { props: { events, sessions: [noProjectYet], paused: false, bufferedCount: 0 } })
+
+      expect(wrapper.get('[data-testid="event-row-session"]').text()).toBe(noProjectYet.id.slice(0, 8))
+    })
+
+    it('distinguishes two interleaved sessions on the same feed', () => {
+      const events = [
+        makeTimelineEvent({ session_id: firstSession.id }),
+        makeTimelineEvent({ session_id: secondSessionSummary.id }),
+      ]
+      const wrapper = mount(LiveFeed, { props: { events, sessions: [firstSession, secondSessionSummary], paused: false, bufferedCount: 0 } })
+      const labels = wrapper.findAll('[data-testid="event-row-session"]').map((el) => el.text())
+
+      // Reverse-chronological render order (LiveFeed's own convention): the second event renders first.
+      expect(labels).toEqual([
+        `${secondSessionSummary.project} · ${secondSessionSummary.id.slice(0, 8)}`,
+        `${firstSession.project} · ${firstSession.id.slice(0, 8)}`,
+      ])
+    })
+  })
+
+  // Round-5 critic gap: "two identical '3.4s' landed 136px apart" — a row's fixed metric columns
+  // (offset/duration/cost/tokens) must reserve their width even when a given row kind carries no
+  // cost/tokens, or the columns after the gap slide into different x-offsets across row kinds.
+  it('renders the same set of fixed metric columns whether or not a row carries cost/tokens', () => {
+    const events = [
+      makeTimelineEvent({ kind: 'tool.result', cost: null, tokens: null, duration_ms: 3400 }),
+      makeTimelineEvent({ kind: 'llm.request', cost: 0.02, tokens: { input: 6000, output: 100, cache_read: 0, cache_creation: 0 }, duration_ms: 3400 }),
+    ]
+    const wrapper = mount(LiveFeed, { props: { events, paused: false, bufferedCount: 0 } })
+    const rows = wrapper.findAll('[data-testid="event-row"]')
+    expect(rows).toHaveLength(2)
+
+    for (const row of rows) {
+      expect(row.find('[data-testid="event-row-offset"]').exists()).toBe(true)
+      expect(row.find('[data-testid="event-row-duration"]').exists()).toBe(true)
+      expect(row.find('[data-testid="event-row-cost"]').exists()).toBe(true)
+      expect(row.find('[data-testid="event-row-tokens"]').exists()).toBe(true)
+    }
+
+    // The no-cost/no-tokens row (rendered second, oldest-first input reversed to newest-first) still
+    // shows the shared duration value in the same column — never dropped, never shifted.
+    const noCostRow = rows[1]!
+    expect(noCostRow.get('[data-testid="event-row-duration"]').text()).toBe('3.4s')
+    expect(noCostRow.get('[data-testid="event-row-cost"]').text()).toBe('—')
+    expect(noCostRow.get('[data-testid="event-row-tokens"]').text()).toBe('—')
   })
 })
 
