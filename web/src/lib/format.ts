@@ -158,6 +158,57 @@ export function formatAbsoluteTime(
   return new Intl.DateTimeFormat('en-US', opts).format(date)
 }
 
+/**
+ * Elapsed-time ladder for `formatRelativeOffset`, deliberately distinct from
+ * `formatDuration`'s: that one drops to minute (hour range) or hour (day
+ * range) resolution once the magnitude is big enough, which is the right
+ * call for a single measured span but wrong for an *offset* — two timeline
+ * rows seconds apart can land days into a session (real capture: a session
+ * whose `started_at` sits ~11 days after its own earliest events), and
+ * `formatDuration` would render both "+11d 01h", indistinguishable, which
+ * is the exact "repeated value eats the row" bug this offset exists to fix.
+ * This ladder always resolves down to whole seconds, however large the
+ * magnitude, so consecutive rows never collapse onto the same label.
+ */
+function formatElapsed(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)}ms`
+
+  const totalSeconds = ms / 1000
+  if (totalSeconds < 60) return `${trimTrailingZero(totalSeconds.toFixed(1))}s`
+
+  const totalSecondsInt = Math.floor(totalSeconds)
+  const seconds = totalSecondsInt % 60
+  const totalMinutes = Math.floor(totalSecondsInt / 60)
+  if (totalMinutes < 60) return `${totalMinutes}m ${String(seconds).padStart(2, '0')}s`
+
+  const minutes = totalMinutes % 60
+  const totalHours = Math.floor(totalMinutes / 60)
+  if (totalHours < 24) return `${totalHours}h ${String(minutes).padStart(2, '0')}m ${String(seconds).padStart(2, '0')}s`
+
+  const hours = totalHours % 24
+  const days = Math.floor(totalHours / 24)
+  return `${days}d ${String(hours).padStart(2, '0')}h ${String(minutes).padStart(2, '0')}m ${String(seconds).padStart(2, '0')}s`
+}
+
+/**
+ * `"+2m 14s"` — an event's timestamp expressed as an offset from the
+ * session's own start (`session.started_at`), not wall-clock "now"
+ * (`formatRelativeTime` above is for that). Round-4 critic gap: a column of
+ * timeline rows each repeating the same absolute date is unscannable; an
+ * offset from a shared origin is. `EM_DASH` when either timestamp is
+ * missing/unparseable — never a fabricated `"+0s"` for a session with no
+ * known start (SPEC's partial-session case).
+ */
+export function formatRelativeOffset(iso: string | null | undefined, sessionStartIso: string | null | undefined): string {
+  if (!iso || !sessionStartIso) return EM_DASH
+  const date = new Date(iso)
+  const start = new Date(sessionStartIso)
+  if (Number.isNaN(date.getTime()) || Number.isNaN(start.getTime())) return EM_DASH
+  const deltaMs = date.getTime() - start.getTime()
+  const sign = deltaMs < 0 ? '-' : '+'
+  return `${sign}${formatElapsed(Math.abs(deltaMs))}`
+}
+
 /** `0.0412` -> `4.1%`. */
 export function formatPercent(fraction: Numeric, digits = 1): string {
   if (!isFiniteNumber(fraction)) return EM_DASH

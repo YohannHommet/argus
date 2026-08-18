@@ -29,6 +29,13 @@
  * N" header — Timeline.vue's grouping is an honest contiguous-run split
  * (module doc there), which is correct but, unlabelled, reads as a bug
  * ("Turn 0" appearing twice — round-3 critic gap).
+ *
+ * The header renders on `bg-muted` (round-4 critic gap: at `bg-background/95`
+ * it sat within ~12 luminance levels of both the page and the rows under
+ * it, so groups didn't read as grouped). `--muted` is a distinct, lighter
+ * surface token from `--background`/`--card` in both themes (see
+ * `theme.css`), so this reuses the design system's own surface ladder
+ * rather than inventing a one-off shade.
  */
 import { computed } from 'vue'
 import { ChevronDown, ChevronRight, ListTree, MessageSquare } from '@lucide/vue'
@@ -53,6 +60,10 @@ interface Props {
   isContinuation?: boolean
   /** The currently-open inspector's event_ref, for highlighting the selected row (SPEC/critic: "row selection state must be visible"). */
   selectedEventRef?: string | null
+  /** The session's `started_at`, forwarded to every `EventRow` for its relative-offset display — see `EventRow`'s own doc. */
+  sessionStartedAt?: string | null
+  /** The session's largest observed `duration_ms`, forwarded to every `EventRow` for its duration bar's scale. */
+  maxDurationMs?: number
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -61,6 +72,8 @@ const props = withDefaults(defineProps<Props>(), {
   collapsed: false,
   isContinuation: false,
   selectedEventRef: null,
+  sessionStartedAt: null,
+  maxDurationMs: 0,
 })
 
 const emit = defineEmits<{ open: [eventRef: string]; 'toggle-collapse': [] }>()
@@ -109,7 +122,7 @@ function isSelected(item: TimelineItem): boolean {
 <template>
   <section data-testid="timeline-group">
     <header
-      class="bg-background/95 border-border sticky top-0 z-10 flex cursor-pointer items-center gap-2 border-b backdrop-blur"
+      class="bg-muted/95 border-border sticky top-0 z-10 flex cursor-pointer items-center gap-2 border-b backdrop-blur"
       :class="isCompactSingleton ? 'px-3 py-1' : 'px-3 py-1.5'"
       data-testid="timeline-group-header"
       role="button"
@@ -189,6 +202,8 @@ function isSelected(item: TimelineItem): boolean {
           :item="node.item"
           :correlation="correlationFor(node.item)"
           :selected="isSelected(node.item)"
+          :session-started-at="sessionStartedAt"
+          :max-duration-ms="maxDurationMs"
           @open="emit('open', $event)"
         />
         <template v-else>
@@ -196,6 +211,8 @@ function isSelected(item: TimelineItem): boolean {
             :item="displayItem(node.thread.primary, node.thread.display)"
             :correlation="correlationFor(node.thread.primary)"
             :selected="isSelected(node.thread.primary)"
+            :session-started-at="sessionStartedAt"
+            :max-duration-ms="maxDurationMs"
             @open="emit('open', $event)"
           />
           <div
@@ -208,6 +225,8 @@ function isSelected(item: TimelineItem): boolean {
               :item="child"
               :correlation="correlationFor(child)"
               :selected="isSelected(child)"
+              :session-started-at="sessionStartedAt"
+              :max-duration-ms="maxDurationMs"
               nested
               @open="emit('open', $event)"
             />

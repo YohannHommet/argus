@@ -54,6 +54,8 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { type TimelineItem, collapseEvents } from '@/lib/collapseEvents'
 import { eventKindMeta } from '@/lib/eventKinds'
 import type { Kind } from '@/lib/eventKinds'
+import { formatDuration } from '@/lib/format'
+import { maxDuration } from '@/lib/timelineDisplay'
 import { useSessionDetailStore } from '@/stores/sessionDetail'
 import EmptyState from '@/components/common/EmptyState.vue'
 import ErrorState from '@/components/common/ErrorState.vue'
@@ -70,6 +72,15 @@ const store = useSessionDetailStore()
 const collapseEnabled = ref(true)
 
 const items = computed<TimelineItem[]>(() => collapseEvents(store.timelineItems, { collapse: collapseEnabled.value }))
+
+/**
+ * The shared duration-bar scale (round-4 critic ask) — computed over the
+ * currently loaded/collapsed items, not the whole session's history the
+ * server may hold: the bar is meant to make *this view* scannable, and a
+ * scale drawn from pages not yet loaded would silently shrink as more pages
+ * arrive, which is worse than a scale that's honest about what's on screen.
+ */
+const maxDurationMs = computed(() => maxDuration(items.value))
 
 interface Group {
   /** Stable across re-renders: the group's anchor (first) item's key — unique even when two runs share the same `promptId` (see module doc). */
@@ -263,7 +274,22 @@ watch(
         {{ eventKindMeta(kind).label }}
       </Badge>
 
-      <label class="ml-auto flex items-center gap-2 text-xs">
+      <!--
+        Labels the per-row duration bar's scale (round-4 critic ask: "label
+        the scale") — only rendered once something has a measured duration
+        to scale against, so a session with none doesn't show a legend for a
+        feature that isn't drawing anything.
+      -->
+      <span
+        v-if="maxDurationMs > 0"
+        class="text-muted-foreground ml-auto text-xs"
+        data-testid="timeline-duration-scale-note"
+      >Duration bar: log scale, max {{ formatDuration(maxDurationMs) }}</span>
+
+      <label
+        class="flex items-center gap-2 text-xs"
+        :class="{ 'ml-auto': maxDurationMs === 0 }"
+      >
         <span class="text-muted-foreground">Collapse</span>
         <Switch
           :model-value="collapseEnabled"
@@ -319,6 +345,8 @@ watch(
           :collapsed="isGroupCollapsed(group.id)"
           :is-continuation="group.isContinuation"
           :selected-event-ref="selectedEventRef"
+          :session-started-at="store.session?.started_at ?? null"
+          :max-duration-ms="maxDurationMs"
           @toggle-collapse="toggleGroup(group.id)"
           @open="openDetail"
         />

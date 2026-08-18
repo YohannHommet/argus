@@ -12,7 +12,8 @@ import { AlertTriangle } from '@lucide/vue'
 
 import type { TimelineItem } from '@/lib/collapseEvents'
 import { eventKindMeta } from '@/lib/eventKinds'
-import { formatAbsoluteTime, formatCost, formatDuration, formatTokens } from '@/lib/format'
+import { formatAbsoluteTime, formatCost, formatDuration, formatRelativeOffset, formatTokens } from '@/lib/format'
+import { durationBarScale, rowDetail } from '@/lib/timelineDisplay'
 import { Badge } from '@/components/ui/badge'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import DecisionBadge, { type Correlation } from './DecisionBadge.vue'
@@ -25,9 +26,20 @@ interface Props {
   selected?: boolean
   /** True for a tool-thread child (tool.decision/tool.permission_request/tool.result nested under its tool.pre call, see TimelineGroup's `buildToolThreads` usage) — renders slightly smaller/quieter than a top-level row, since the thread's own rail already shows the nesting. */
   nested?: boolean
+  /**
+   * The session's own `started_at` (SPEC §1.7 — `null` for a partial
+   * session) — the origin `item.ts` is offset against (round-4 critic gap:
+   * repeating the same absolute date down a whole column of rows is
+   * unscannable; a relative offset from a shared start is). The absolute
+   * timestamp still lives in the row's tooltip and the inspector, never
+   * discarded, just no longer the thing eating the row.
+   */
+  sessionStartedAt?: string | null
+  /** The session's largest observed `duration_ms`, for scaling this row's duration bar — see `durationBarScale`. `0`/absent renders no bar. */
+  maxDurationMs?: number
 }
 
-const props = withDefaults(defineProps<Props>(), { correlation: null, selected: false, nested: false })
+const props = withDefaults(defineProps<Props>(), { correlation: null, selected: false, nested: false, sessionStartedAt: null, maxDurationMs: 0 })
 
 const emit = defineEmits<{
   /** The user wants the raw `attrs` for one event_ref — the primary event by default, or a specific source from the "N sources" list. */
@@ -37,6 +49,9 @@ const emit = defineEmits<{
 const meta = computed(() => eventKindMeta(props.item.kind))
 const hasMultipleSources = computed(() => props.item.events.length > 1)
 const primaryEventRef = computed(() => props.item.events[0]!.event_ref)
+/** The row's distinguishing detail (tool_name or model — see module doc on `rowDetail`) — `null` renders nothing, never a fake subject. */
+const detail = computed(() => rowDetail(props.item))
+const barScale = computed(() => durationBarScale(props.item.duration_ms, props.maxDurationMs))
 
 function openPrimary() {
   emit('open', primaryEventRef.value)
@@ -70,9 +85,10 @@ function openEvent(eventRef: string) {
       <div class="flex flex-wrap items-center gap-2">
         <span class="text-foreground font-medium">{{ meta.label }}</span>
         <span
-          v-if="item.tool_name"
+          v-if="detail"
           class="text-muted-foreground font-mono text-xs"
-        >{{ item.tool_name }}</span>
+          data-testid="event-row-detail"
+        >{{ detail }}</span>
         <DecisionBadge
           v-if="item.decision !== null"
           :decision="item.decision"
@@ -87,7 +103,15 @@ function openEvent(eventRef: string) {
         />
       </div>
       <div class="text-muted-foreground mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs">
-        <span>{{ formatAbsoluteTime(item.ts) }}</span>
+        <!--
+          Relative offset from session start, not a repeated absolute date
+          (round-4 critic gap) — the absolute timestamp is one hover (this
+          title) or one click (the inspector) away, never discarded.
+        -->
+        <span
+          data-testid="event-row-offset"
+          :title="formatAbsoluteTime(item.ts)"
+        >{{ formatRelativeOffset(item.ts, sessionStartedAt) }}</span>
         <span v-if="item.duration_ms !== null">{{ formatDuration(item.duration_ms) }}</span>
         <span
           v-if="item.cost !== null"
@@ -95,6 +119,23 @@ function openEvent(eventRef: string) {
         >{{ formatCost(item.cost) }}</span>
         <span v-if="item.tokens">{{ formatTokens(item.tokens.input + item.tokens.output) }} tok</span>
         <span v-if="item.file_path">{{ item.file_path }}</span>
+      </div>
+      <!--
+        Slim duration bar, scaled (log) against the session's max observed
+        duration — round-4 critic ask, "so the tree is scannable without
+        clicking". Subtle by design: a 1px track + a filled segment, not a
+        chart component competing with the row's text for attention.
+      -->
+      <div
+        v-if="item.duration_ms !== null && maxDurationMs > 0"
+        class="bg-border/40 mt-1 h-[3px] w-16 shrink-0 overflow-hidden rounded-full"
+        data-testid="event-row-duration-bar"
+        role="presentation"
+      >
+        <div
+          class="bg-muted-foreground/60 h-full rounded-full"
+          :style="{ width: `${barScale}%` }"
+        />
       </div>
     </div>
 
