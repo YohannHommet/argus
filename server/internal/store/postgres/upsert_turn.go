@@ -21,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/YohannHommet/argus/server/internal/model"
+	"github.com/YohannHommet/argus/server/internal/pricing"
 )
 
 // turnKey identifies one turns row (SPEC §2.1 PRIMARY KEY (session_id, prompt_id)).
@@ -47,8 +48,10 @@ func newTurnAgg(key turnKey) *turnAgg {
 
 // foldTurnEvents groups persisted candidate events carrying a non-nil
 // PromptID by (session_id, prompt_id) — stub-on-reference (SPEC §1.7 rule
-// 1): "the same for turns when prompt_id is present."
-func foldTurnEvents(candidates []model.Event) map[turnKey]*turnAgg {
+// 1): "the same for turns when prompt_id is present." prices is WriteBatch's
+// SPEC §2.4 price table for this transaction — nil when no candidate needs
+// it (see write.go's doc on why loading it is conditional).
+func foldTurnEvents(candidates []model.Event, prices []pricing.Price) map[turnKey]*turnAgg {
 	out := map[turnKey]*turnAgg{}
 	for _, e := range candidates {
 		if e.PromptID == nil || *e.PromptID == "" {
@@ -61,12 +64,12 @@ func foldTurnEvents(candidates []model.Event) map[turnKey]*turnAgg {
 			agg.firstSeen, agg.lastEvent = e.TS, e.TS
 			out[key] = agg
 		}
-		agg.foldEvent(e)
+		agg.foldEvent(e, prices)
 	}
 	return out
 }
 
-func (a *turnAgg) foldEvent(e model.Event) {
+func (a *turnAgg) foldEvent(e model.Event, prices []pricing.Price) {
 	if e.TS.Before(a.firstSeen) {
 		a.firstSeen = e.TS
 	}
@@ -103,11 +106,29 @@ func (a *turnAgg) foldEvent(e model.Event) {
 		if e.CacheCreationTokens != nil {
 			a.cacheCreate += *e.CacheCreationTokens
 		}
-		if e.CostUSD != nil {
-			if e.CostSource != nil && *e.CostSource == "estimated" {
-				a.costEstimatedUSD += *e.CostUSD
-			} else {
-				a.costUSD += *e.CostUSD
+		// D-30 (docs/review/phase-4-gauntlet.md, owner-ratified 2026-08-18):
+		// branch on e.CostUSD, not e.CostSource — see upsert_session.go's
+		// identical fold for the full reasoning (this is its exact twin,
+		// per this file's package doc).
+		switch {
+		case e.CostUSD != nil:
+			a.costUSD += *e.CostUSD
+		case e.Model != nil && *e.Model != "":
+			tokens := costTokens{}
+			if e.InputTokens != nil {
+				tokens.input = *e.InputTokens
+			}
+			if e.OutputTokens != nil {
+				tokens.output = *e.OutputTokens
+			}
+			if e.CacheReadTokens != nil {
+				tokens.cacheRead = *e.CacheReadTokens
+			}
+			if e.CacheCreationTokens != nil {
+				tokens.cacheWrite = *e.CacheCreationTokens
+			}
+			if usd, ok := estimateCost(prices, *e.Model, tokens, e.TS); ok {
+				a.costEstimatedUSD += usd
 			}
 		}
 		if e.Model != nil && *e.Model != "" {

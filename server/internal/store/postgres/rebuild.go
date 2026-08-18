@@ -428,8 +428,19 @@ func (s *Store) replayPage(ctx context.Context, events []model.Event) error {
 	}
 	defer func() { _ = tx.Rollback(ctx) }() // no-op after a successful Commit
 
-	sessionAggs := foldSessionEvents(events)
-	turnAggs := foldTurnEvents(events)
+	// D-30 (docs/review/phase-4-gauntlet.md): a rebuild must reproduce
+	// exactly what WriteBatch would have produced (this file's package doc:
+	// "the 'rebuild produces identical rows' guarantee"), so it needs the
+	// same conditional price load WriteBatch's own D-30 fix uses
+	// (write.go's loadPricesIfNeeded) — skipping it here would silently
+	// zero out cost_estimated_usd on every rebuild, reintroducing the exact
+	// defect this ticket fixes.
+	prices, err := loadPricesIfNeeded(ctx, tx, events)
+	if err != nil {
+		return err
+	}
+	sessionAggs := foldSessionEvents(events, prices)
+	turnAggs := foldTurnEvents(events, prices)
 
 	if _, err := upsertSessions(ctx, tx, sessionAggs); err != nil {
 		return err

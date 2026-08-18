@@ -78,7 +78,9 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/YohannHommet/argus/server/internal/model"
+	"github.com/YohannHommet/argus/server/internal/pricing"
 	"github.com/YohannHommet/argus/server/internal/store"
+	"github.com/YohannHommet/argus/server/internal/store/postgres/gen"
 )
 
 // WriteBatch implements store.Writer (SPEC §1.6/§1.7/§3.3). See this file's
@@ -160,8 +162,12 @@ func (s *Store) WriteBatch(ctx context.Context, b []model.Event) (store.BatchRes
 		return result, nil
 	}
 
-	sessionAggs := foldSessionEvents(candidates)
-	turnAggs := foldTurnEvents(candidates)
+	prices, err := loadPricesIfNeeded(ctx, tx, candidates)
+	if err != nil {
+		return store.BatchResult{}, err
+	}
+	sessionAggs := foldSessionEvents(candidates, prices)
+	turnAggs := foldTurnEvents(candidates, prices)
 
 	sessionResults, err := upsertSessions(ctx, tx, sessionAggs)
 	if err != nil {
@@ -244,6 +250,50 @@ func (s *Store) WriteBatch(ctx context.Context, b []model.Event) (store.BatchRes
 	})
 	result.EventRefs = refs
 	return result, nil
+}
+
+// loadPricesIfNeeded is D-30's price-loading step (docs/review/
+// phase-4-gauntlet.md, owner-ratified 2026-08-18): sessions/turns'
+// cost_estimated_usd (SPEC §2.4) needs a []pricing.Price to estimate an
+// uncosted llm.request's tokens, the same way the rollup job already does
+// (rollups.go:142-154 — fromModelPrice/toPricingPrices are reused verbatim,
+// not duplicated).
+//
+// The scan-first, load-only-if-needed shape matters for the hot path:
+// Claude Code reports cost_usd on effectively every api_request, so the
+// overwhelmingly common WriteBatch call has zero KindLLMRequest events with
+// CostUSD == nil and must not pay for a model_prices round trip it will
+// throw away. And when a price *is* needed, this reads via tx (the same
+// transaction already inside its Begin/Commit), not s.pool: a pool read
+// nested inside a write transaction would take a second connection out of a
+// 10-connection pool while up to 4 ingest workers are concurrently writing
+// (SPEC §7.2's worker count) — exactly the kind of self-inflicted pool
+// exhaustion a nested s.pool.Query here would risk under load.
+func loadPricesIfNeeded(ctx context.Context, tx pgx.Tx, candidates []model.Event) ([]pricing.Price, error) {
+	needsPricing := false
+	for _, e := range candidates {
+		if e.Kind == model.KindLLMRequest && e.CostUSD == nil {
+			needsPricing = true
+			break
+		}
+	}
+	if !needsPricing {
+		return nil, nil
+	}
+
+	priceRows, err := gen.New(tx).ListModelPrices(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: write batch: list model prices: %w", err)
+	}
+	converted := make([]PriceRow, 0, len(priceRows))
+	for _, p := range priceRows {
+		pp, convErr := fromModelPrice(p)
+		if convErr != nil {
+			return nil, fmt.Errorf("postgres: write batch: model price %s: %w", p.Model, convErr)
+		}
+		converted = append(converted, pp)
+	}
+	return toPricingPrices(converted), nil
 }
 
 // projectChangeInputs adapts upsertSessions's RETURNING rows into the

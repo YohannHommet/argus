@@ -11,6 +11,12 @@ Every number quoted below was measured against a live `docker compose` stack see
 
 ## Deviations needing an owner ruling
 
+**Accepted 2026-08-18** — D-26, D-27, D-28 and D-29 are all ratified as shipped: each one's
+"as shipped" behaviour is the honest reading, and each one's real fix is server work that belongs to
+a later phase, not a Phase-4 patch. D-28's `dropped_total` gains its backing field in Phase 5 (SPEC
+§5.1's `stats` frame), so the `DataQualityView` tile it feeds is expected to light up then; the other
+three stay as recorded until the phase that owns their endpoint touches them.
+
 | ID | Deviation | Evidence | Recommendation |
 |---|---|---|---|
 | D-26 | **The synthetic root subagent node returns a `status` outside its own declared enum.** `openapi.yaml` types `SubagentStatus` as `enum: [running, complete, failed, unknown]` and describes it as "Argus-computed … closed", but the live API returns `"ended"` for the root node — and would equally return `active` or `abandoned`. | `server/internal/store/postgres/subagent_tree.go:124` casts the *session* status (`active\|ended\|abandoned\|unknown`, a different vocabulary) straight into `model.SubagentStatus`. Reproduced live: `GET /api/v1/sessions/{id}/subagents` → root node `"status": "ended"`. P3-09's conformance harness runs over the fake store, which only ever yields in-enum values, so it never saw a real root node. | Map session status → subagent status at the seam (`active→running`, `ended→complete`, `abandoned→failed`, `unknown→unknown`), **or** widen the enum and drop the "closed" claim. Do not leave the spec asserting a closed set the server violates. The UI is already safe either way: P4-05 routes node `status` through `RawValue`, tested against `"ended"` and against an invented value. |

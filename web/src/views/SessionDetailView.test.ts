@@ -103,6 +103,44 @@ describe('SessionDetailView', () => {
     expect(getSubagents).toHaveBeenCalledTimes(1)
   })
 
+  // D-30 (docs/review/phase-4-gauntlet.md): CostAttributionCard's estimated
+  // marker is driven by props the *view* has to pass down from the session
+  // projection — `by_query_source` is reported-cost-only (SPEC §2.1), so the
+  // card cannot derive them from its own `data`. This asserts the wiring, not
+  // the card: with the props unwired the card silently falls back to its
+  // `estimatedUsd: 0` default and renders "$0.00 of $0.00" again, which is
+  // exactly the defect D-30 named and exactly what a component-only test
+  // cannot catch.
+  it('an all-estimated session propagates cost.estimated_* into the cost attribution card', async () => {
+    getSession = vi.fn(() =>
+      okResponse({
+        ...getSession200Default,
+        cost: {
+          usd: 1.5,
+          reported_usd: 0,
+          estimated_usd: 1.5,
+          estimated_share: 1,
+          by_query_source: {},
+          dominant_query_source: '',
+          other_query_source_usd: 0,
+        },
+      }),
+    )
+    getSubagents = vi.fn(() =>
+      okResponse({
+        data: [],
+        cost_attribution: { by_query_source: {}, dominant_query_source: '', other_query_source_usd: 0 },
+      }),
+    )
+
+    const { wrapper } = await mountAt('/sessions/3f7a3b1e-0000-0000-0000-000000000001?tab=subagents')
+
+    expect(wrapper.find('[data-testid="cost-attribution-estimated-notice"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="cost-attribution-estimated-text"]').text()).toContain('$1.50')
+    // The "$0.00 of $0.00" reported-split summary must not also be rendered.
+    expect(wrapper.find('[data-testid="cost-attribution-other-share"]').exists()).toBe(false)
+  })
+
   it('switching to the tools tab updates the URL query and lazily fetches tool calls once', async () => {
     const { router, wrapper } = await mountAt('/sessions/3f7a3b1e-0000-0000-0000-000000000001')
 

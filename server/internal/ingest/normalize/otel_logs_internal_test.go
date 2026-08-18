@@ -7,6 +7,8 @@ import (
 	logspb "go.opentelemetry.io/proto/otlp/logs/v1"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/YohannHommet/argus/server/internal/model"
 )
 
 // TestResolveVendor covers SPEC §1.5.1's vendor resolution: the documented
@@ -83,5 +85,38 @@ func TestResolveTimestamp(t *testing.T) {
 		attrTS := time.Unix(0, int64(nano)).UTC().Add(2 * time.Second).Format(time.RFC3339Nano)
 		_, skewed := resolveTimestamp(rec, map[string]any{"event.timestamp": attrTS})
 		require.False(t, skewed)
+	})
+}
+
+// TestApplyKindMapping_CostSourceOnlyWhenCostKnown pins D-30's normalize-side
+// fix (docs/review/phase-4-gauntlet.md, candidate D-30): an api_request
+// event must never claim cost_source="reported" when cost_usd is NULL. The
+// pre-fix code stamped costSource := "reported" unconditionally, so a
+// --cost-mode=omit event (resolveCostUSD returns nil) landed as
+// {cost_usd: NULL, cost_source: "reported"} — a text column asserting a
+// reported cost that does not exist (SPEC §1.3 types cost_source `text
+// null`). upsert_session.go/upsert_turn.go's estimation branch keys off
+// e.CostUSD, not e.CostSource (belt and braces — see their doc comments),
+// but a wrong cost_source is still a lie on its own and must never be
+// written, regardless of what any projection folder does with it.
+func TestApplyKindMapping_CostSourceOnlyWhenCostKnown(t *testing.T) {
+	t.Parallel()
+
+	t.Run("cost_usd present -> cost_source is reported", func(t *testing.T) {
+		t.Parallel()
+		evt := model.Event{}
+		kind := applyKindMapping("api_request", map[string]any{"cost_usd": float64(0.0042)}, &evt)
+		require.Equal(t, model.KindLLMRequest, kind)
+		require.NotNil(t, evt.CostUSD)
+		require.Equal(t, strp("reported"), evt.CostSource)
+	})
+
+	t.Run("no cost attr at all -> cost_source is nil, not reported", func(t *testing.T) {
+		t.Parallel()
+		evt := model.Event{}
+		kind := applyKindMapping("api_request", map[string]any{}, &evt)
+		require.Equal(t, model.KindLLMRequest, kind)
+		require.Nil(t, evt.CostUSD, "resolveCostUSD must return nil with neither cost_usd nor cost_usd_micros present")
+		require.Nil(t, evt.CostSource, "cost_source must not claim \"reported\" when cost_usd is NULL (SPEC §1.3, D-30)")
 	})
 }

@@ -269,11 +269,20 @@ const hasSessionYet = computed(() => store.session !== null)
               @retry="store.loadSubagents({ force: true })"
             />
           </div>
+          <!--
+            estimated-usd/estimated-share come from the *session* projection,
+            not from `costAttribution`: SPEC §2.1 makes `by_query_source`
+            reported-cost-only, so an all-estimated session has nothing in it
+            to derive an estimate from and the card would otherwise render
+            "$0.00 of $0.00" as though it were measured (D-30).
+          -->
           <CostAttributionCard
             class="shrink-0"
             :data="store.costAttribution"
             :loading="store.subagentsLoading"
             :error="store.subagentsError"
+            :estimated-usd="store.session?.cost.estimated_usd ?? 0"
+            :estimated-share="store.session?.cost.estimated_share ?? 0"
             @retry="store.loadSubagents({ force: true })"
           />
         </div>

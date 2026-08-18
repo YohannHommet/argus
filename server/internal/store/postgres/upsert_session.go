@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/YohannHommet/argus/server/internal/model"
+	"github.com/YohannHommet/argus/server/internal/pricing"
 )
 
 // Source ranks for the field_ranks precedence mechanism (SPEC §1.5.3):
@@ -84,9 +85,21 @@ type sessionAgg struct {
 	appVersion, entrypoint, terminalType, userEmail, userAccountUUID, orgID rankedValue
 
 	inputTokens, outputTokens, cacheRead, cacheCreate int64
-	costUSD, costEstimatedUSD                         float64
-	costByQuerySource                                 map[string]float64
-	models                                            map[string]struct{}
+	// costUSD is reported-only (D-30, docs/review/phase-4-gauntlet.md):
+	// deliberately never includes costEstimatedUSD at this layer, mirroring
+	// the `sessions.cost_usd` column it feeds. That column backs
+	// sessions_cost_idx and is exactly what SPEC §4.3's `sort=cost_usd`
+	// orders by (read_sessions.go's SessionSortCostUSD), so this fix does
+	// NOT close every honesty gap D-30 named: sorting the session list by
+	// cost still ranks an all-estimated session at 0, same as before.
+	// buildSessionCost (read_sessions.go) is what sums reported+estimated
+	// into the wire-level cost.usd this ticket fixes — closing the sort gap
+	// too would need a new sortable column/index and a SPEC §4.3 change,
+	// which is out of this ticket's scope; flagged to the lead as a
+	// deviation to rule on, not silently left for a reader to rediscover.
+	costUSD, costEstimatedUSD float64
+	costByQuerySource         map[string]float64
+	models                    map[string]struct{}
 }
 
 func newSessionAgg(id string) *sessionAgg {
@@ -110,8 +123,10 @@ func attrStr(attrs map[string]any, key string) string {
 // folds each into a sessionAgg, in (ts, dedup_key) order (the same order the
 // caller already sorted candidates into for the lock-ordering invariant), so
 // rankedValue.offer's tie-break ("equal rank ⇒ later ts wins") sees events
-// in a stable, deterministic order.
-func foldSessionEvents(candidates []model.Event) map[string]*sessionAgg {
+// in a stable, deterministic order. prices is WriteBatch's SPEC §2.4 price
+// table for this transaction — nil when no candidate needs it (see
+// write.go's doc on why loading it is conditional).
+func foldSessionEvents(candidates []model.Event, prices []pricing.Price) map[string]*sessionAgg {
 	out := map[string]*sessionAgg{}
 	for _, e := range candidates {
 		agg, ok := out[e.SessionID]
@@ -120,12 +135,12 @@ func foldSessionEvents(candidates []model.Event) map[string]*sessionAgg {
 			agg.firstSeen, agg.lastEvent = e.TS, e.TS
 			out[e.SessionID] = agg
 		}
-		agg.foldEvent(e)
+		agg.foldEvent(e, prices)
 	}
 	return out
 }
 
-func (a *sessionAgg) foldEvent(e model.Event) {
+func (a *sessionAgg) foldEvent(e model.Event, prices []pricing.Price) {
 	if e.TS.Before(a.firstSeen) {
 		a.firstSeen = e.TS
 	}
@@ -196,22 +211,54 @@ func (a *sessionAgg) foldEvent(e model.Event) {
 		if e.CacheCreationTokens != nil {
 			a.cacheCreate += *e.CacheCreationTokens
 		}
-		cost := 0.0
-		if e.CostUSD != nil {
-			cost = *e.CostUSD
+		// D-30 (docs/review/phase-4-gauntlet.md, owner-ratified 2026-08-18):
+		// branch on e.CostUSD, not e.CostSource. Before this fix, this
+		// branched on cost_source=="estimated" — a value nothing in this
+		// codebase ever mints (otel_logs.go stamped "reported"
+		// unconditionally, and no other producer sets "estimated" at all),
+		// so cost_estimated_usd was structurally always 0 regardless of
+		// what internal/pricing could have resolved. Branching on
+		// e.CostUSD instead stays correct no matter what any normalizer
+		// stamps into cost_source (belt and braces with otel_logs.go's own
+		// D-30 fix, which now only ever sets cost_source="reported" when
+		// cost_usd is non-nil).
+		switch {
+		case e.CostUSD != nil:
+			a.costUSD += *e.CostUSD
+			// SPEC §2.1: "map: raw query_source value ('' when absent) ->
+			// summed reported cost. Uninterpreted." This map is
+			// reported-only by design — an estimated contribution must
+			// never widen it (that would be an undocumented SPEC §2.1
+			// deviation).
+			qs := ""
+			if e.QuerySource != nil {
+				qs = *e.QuerySource
+			}
+			a.costByQuerySource[qs] += *e.CostUSD
+		case e.Model != nil && *e.Model != "":
+			// No reported cost_usd: SPEC §2.4's estimation rule — price
+			// this event's own tokens at its own ts. pricing.ErrNoPrice
+			// (ok=false) means contribute nothing, never a zero standing
+			// in for a real price (internal/pricing.Estimate's documented
+			// contract) — and never fall into cost_by_query_source, which
+			// is reported-only.
+			tokens := costTokens{}
+			if e.InputTokens != nil {
+				tokens.input = *e.InputTokens
+			}
+			if e.OutputTokens != nil {
+				tokens.output = *e.OutputTokens
+			}
+			if e.CacheReadTokens != nil {
+				tokens.cacheRead = *e.CacheReadTokens
+			}
+			if e.CacheCreationTokens != nil {
+				tokens.cacheWrite = *e.CacheCreationTokens
+			}
+			if usd, ok := estimateCost(prices, *e.Model, tokens, e.TS); ok {
+				a.costEstimatedUSD += usd
+			}
 		}
-		if e.CostSource != nil && *e.CostSource == "estimated" {
-			a.costEstimatedUSD += cost
-		} else if e.CostUSD != nil {
-			a.costUSD += cost
-		}
-		// SPEC §1.9: "sessions.cost_by_query_source jsonb — a map from the
-		// raw observed query_source value ('' for absent) to summed cost."
-		qs := ""
-		if e.QuerySource != nil {
-			qs = *e.QuerySource
-		}
-		a.costByQuerySource[qs] += cost
 		if e.Model != nil && *e.Model != "" {
 			a.models[*e.Model] = struct{}{}
 		}
