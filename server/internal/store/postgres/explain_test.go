@@ -588,6 +588,72 @@ func TestFetchMetricRowsForRollup_PrunesPartitions(t *testing.T) {
 		monthsCovered, plan)
 }
 
+// TestEventsSince_IndexScanWithPartitionPruning is P5-01a's EXPLAIN AC (SPEC
+// §5.2): EventsSince's real predicate — `ts >= $windowStart AND (ts, seq) >
+// ($ts, $seq) ORDER BY ts, seq LIMIT $n` — must use an Index Scan on the
+// (ts, seq) primary key and prune partitions, not Append-scan every
+// retained `events` partition on every SSE reconnect (SPEC §5.2's own
+// stated failure mode for the bare `seq > $n` alternative it rejects).
+//
+// The SQL here is copied from read_events.go's unexported eventsSinceSQL
+// constant, trimmed to a minimal SELECT list (same convention
+// TestGetEvent_IndexScanOnSinglePartition and
+// TestListEvents_SessionTimeline_IndexScanWithPartitionPruning already use
+// in read_events_test.go): this package cannot import an unexported
+// identifier from the sibling postgres package, and which columns are
+// selected does not change the planner's choice between an Index Scan and
+// a Seq Scan — only WHERE/ORDER BY/LIMIT do.
+//
+// Four consecutive monthly partitions are seeded so pruning has something
+// to prove: windowStart falls inside the third month (December). The `ts >=
+// $windowStart` bound alone (no upper ts bound exists in this predicate) is
+// what SPEC §5.2 calls pruning "to at most two partitions" — December
+// (windowStart's own month) and January (nothing above bounds it) — while
+// October and November, both strictly before windowStart, must be excluded
+// entirely. This is a different case from GetEvent's own EXPLAIN AC
+// (equality on both ts and seq, pruning to exactly one partition).
+func TestEventsSince_IndexScanWithPartitionPruning(t *testing.T) {
+	st, pool := newStore(t)
+	ctx := context.Background()
+	sessionID := nextTestSessionID("explain-eventssince")
+	seedSession(t, pool, sessionSeed{ID: sessionID})
+
+	months := []time.Time{
+		time.Date(2025, 10, 1, 0, 0, 0, 0, time.UTC),
+		time.Date(2025, 11, 1, 0, 0, 0, 0, time.UTC),
+		time.Date(2025, 12, 1, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+	}
+	require.NoError(t, st.EnsurePartitions(ctx, months[0], months[len(months)-1]))
+
+	const perMonth = 4000
+	seq := int64(30000)
+	var seeds []eventSeed
+	for _, month := range months {
+		for i := 0; i < perMonth; i++ {
+			seq++
+			seeds = append(seeds, eventSeed{Seq: seq, SessionID: sessionID, TS: month.Add(time.Duration(i) * time.Second), Kind: "tool.pre"})
+		}
+	}
+	seedFullEventsBulk(t, pool, seeds)
+	_, err := pool.Exec(ctx, "ANALYZE events")
+	require.NoError(t, err)
+
+	windowStart := months[2].Add(30 * time.Second)
+	afterTS, afterSeq := windowStart, int64(0)
+
+	plan := explainPlanText(t, pool,
+		"SELECT e.seq, e.id, e.ts FROM events e WHERE e.ts >= $1 AND (e.ts, e.seq) > ($2, $3) ORDER BY e.ts, e.seq LIMIT $4",
+		[]any{windowStart, afterTS, afterSeq, int32(2000)})
+
+	require.Contains(t, plan, "Index Scan", "EventsSince's (ts, seq) row-comparison predicate must use an Index Scan, not a Seq Scan")
+
+	allPartitions := monthlyPartitionNames("events", months[0], len(months))
+	wantPartitions := monthlyPartitionNames("events", months[2], 2) // December, January
+	require.True(t, prunedToSinglePartition(t, plan, allPartitions, wantPartitions),
+		"EventsSince must prune partitions outside the replay window — %d months of partitions exist but at most two (December, January) should be touched:\n%s", len(months), plan)
+}
+
 // monthlyPartitionNames returns the parent_YYYY_MM partition names
 // EnsurePartitions creates for n consecutive months starting at start —
 // matching partitions.go's ensureMonthlyPartition naming.

@@ -15,7 +15,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/YohannHommet/argus/server/internal/model"
 	"github.com/YohannHommet/argus/server/internal/store"
 	"github.com/YohannHommet/argus/server/internal/store/postgres/gen"
 )
@@ -199,10 +198,7 @@ func (s *Store) Close() {
 // AnalyticsSummary, AnalyticsSeries, AnalyticsBreakdown, AnalyticsDecisions
 // implement store.Reader; implemented in read_analytics.go (P3-06).
 
-// EventsSince implements store.Reader; not yet implemented (P1-04 stub).
-func (s *Store) EventsSince(_ context.Context, _ model.EventRef, _ time.Time, _ int) ([]model.Event, error) {
-	return nil, store.ErrNotImplemented
-}
+// EventsSince implements store.Reader; implemented in read_events.go (P5-01a).
 
 // Facets, DataQuality, UnknownKinds, HookLatency implement store.Reader;
 // implemented in read_quality.go (P3-08).

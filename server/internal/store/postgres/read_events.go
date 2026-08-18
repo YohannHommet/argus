@@ -57,6 +57,17 @@ const (
 	// defaults, same as defaultSessionLimit/maxSessionLimit.
 	defaultEventLimit = 50
 	maxEventLimit     = 500
+
+	// defaultEventsSinceLimit / maxEventsSinceLimit bound EventsSince's limit
+	// parameter (SPEC §5.2). defaultEventsSinceLimit mirrors
+	// ARGUS_STREAM_REPLAY_MAX's own SPEC §3.7 default (2000) as the fallback
+	// for a non-positive limit; maxEventsSinceLimit is a defensive ceiling of
+	// this method's own, since SPEC §3.7 only requires ARGUS_STREAM_REPLAY_MAX
+	// positive (config.go's `positive:"true"` tag) and names no upper bound —
+	// without one here, a misconfigured operator value would let a single SSE
+	// reconnect ask this method to materialize an unbounded number of rows.
+	defaultEventsSinceLimit = 2000
+	maxEventsSinceLimit     = 20000
 )
 
 // ErrEventNotFound is GetEvent's not-found signal (SPEC §4.2's `GET
@@ -418,6 +429,94 @@ func (s *Store) GetEvent(ctx context.Context, ref model.EventRef) (*model.Event,
 	}
 
 	return &e, nil
+}
+
+// eventsSinceSQL is the SSE `Last-Event-ID` replay query SPEC §5.2 specifies
+// verbatim: "`ts >= $windowStart AND (ts, seq) > ($ts, $seq) ORDER BY ts, seq
+// LIMIT $n`, which rides the `(ts, seq)` primary key and prunes to at most
+// two partitions — as opposed to a bare `seq > $n`, which has no usable
+// index and would scan 90 days of partitions on every reconnect." The row-
+// comparison form `(e.ts, e.seq) > ($2, $3)` is required, not
+// `e.ts > $2 OR (e.ts = $2 AND e.seq > $3)`: only the row-comparison form
+// lets Postgres plan the predicate directly against the composite PK.
+//
+// Hand-written pgx rather than a sqlc query, despite EventsSince being
+// exactly the kind of fixed, single-statement, no-dynamic-filter query
+// db/queries/read_events.sql otherwise holds (see GetEventByRef there):
+// sqlc v1.31.1 cannot type this predicate correctly. A draft
+// `-- name: EventsSince :many` query with this identical WHERE clause was
+// generated and inspected; sqlc inferred the row comparison's SECOND
+// parameter — `seq`, an int64 — as `pgtype.Timestamptz`, the type of the
+// tuple's FIRST element (`ts`), instead of inferring each tuple position
+// independently. Passing an int64 for that parameter would then be a type
+// error, and coercing it would bind the wrong wire type against a bigint
+// column. Reuses eventColumnsSlim/scanEvent (this file, ListEvents' own
+// column list and scan helper) rather than introducing a third column list
+// to work around sqlc.
+const eventsSinceSQL = `
+	SELECT ` + eventColumnsSlim + `
+	FROM events e
+	WHERE e.ts >= $1 AND (e.ts, e.seq) > ($2, $3)
+	ORDER BY e.ts, e.seq
+	LIMIT $4`
+
+// EventsSince implements store.Reader (SPEC §5.2, P5-01a): the storage half
+// of SSE `Last-Event-ID`/`?after=` replay. Ordering is ascending (ts, seq)
+// only — NOT the (ts, vendor_seq NULLS LAST, seq) sort ListEvents/GetEvent's
+// package doc describes — because replay's contract is "apply these events
+// as if they arrived live" (SPEC §5.2), and live delivery order is
+// insertion order on the (ts, seq) PK, not the vendor_seq-aware display
+// order ListEvents renders for the timeline UI.
+//
+// Rows come back in the slim shape (SPEC §5.1: the SSE `event: event` frame
+// carries no attrs; the UI fetches the full event by event_ref when the
+// drawer opens), so every returned model.Event.Attrs is nil — callers must
+// not read a nil Attrs here as "this event has no attrs", only as "attrs
+// were not fetched".
+//
+// limit <= 0 is clamped to defaultEventsSinceLimit (SPEC §3.7's
+// ARGUS_STREAM_REPLAY_MAX default); limit above maxEventsSinceLimit is
+// capped to it. The return value is always a non-nil slice — including when
+// after is at or past the newest persisted event, in which case it is a
+// non-nil empty slice with a nil error, never a nil slice a caller could
+// misread as an error-adjacent state.
+func (s *Store) EventsSince(ctx context.Context, after model.EventRef, windowStart time.Time, limit int) ([]model.Event, error) {
+	if limit <= 0 {
+		limit = defaultEventsSinceLimit
+	}
+	if limit > maxEventsSinceLimit {
+		limit = maxEventsSinceLimit
+	}
+
+	rows, err := s.pool.Query(ctx, eventsSinceSQL,
+		pgtype.Timestamptz{Time: windowStart, Valid: true},
+		pgtype.Timestamptz{Time: after.TS, Valid: true},
+		after.Seq,
+		int32(limit),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: events since: %w", err)
+	}
+	defer rows.Close()
+
+	// Capacity is not pre-sized to limit: limit may be as large as
+	// maxEventsSinceLimit (20000) while a typical reconnect after a short
+	// outage returns a handful of rows, so pre-allocating to limit would
+	// over-reserve on the common path. make(..., 0) still guarantees a
+	// non-nil slice even when zero rows come back (doc comment above).
+	events := make([]model.Event, 0)
+	for rows.Next() {
+		e, scanErr := scanEvent(rows, false)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		events = append(events, e)
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return nil, fmt.Errorf("postgres: events since: %w", rowsErr)
+	}
+
+	return events, nil
 }
 
 // uuidToString renders a sqlc-generated pgtype.UUID as the plain string

@@ -598,3 +598,148 @@ func TestGetEvent_NullableNumericAndBooleanFields(t *testing.T) {
 	require.Nil(t, got2.CostUSD)
 	require.Nil(t, got2.Success)
 }
+
+// --- EventsSince (P5-01a, SPEC §5.2: SSE Last-Event-ID replay's storage half) ---
+
+// TestEventsSince_StrictTSSeqOrdering_NoDupesNoGaps is the case a naive
+// `ts > $x` predicate gets wrong: two rows share the same ts and differ only
+// in seq. EventsSince(after=(ts, lower seq)) must return the row with the
+// same ts and the higher seq, and must not return the row `after` itself
+// names (SPEC §5.2's exact row-comparison predicate, not a ts-only bound).
+func TestEventsSince_StrictTSSeqOrdering_NoDupesNoGaps(t *testing.T) {
+	st, pool := newStore(t)
+	sessionID := nextTestSessionID("since-tsseq")
+	seedSession(t, pool, sessionSeed{ID: sessionID})
+	ts := time.Now().UTC().Truncate(time.Millisecond)
+	ensureRange(t, st, ts, ts)
+
+	seedFullEvent(t, pool, eventSeed{Seq: 20001, SessionID: sessionID, TS: ts, Kind: "tool.pre"})
+	seedFullEvent(t, pool, eventSeed{Seq: 20002, SessionID: sessionID, TS: ts, Kind: "tool.post"})
+
+	got, err := st.EventsSince(context.Background(), model.EventRef{TS: ts, Seq: 20001}, ts, 10)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Equal(t, int64(20002), got[0].Seq, "same-ts row with the higher seq must be returned")
+}
+
+// TestEventsSince_WindowStartExcludesOlderEvents proves windowStart is a
+// real second bound, not redundant with the (ts, seq) > (after.ts, after.seq)
+// predicate: an event strictly newer than `after` but strictly older than
+// windowStart must still be excluded (SPEC §5.2's windowStart =
+// max(ts, now - ARGUS_STREAM_REPLAY_WINDOW) is what keeps a stale
+// Last-Event-ID from replaying more than the configured window).
+func TestEventsSince_WindowStartExcludesOlderEvents(t *testing.T) {
+	st, pool := newStore(t)
+	sessionID := nextTestSessionID("since-window")
+	seedSession(t, pool, sessionSeed{ID: sessionID})
+	base := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	ensureRange(t, st, base, base.Add(time.Hour))
+
+	afterTS := base
+	windowStart := base.Add(10 * time.Minute)
+	excludedTS := base.Add(5 * time.Minute)  // > after, but < windowStart
+	includedTS := base.Add(15 * time.Minute) // >= windowStart
+
+	seedFullEvent(t, pool, eventSeed{Seq: 21001, SessionID: sessionID, TS: afterTS, Kind: "tool.pre"})
+	seedFullEvent(t, pool, eventSeed{Seq: 21002, SessionID: sessionID, TS: excludedTS, Kind: "tool.pre"})
+	seedFullEvent(t, pool, eventSeed{Seq: 21003, SessionID: sessionID, TS: includedTS, Kind: "tool.pre"})
+
+	got, err := st.EventsSince(context.Background(), model.EventRef{TS: afterTS, Seq: 21001}, windowStart, 10)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Equal(t, int64(21003), got[0].Seq, "the event between after and windowStart must be excluded by windowStart, not just returned because it is newer than after")
+}
+
+// TestEventsSince_LimitReturnsOldestFirst is the P5-01a AC that replay
+// resumes forward chronologically rather than jumping to the newest rows:
+// with N seeded events past `after` and limit=k<N, exactly the k OLDEST
+// come back, in ascending order.
+func TestEventsSince_LimitReturnsOldestFirst(t *testing.T) {
+	st, pool := newStore(t)
+	sessionID := nextTestSessionID("since-limit")
+	seedSession(t, pool, sessionSeed{ID: sessionID})
+	base := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	ensureRange(t, st, base, base.Add(time.Hour))
+
+	const n = 10
+	seq := int64(22000)
+	seeds := make([]eventSeed, 0, n)
+	for i := 0; i < n; i++ {
+		seeds = append(seeds, eventSeed{Seq: seq + int64(i), SessionID: sessionID, TS: base.Add(time.Duration(i) * time.Second), Kind: "tool.pre"})
+	}
+	seedFullEventsBulk(t, pool, seeds)
+
+	const limit = 3
+	got, err := st.EventsSince(context.Background(), model.EventRef{TS: base, Seq: seq}, base, limit)
+	require.NoError(t, err)
+	require.Len(t, got, limit)
+	for i, e := range got {
+		require.Equal(t, seq+1+int64(i), e.Seq, "must resume forward from just after `after`, oldest-first, not jump to the newest rows")
+	}
+}
+
+// TestEventsSince_EmptyResult_AtOrPastNewest is the P5-01a AC that a
+// caller reconnecting with nothing new to replay gets a non-nil empty slice
+// and a nil error — never an ambiguous nil-slice-nil-error result, and never
+// an error, for the ordinary "you are caught up" case.
+func TestEventsSince_EmptyResult_AtOrPastNewest(t *testing.T) {
+	st, pool := newStore(t)
+	sessionID := nextTestSessionID("since-empty")
+	seedSession(t, pool, sessionSeed{ID: sessionID})
+	ts := time.Now().UTC().Truncate(time.Millisecond)
+	ensureRange(t, st, ts, ts)
+
+	seedFullEvent(t, pool, eventSeed{Seq: 23001, SessionID: sessionID, TS: ts, Kind: "tool.pre"})
+
+	gotAtNewest, err := st.EventsSince(context.Background(), model.EventRef{TS: ts, Seq: 23001}, ts, 10)
+	require.NoError(t, err)
+	require.NotNil(t, gotAtNewest, "must be a non-nil empty slice, not nil")
+	require.Empty(t, gotAtNewest)
+
+	gotPastNewest, err := st.EventsSince(context.Background(), model.EventRef{TS: ts.Add(time.Hour), Seq: 999999}, ts, 10)
+	require.NoError(t, err)
+	require.NotNil(t, gotPastNewest, "must be a non-nil empty slice, not nil")
+	require.Empty(t, gotPastNewest)
+}
+
+// TestEventsSince_SlimShape verifies EventsSince returns the same normalized
+// columns ListEvents' slim shape carries (SPEC §5.1: the SSE `event: event`
+// frame omits attrs; the UI fetches the full event by event_ref when the
+// drawer opens) and never populates Attrs.
+func TestEventsSince_SlimShape(t *testing.T) {
+	st, pool := newStore(t)
+	sessionID := nextTestSessionID("since-slim")
+	seedSession(t, pool, sessionSeed{ID: sessionID})
+	ts := time.Now().UTC().Truncate(time.Millisecond)
+	ensureRange(t, st, ts, ts)
+
+	seedFullEvent(t, pool, eventSeed{
+		Seq: 24001, SessionID: sessionID, TS: ts, Kind: "tool.decision",
+		ToolName: ptrString("Edit"), DecisionSource: ptrString("user_reject"),
+		Attrs: map[string]any{"tool_decision.decision": "reject"},
+	})
+	_, err := pool.Exec(context.Background(), `
+		UPDATE events SET input_tokens = 42, cost_usd = 0.05, success = true
+		WHERE seq = 24001`)
+	require.NoError(t, err)
+
+	got, err := st.EventsSince(context.Background(), model.EventRef{TS: ts.Add(-time.Second), Seq: 0}, ts.Add(-time.Second), 10)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+
+	e := got[0]
+	require.Equal(t, int64(24001), e.Seq)
+	require.Equal(t, sessionID, e.SessionID)
+	require.Equal(t, model.Kind("tool.decision"), e.Kind)
+	require.NotNil(t, e.ToolName)
+	require.Equal(t, "Edit", *e.ToolName)
+	require.NotNil(t, e.DecisionSource)
+	require.Equal(t, "user_reject", *e.DecisionSource)
+	require.NotNil(t, e.InputTokens)
+	require.Equal(t, int64(42), *e.InputTokens)
+	require.NotNil(t, e.CostUSD)
+	require.InDelta(t, 0.05, *e.CostUSD, 0.0000001)
+	require.NotNil(t, e.Success)
+	require.True(t, *e.Success)
+	require.Nil(t, e.Attrs, "EventsSince is the slim shape — attrs must never be populated")
+}
