@@ -222,22 +222,6 @@ export function metricColor(t: ChartTheme, key: MetricKey): string {
 }
 
 /**
- * Tints a delta by direction *and* the metric's own polarity (gap:
- * "deltas ... rendered in one undifferentiated blue/gray" +
- * "encode polarity, don't moralize neutral metrics"). A zero delta is
- * always muted — there's no direction to tint. For a `'destructive'` metric
- * rising is bad (`t.reject`) and falling is good (`t.accept`); for a
- * `'neutral'` metric rising gets the accent color and falling is simply
- * muted, never red/green.
- */
-export function deltaColor(t: ChartTheme, key: MetricKey, delta: number | null | undefined): string {
-  if (delta === null || delta === undefined || delta === 0) return t.mutedColor
-  const { polarity } = METRIC_SEMANTICS[key]
-  if (polarity === 'destructive') return delta > 0 ? t.reject : t.accept
-  return delta > 0 ? t.primary : t.mutedColor
-}
-
-/**
  * Shared legend chrome (gap #3, "chart chrome"): a small flat swatch and
  * muted, theme-matched label instead of vue-echarts/ECharts's own default
  * legend styling, which otherwise clashes with the rest of the UI's type

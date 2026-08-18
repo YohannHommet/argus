@@ -46,6 +46,15 @@ describe('SetupCard (PLAN.md P4-10)', () => {
     expect(step.text()).not.toContain('25 session')
   })
 
+  it("substitutes the endpointUrl into the sim command's --target, like steps 1 and 2", () => {
+    const wrapper = mount(SetupCard, { props: { endpointUrl: 'https://argus.example.com' } })
+    const step = wrapper.get('[data-testid="setup-step-sim"]')
+
+    expect(step.text()).toContain('--target https://argus.example.com')
+    // A copied command must not seed a different Argus than the one on screen.
+    expect(step.text()).not.toContain('http://localhost:8080')
+  })
+
   it('has a working copy button per step, backed by CopyBlock', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.assign(navigator, { clipboard: { writeText } })

@@ -3,7 +3,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it } from 'vitest'
 
 import { useUiStore } from '@/stores/ui'
-import { buildChartTheme, deltaColor, metricColor, metricPolarity, paletteColor, useChartTheme, withAlpha, type MetricKey } from './echartsTheme'
+import { buildChartTheme, metricColor, metricPolarity, paletteColor, useChartTheme, withAlpha, type MetricKey } from './echartsTheme'
 
 describe('buildChartTheme', () => {
   beforeEach(() => {
@@ -121,33 +121,6 @@ describe('metricPolarity', () => {
   ])('$key is $expected', ({ key, expected }) => {
     expect(metricPolarity(key)).toBe(expected)
   })
-})
-
-describe('deltaColor', () => {
-  const theme = buildChartTheme()
-
-  it('is muted for a zero, null, or undefined delta regardless of metric', () => {
-    expect(deltaColor(theme, 'cost', 0)).toBe(theme.mutedColor)
-    expect(deltaColor(theme, 'api_errors', 0)).toBe(theme.mutedColor)
-    expect(deltaColor(theme, 'cost', null)).toBe(theme.mutedColor)
-    expect(deltaColor(theme, 'cost', undefined)).toBe(theme.mutedColor)
-  })
-
-  it.each(['cost', 'tokens', 'api_requests', 'tool_calls', 'sessions', 'turns'] as const)(
-    'tints a rising %s neutrally (accent), never red/green — more cost/usage is not failure',
-    (key) => {
-      expect(deltaColor(theme, key, 5)).toBe(theme.primary)
-      expect(deltaColor(theme, key, -5)).toBe(theme.mutedColor)
-    },
-  )
-
-  it.each(['api_errors', 'tool_rejects', 'reject_rate'] as const)(
-    'tints a rising %s destructive (red) and a falling one positive (green)',
-    (key) => {
-      expect(deltaColor(theme, key, 5)).toBe(theme.reject)
-      expect(deltaColor(theme, key, -5)).toBe(theme.accept)
-    },
-  )
 })
 
 describe('useChartTheme', () => {

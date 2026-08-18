@@ -5,7 +5,6 @@ import {
   EM_DASH,
   formatAbsoluteTime,
   formatCost,
-  formatCostPrecise,
   formatCount,
   formatDuration,
   formatPercent,
@@ -42,16 +41,6 @@ describe('formatCost', () => {
 
   it('returns EM_DASH for NaN', () => {
     expect(formatCost(Number.NaN)).toBe(EM_DASH)
-  })
-})
-
-describe('formatCostPrecise', () => {
-  it('keeps full precision', () => {
-    expect(formatCostPrecise(4.2711)).toBe('$4.2711')
-  })
-
-  it('returns EM_DASH for null', () => {
-    expect(formatCostPrecise(null)).toBe(EM_DASH)
   })
 })
 

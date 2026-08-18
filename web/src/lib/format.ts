@@ -36,21 +36,6 @@ export function formatCost(usd: Numeric): string {
   }).format(usd)
 }
 
-/**
- * Full-precision cost for tooltips/detail rows — up to 6 decimals, only as
- * many as the value actually needs (Intl drops digits beyond the value's
- * own precision as long as they're above `minimumFractionDigits`).
- */
-export function formatCostPrecise(usd: Numeric): string {
-  if (!isFiniteNumber(usd)) return EM_DASH
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 6,
-  }).format(usd)
-}
-
 /** Grouped integer (`1,234`). Rounds — this is for counts, not measurements. */
 export function formatCount(n: Numeric): string {
   if (!isFiniteNumber(n)) return EM_DASH

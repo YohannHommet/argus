@@ -20,7 +20,7 @@
  * `tool.decision` or `tool.result` must be visible on the call row itself,
  * not buried one click down in a child nobody expands.
  */
-import type { TimelineItem, TokenUsage } from './collapseEvents'
+import { pickByRank, type TimelineItem, type TokenUsage } from './collapseEvents'
 
 export interface ToolThreadDisplay {
   decision: string | null
@@ -49,16 +49,9 @@ function kindRank(kind: TimelineItem['kind']): number {
   return 0
 }
 
-function pickDisplayField<T>(members: TimelineItem[], get: (item: TimelineItem) => T | null): T | null {
-  let best: { rank: number; value: T } | null = null
-  for (const item of members) {
-    const value = get(item)
-    if (value === null || value === undefined) continue
-    const rank = kindRank(item.kind)
-    if (!best || rank > best.rank) best = { rank, value }
-  }
-  return best ? best.value : null
-}
+/** `collapseEvents`' argmax, specialised to this pass's precedence table. */
+const pickDisplayField = <T>(members: TimelineItem[], get: (item: TimelineItem) => T | null): T | null =>
+  pickByRank(members, get, (item) => kindRank(item.kind))
 
 function computeDisplay(members: TimelineItem[]): ToolThreadDisplay {
   return {

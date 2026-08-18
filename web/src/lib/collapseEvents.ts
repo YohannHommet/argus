@@ -103,13 +103,21 @@ function isNonNull<T>(v: T | null | undefined): v is T {
   return v !== null && v !== undefined
 }
 
-/** Highest-ranked (by `rank`) non-null value across members; ties keep the earliest member (input order). */
-function pickByRank<T>(members: TimelineEvent[], get: (e: TimelineEvent) => T | null | undefined, rank: (e: TimelineEvent) => number): T | null {
+/**
+ * Highest-ranked (by `rank`) non-null value across members; ties keep the
+ * earliest member (input order).
+ *
+ * Generic over the member type because `toolThreads.ts` runs the same argmax
+ * over `TimelineItem`s with its own `kindRank`: the precedence *tables*
+ * differ per caller, the "surface the best-sourced non-null field" loop does
+ * not, and two copies of it would be free to drift on tie-breaking.
+ */
+export function pickByRank<M, T>(members: readonly M[], get: (m: M) => T | null | undefined, rank: (m: M) => number): T | null {
   let best: { rank: number; value: T } | null = null
-  for (const e of members) {
-    const v = get(e)
+  for (const m of members) {
+    const v = get(m)
     if (!isNonNull(v)) continue
-    const r = rank(e)
+    const r = rank(m)
     if (!best || r > best.rank) best = { rank: r, value: v }
   }
   return best ? best.value : null

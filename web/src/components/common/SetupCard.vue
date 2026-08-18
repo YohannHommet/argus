@@ -47,8 +47,14 @@ const hookBlock = computed(
 } }`,
 )
 
-const simBlock = `docker compose -f deploy/docker-compose.yml up -d
-argusd sim --mode=demo --seed=42 --target http://localhost:8080`
+// `--target` gets the same substituted origin as steps 1 and 2: a copied sim
+// command that points at a `localhost` example seeds a *different* Argus than
+// the one the reader is looking at, and silently appears to do nothing here.
+const simBlock = computed(
+  () =>
+    `docker compose -f deploy/docker-compose.yml up -d
+argusd sim --mode=demo --seed=42 --target ${props.endpointUrl}`,
+)
 </script>
 
 <template>
