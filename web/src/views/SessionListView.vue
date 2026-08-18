@@ -24,6 +24,7 @@ import SessionTable from '@/components/session/SessionTable.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import SetupCard from '@/components/common/SetupCard.vue'
 import SkeletonTable from '@/components/common/SkeletonTable.vue'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { useCaptureReady } from '@/composables/useCaptureReady'
 import { useMetaStore } from '@/stores/meta'
@@ -61,17 +62,18 @@ function onLoadMore(): void {
 </script>
 
 <template>
-  <section class="flex flex-col gap-4">
-    <div class="flex items-baseline justify-between">
-      <h1 class="text-2xl font-semibold">
+  <section class="flex flex-col gap-5">
+    <div class="flex items-center gap-2.5">
+      <h1 class="text-2xl font-semibold tracking-tight">
         Sessions
       </h1>
-      <p
+      <Badge
         v-if="totalLoaded > 0"
-        class="text-muted-foreground text-sm"
+        variant="secondary"
+        class="font-normal"
       >
         {{ totalLoaded }} loaded
-      </p>
+      </Badge>
     </div>
 
     <SessionFilterBar />

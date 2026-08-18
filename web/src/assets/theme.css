@@ -15,6 +15,16 @@
 :root {
   --radius: 0.625rem;
 
+  /*
+   * Tells the browser which UI-agent palette to paint native form control
+   * chrome with (date-picker icon/popup, select caret, spinner buttons).
+   * Without this, Chromium renders those pieces with its light-mode
+   * defaults regardless of our own dark tokens above — the classic
+   * "white mm/dd/yyyy box in an otherwise dark page" bug. Kept in sync
+   * with the `.dark`/`.light` class ui.ts toggles on `<html>`.
+   */
+  color-scheme: dark;
+
   /* shadcn-vue token set (dark values) */
   --background: oklch(0.145 0 0);
   --foreground: oklch(0.985 0 0);
@@ -85,6 +95,8 @@
 }
 
 .light {
+  color-scheme: light;
+
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);

@@ -60,7 +60,7 @@ function hasActiveFilters(): boolean {
 
 <template>
   <div
-    class="flex flex-wrap items-end gap-3"
+    class="border-border bg-muted/30 flex flex-wrap items-end gap-x-4 gap-y-3 rounded-xl border p-3"
     data-testid="session-filter-bar"
   >
     <div class="flex min-w-48 flex-col gap-1">

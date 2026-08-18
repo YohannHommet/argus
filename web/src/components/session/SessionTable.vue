@@ -109,33 +109,35 @@ function onHeaderClick(column: Column): void {
     />
 
     <template v-else-if="!isVirtualized">
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead
-              v-for="column in COLUMNS"
-              :key="column.key"
-              :class="[column.sort ? 'cursor-pointer select-none' : undefined, column.class]"
-              @click="onHeaderClick(column)"
-            >
-              {{ column.label }}
-              <span
-                v-if="column.sort && sort === column.sort"
-                aria-hidden="true"
-              >&darr;</span>
-            </TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          <SessionRow
-            v-for="session in sessions"
-            :key="session.id"
-            :session="session"
-            :cost-thresholds="costThresholds"
-            @activate="emit('selectSession', session.id)"
-          />
-        </TableBody>
-      </Table>
+      <div class="border-border bg-card overflow-hidden rounded-xl border">
+        <Table>
+          <TableHeader class="bg-muted/40">
+            <TableRow class="hover:bg-transparent">
+              <TableHead
+                v-for="column in COLUMNS"
+                :key="column.key"
+                :class="[column.sort ? 'cursor-pointer select-none' : undefined, column.class]"
+                @click="onHeaderClick(column)"
+              >
+                {{ column.label }}
+                <span
+                  v-if="column.sort && sort === column.sort"
+                  aria-hidden="true"
+                >&darr;</span>
+              </TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            <SessionRow
+              v-for="session in sessions"
+              :key="session.id"
+              :session="session"
+              :cost-thresholds="costThresholds"
+              @activate="emit('selectSession', session.id)"
+            />
+          </TableBody>
+        </Table>
+      </div>
     </template>
 
     <!--
@@ -149,10 +151,11 @@ function onHeaderClick(column: Column): void {
       <div
         role="table"
         data-testid="session-virtual-table"
+        class="border-border bg-card overflow-hidden rounded-xl border"
       >
         <div
           role="row"
-          class="border-border grid items-center border-b"
+          class="border-border bg-muted/40 grid items-center border-b"
           :class="SESSION_ROW_GRID_COLS"
         >
           <div
