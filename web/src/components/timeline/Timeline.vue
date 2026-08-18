@@ -62,7 +62,7 @@ import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import type { Correlation } from './DecisionBadge.vue'
-import EventDetailSheet from './EventDetailSheet.vue'
+import EventInspector from './EventInspector.vue'
 import TimelineGroup from './TimelineGroup.vue'
 
 const store = useSessionDetailStore()
@@ -76,18 +76,30 @@ interface Group {
   id: string
   promptId: string | null
   items: TimelineItem[]
+  /** True when an earlier group in this same list already used this (non-null) promptId — see below. */
+  isContinuation: boolean
 }
 
-/** Contiguous runs of the same `prompt_id` — see the module doc for why this is a run split, not a global bucket keyed by prompt_id. */
+/**
+ * Contiguous runs of the same `prompt_id` — see the module doc for why this
+ * is a run split, not a global bucket keyed by prompt_id. A second (or
+ * later) run of the same non-null `prompt_id` is flagged `isContinuation`
+ * so `TimelineGroup` can label it "Turn N · continued" instead of a bare
+ * repeated "Turn N" header, which unlabelled reads as a bug (round-3
+ * critic gap: "'Turn 0' appearing twice ... reads as broken").
+ */
 const groups = computed<Group[]>(() => {
   const result: Group[] = []
+  const seenPromptIds = new Set<string>()
   for (const item of items.value) {
     const key = item.prompt_id
     const current = result[result.length - 1]
     if (current && current.promptId === key) {
       current.items.push(item)
     } else {
-      result.push({ id: item.key, promptId: key, items: [item] })
+      const isContinuation = key !== null && seenPromptIds.has(key)
+      if (key !== null) seenPromptIds.add(key)
+      result.push({ id: item.key, promptId: key, items: [item], isContinuation })
     }
   }
   return result
@@ -261,68 +273,82 @@ watch(
       </label>
     </div>
 
-    <ErrorState
-      v-if="store.timelineError"
-      :error="store.timelineError"
-      @retry="retry"
-    />
+    <!--
+      Two columns on wide viewports: the event list (left, scrolls on its
+      own) and the inspector (right — `EventInspector` decides whether that
+      is a persistent panel or an overlay sheet). Both mount unconditionally
+      of the list's own load/error/empty state — the inspector's "nothing
+      selected yet" placeholder is a real, useful state, not something to
+      hide while the list is busy.
+    -->
+    <div class="flex min-h-0 flex-1 gap-3">
+      <ErrorState
+        v-if="store.timelineError"
+        class="flex-1"
+        :error="store.timelineError"
+        @retry="retry"
+      />
 
-    <template v-else-if="store.timelineLoading && items.length === 0">
-      <div class="flex flex-col gap-2 px-3">
-        <Skeleton
-          v-for="n in 6"
-          :key="n"
-          class="h-10 w-full"
-        />
-      </div>
-    </template>
+      <template v-else-if="store.timelineLoading && items.length === 0">
+        <div class="flex flex-1 flex-col gap-2 px-3">
+          <Skeleton
+            v-for="n in 6"
+            :key="n"
+            class="h-10 w-full"
+          />
+        </div>
+      </template>
 
-    <EmptyState
-      v-else-if="items.length === 0"
-      title="No events match the current filters"
-    />
-
-    <div
-      v-else
-      class="flex-1 overflow-auto"
-    >
-      <TimelineGroup
-        v-for="group in groups"
-        :key="group.id"
-        :prompt-id="group.promptId"
-        :turn="turnFor(group.promptId)"
-        :items="group.items"
-        :correlation-for="correlationFor"
-        :collapsed="isGroupCollapsed(group.id)"
-        @toggle-collapse="toggleGroup(group.id)"
-        @open="openDetail"
+      <EmptyState
+        v-else-if="items.length === 0"
+        class="flex-1"
+        title="No events match the current filters"
       />
 
       <div
-        ref="sentinelRef"
-        class="h-1"
-      />
-
-      <div
-        v-if="store.timelineHasMore"
-        class="flex justify-center p-3"
+        v-else
+        class="min-w-0 flex-1 overflow-auto"
       >
-        <Button
-          variant="outline"
-          size="sm"
-          :disabled="store.timelineLoading"
-          data-testid="timeline-load-more"
-          @click="loadMore"
-        >
-          {{ store.timelineLoading ? 'Loading…' : 'Load more' }}
-        </Button>
-      </div>
-    </div>
+        <TimelineGroup
+          v-for="group in groups"
+          :key="group.id"
+          :prompt-id="group.promptId"
+          :turn="turnFor(group.promptId)"
+          :items="group.items"
+          :correlation-for="correlationFor"
+          :collapsed="isGroupCollapsed(group.id)"
+          :is-continuation="group.isContinuation"
+          :selected-event-ref="selectedEventRef"
+          @toggle-collapse="toggleGroup(group.id)"
+          @open="openDetail"
+        />
 
-    <EventDetailSheet
-      :event-ref="selectedEventRef"
-      :open="sheetOpen"
-      @update:open="onSheetOpenChange"
-    />
+        <div
+          ref="sentinelRef"
+          class="h-1"
+        />
+
+        <div
+          v-if="store.timelineHasMore"
+          class="flex justify-center p-3"
+        >
+          <Button
+            variant="outline"
+            size="sm"
+            :disabled="store.timelineLoading"
+            data-testid="timeline-load-more"
+            @click="loadMore"
+          >
+            {{ store.timelineLoading ? 'Loading…' : 'Load more' }}
+          </Button>
+        </div>
+      </div>
+
+      <EventInspector
+        :event-ref="selectedEventRef"
+        :open="sheetOpen"
+        @update:open="onSheetOpenChange"
+      />
+    </div>
   </div>
 </template>

@@ -12,7 +12,14 @@
  * user_permanent, user_temporary, user_reject, user_abort) get a friendlier
  * label; anything else — including a value Argus has never seen — renders
  * verbatim through `RawValue` (SPEC §6.1).
+ *
+ * The `accept`/`reject` icon (round-3 critic gap: "accept=green check,
+ * reject=red x") is purely additive to the existing color/text convention
+ * `decisionColorClass` already encodes — it never replaces the raw,
+ * verbatim decision text, and a decision value that is neither literal
+ * string renders with no icon at all rather than guessing.
  */
+import { CheckCircle2, XCircle } from '@lucide/vue'
 import { computed } from 'vue'
 
 import { Badge } from '@/components/ui/badge'
@@ -57,6 +64,13 @@ const decisionColorClass = computed(() => {
   return 'text-unknown border-border'
 })
 
+/** null for anything but the two literal, already-color-coded values above — see file doc. */
+const decisionIcon = computed(() => {
+  if (props.decision === 'accept') return CheckCircle2
+  if (props.decision === 'reject') return XCircle
+  return null
+})
+
 const isNonExact = computed(() => props.correlation !== null && props.correlation !== 'exact')
 
 const provenanceText = computed(() => {
@@ -81,8 +95,15 @@ const tooltipText = computed(() => (isNonExact.value ? `${provenanceText.value} 
   >
     <Badge
       variant="outline"
+      class="gap-1"
       :class="decisionColorClass"
     >
+      <component
+        :is="decisionIcon"
+        v-if="decisionIcon"
+        class="size-3"
+        aria-hidden="true"
+      />
       <RawValue
         :value="decision"
         kind="decision"

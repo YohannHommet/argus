@@ -141,6 +141,29 @@ describe('Timeline', () => {
     expect(headers[2]!.text()).toContain('No turn')
   })
 
+  /**
+   * Round-3 critic gap: "'Turn 0' appearing twice ... reads as broken".
+   * A turn's `prompt_id` can legitimately recur in a non-contiguous run
+   * (see the module doc's "ordering bug" regression above) — the second
+   * run must say so instead of repeating a bare, seemingly-duplicate
+   * header.
+   */
+  it('labels a second, non-contiguous run of the same prompt_id as a continuation, not a bare repeat', async () => {
+    getTimeline = vi.fn(() =>
+      timelinePage([
+        makeTimelineEvent({ prompt_id: 'p_1', tool_use_id: null, kind: 'turn.start', ts: '2026-08-14T01:00:00.000Z' }),
+        makeTimelineEvent({ prompt_id: null, tool_use_id: null, kind: 'hook.registered', ts: '2026-08-14T01:00:05.000Z' }),
+        makeTimelineEvent({ prompt_id: 'p_1', tool_use_id: null, kind: 'llm.request', ts: '2026-08-14T01:00:10.000Z' }),
+      ]),
+    )
+    const { wrapper } = await mountTimeline()
+
+    const headers = wrapper.findAll('[data-testid="timeline-group-header"]')
+    expect(headers).toHaveLength(3)
+    expect(headers[0]!.text()).not.toContain('continued')
+    expect(headers[2]!.text()).toContain('continued')
+  })
+
   it("shows the turn's cost/tokens from the turns store in its sticky header", async () => {
     const turn = listSessionTurns200Default.data[0]!
     getTurns = vi.fn(() => okResponse({ data: [turn], page: { next_cursor: null, has_more: false } }))

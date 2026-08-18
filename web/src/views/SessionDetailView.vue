@@ -223,12 +223,16 @@ const hasSessionYet = computed(() => store.session !== null)
         <!--
           The tree is this tab's primary content (it's the structural view —
           the differentiator the cost table can't show); the cost table is
-          reference material, so it gets a fixed, scrollable, visually
-          secondary slot below rather than growing to whatever height its
-          own row count wants, which previously let it dwarf the tree.
+          reference material, so it's capped and scrollable on its own
+          (CostAttributionCard's `max-h-48`) rather than growing to whatever
+          height its own row count wants, which previously let it dwarf the
+          tree. The tree itself sizes to its actual content — a session with
+          only a couple of subagents must not reserve a fixed tall slot it
+          doesn't use (round-3 critic gap: "~300px dead canvas above the
+          cost table" from an earlier `min-h-[22rem]` here).
         -->
         <div class="flex flex-col gap-3">
-          <div class="min-h-[22rem]">
+          <div>
             <SubagentTree
               :nodes="store.subagents"
               :loading="store.subagentsLoading"

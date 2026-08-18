@@ -76,6 +76,71 @@ async function capture(page, { name, path, waitFor }) {
   return file
 }
 
+/**
+ * `session-detail-inspector.png` (round-3 harness addition): the Timeline
+ * tab with a meaningful row already selected, so the static capture shows
+ * the inspector populated rather than its "no event selected" placeholder
+ * — a screenshot of an empty inspector would prove nothing about whether
+ * the structured-summary work (kind/tool/decision badge/duration/cost/
+ * tokens — `EventDetailContent.vue`) actually renders.
+ *
+ * Picks a tool-call row that carries a decision when one exists (the
+ * richest payload: decision + decision_source + duration all populate),
+ * falling back to the highest-cost visible row (typically an LLM request)
+ * so the capture is never empty even on a session with zero tool
+ * decisions. 1440px is `EventInspector`'s wide breakpoint (>=1024px), so
+ * this also exercises the persistent panel, not the overlay sheet.
+ */
+async function captureInspector(page, session) {
+  const name = 'session-detail-inspector'
+  const url = `${baseUrl}/sessions/${session.id}?tab=timeline`
+  log(`capturing ${name} <- ${url}`)
+  await page.goto(url, { waitUntil: 'networkidle', timeout: 60_000 })
+  await page.waitForSelector('[data-capture-ready="true"]', { state: 'visible', timeout: 30_000 })
+
+  const decisionRows = page.locator('[data-testid="event-row"]:has([data-testid="decision-badge"])')
+  let target
+  if ((await decisionRows.count()) > 0) {
+    target = decisionRows.first()
+  } else {
+    const rows = page.locator('[data-testid="event-row"]')
+    const count = await rows.count()
+    if (count === 0) {
+      throw new Error(`${name}: no event rows on the timeline to select — is the seeded session empty?`)
+    }
+    const costPattern = /\$([0-9]+(?:\.[0-9]+)?)/
+    let bestIndex = 0
+    let bestCost = -Infinity
+    for (let i = 0; i < count; i += 1) {
+      const text = await rows.nth(i).innerText()
+      const match = text.match(costPattern)
+      const cost = match ? Number.parseFloat(match[1]) : -Infinity
+      if (cost > bestCost) {
+        bestCost = cost
+        bestIndex = i
+      }
+    }
+    target = rows.nth(bestIndex)
+  }
+
+  await target.scrollIntoViewIfNeeded()
+  await target.click()
+
+  // The inspector fetches GET /events/{ref} on click — wait for the
+  // structured summary itself (not just the panel/sheet chrome) so this
+  // never photographs a loading skeleton.
+  await page.waitForSelector('[data-testid="event-detail-summary"]', { state: 'visible', timeout: 30_000 })
+  await page.evaluate(
+    () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))),
+  )
+  await page.waitForTimeout(750)
+
+  const file = join(outDir, `${name}.png`)
+  await mkdir(dirname(file), { recursive: true })
+  await page.screenshot({ path: file, fullPage: false })
+  return file
+}
+
 async function main() {
   await mkdir(outDir, { recursive: true })
   const session = await pickDetailSession()
@@ -142,6 +207,7 @@ async function main() {
     for (const target of targets) {
       written.push(await capture(page, target))
     }
+    written.push(await captureInspector(page, session))
   } finally {
     await context.close()
     await browser.close()

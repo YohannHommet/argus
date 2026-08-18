@@ -77,7 +77,7 @@ describe('SubagentNode', () => {
     })
 
     expect(wrapper.find('[data-testid="subagent-node-tool-count"]').exists()).toBe(false)
-    const trigger = wrapper.find('[title]')
+    const trigger = wrapper.get('[data-testid="subagent-node-tools"] [title]')
     expect(trigger.attributes('title')).toBe(NO_HOOK_COVERAGE)
     expect(wrapper.text()).toContain('—')
   })

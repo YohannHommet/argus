@@ -15,12 +15,28 @@
  * Collapsing is purely local display state owned by `Timeline.vue`
  * (`v-model:collapsed` here) — never sent to the server, same rule as the
  * top-level collapse toggle.
+ *
+ * Within the group, `buildToolThreads` (round-3 critic gap: "tool
+ * calls/results don't read as children") nests a `tool.pre` call's
+ * decision/permission/result under it by shared `tool_use_id`, one level
+ * deeper than the turn rail above — the decision/duration/cost worth
+ * showing lands on the *parent* row (`thread.display`) so a reviewer sees
+ * "this call was accepted in 120ms" without expanding anything, while the
+ * raw decision/result events are still one click away as nested children.
+ *
+ * `isContinuation` labels a second (or later) contiguous run of the same
+ * `prompt_id` as "Turn N · continued" rather than repeating a bare "Turn
+ * N" header — Timeline.vue's grouping is an honest contiguous-run split
+ * (module doc there), which is correct but, unlabelled, reads as a bug
+ * ("Turn 0" appearing twice — round-3 critic gap).
  */
 import { computed } from 'vue'
 import { ChevronDown, ChevronRight, ListTree, MessageSquare } from '@lucide/vue'
 
 import type { TimelineItem } from '@/lib/collapseEvents'
 import { formatCost, formatTokens } from '@/lib/format'
+import { buildToolThreads } from '@/lib/toolThreads'
+import type { ToolThreadDisplay } from '@/lib/toolThreads'
 import type { Turn } from '@/stores/sessionDetail'
 import type { Correlation } from './DecisionBadge.vue'
 import EventRow from './EventRow.vue'
@@ -33,29 +49,68 @@ interface Props {
   correlationFor?: (item: TimelineItem) => Correlation | null
   /** Local, display-only collapse state — owned by the host (`Timeline.vue`), never sent to the server. */
   collapsed?: boolean
+  /** True when an earlier group already rendered this same (non-null) prompt_id — see module doc. */
+  isContinuation?: boolean
+  /** The currently-open inspector's event_ref, for highlighting the selected row (SPEC/critic: "row selection state must be visible"). */
+  selectedEventRef?: string | null
 }
 
 const props = withDefaults(defineProps<Props>(), {
   turn: null,
   correlationFor: () => null,
   collapsed: false,
+  isContinuation: false,
+  selectedEventRef: null,
 })
 
 const emit = defineEmits<{ open: [eventRef: string]; 'toggle-collapse': [] }>()
 
 const isNoTurn = computed(() => props.promptId === null)
 
+/**
+ * A trailing "no turn" group of exactly one event (a stray hook/log line
+ * between turns, not a turn in its own right) gets a visually quieter
+ * header — no explanatory subtitle, tighter padding — so a run of these
+ * doesn't read as a wall of identical, seemingly-broken section headers
+ * (round-3 critic gap: "consider folding trailing no-turn singletons
+ * visually"). Still its own group (SPEC's contiguous-run honesty — see
+ * Timeline.vue's module doc), just de-emphasised.
+ */
+const isCompactSingleton = computed(() => isNoTurn.value && props.items.length === 1)
+
 const totalTokens = computed(() => {
   const t = props.turn
   if (!t) return null
   return t.input_tokens + t.output_tokens
 })
+
+const renderNodes = computed(() => buildToolThreads(props.items))
+
+/** The primary row's own fields, overlaid with the thread's folded decision/duration/cost — see module doc. */
+function displayItem(item: TimelineItem, display?: ToolThreadDisplay): TimelineItem {
+  if (!display) return item
+  return {
+    ...item,
+    decision: item.decision ?? display.decision,
+    decision_source: item.decision_source ?? display.decision_source,
+    duration_ms: item.duration_ms ?? display.duration_ms,
+    cost: item.cost ?? display.cost,
+    tokens: item.tokens ?? display.tokens,
+    success: item.success ?? display.success,
+    error_type: item.error_type ?? display.error_type,
+  }
+}
+
+function isSelected(item: TimelineItem): boolean {
+  return props.selectedEventRef !== null && item.events.some((e) => e.event_ref === props.selectedEventRef)
+}
 </script>
 
 <template>
   <section data-testid="timeline-group">
     <header
-      class="bg-background/95 border-border sticky top-0 z-10 flex cursor-pointer items-center gap-2 border-b px-3 py-1.5 backdrop-blur"
+      class="bg-background/95 border-border sticky top-0 z-10 flex cursor-pointer items-center gap-2 border-b backdrop-blur"
+      :class="isCompactSingleton ? 'px-3 py-1' : 'px-3 py-1.5'"
       data-testid="timeline-group-header"
       role="button"
       tabindex="0"
@@ -82,13 +137,20 @@ const totalTokens = computed(() => {
       <component
         :is="isNoTurn ? ListTree : MessageSquare"
         class="text-muted-foreground size-4 shrink-0"
+        :class="{ 'opacity-60': isCompactSingleton }"
         aria-hidden="true"
       />
-      <span class="text-foreground text-sm font-semibold">
+      <span
+        class="text-foreground font-semibold"
+        :class="isCompactSingleton ? 'text-xs' : 'text-sm'"
+      >
         {{ isNoTurn ? 'No turn' : `Turn ${turn?.turn_index ?? promptId}` }}
+        <template v-if="isContinuation">
+          <span class="text-muted-foreground font-normal">· continued</span>
+        </template>
       </span>
       <span
-        v-if="isNoTurn"
+        v-if="isNoTurn && !isCompactSingleton"
         class="text-muted-foreground text-xs"
       >Events not attributed to any prompt</span>
       <span
@@ -111,18 +173,47 @@ const totalTokens = computed(() => {
       same connector-line idiom `SubagentNode` uses for its own children.
       The "No turn" group stays compact (SPEC/critic guidance: it's a
       leading catch-all, not a turn) so it gets a plainer, unindented list.
+      Inside, `buildToolThreads` nests a tool call's decision/result one
+      rail deeper still (module doc above).
     -->
     <div
       v-if="!collapsed"
       :class="isNoTurn ? 'flex flex-col' : 'border-border/60 ml-[1.15rem] flex flex-col border-l pl-2'"
     >
-      <EventRow
-        v-for="item in items"
-        :key="item.key"
-        :item="item"
-        :correlation="correlationFor(item)"
-        @open="emit('open', $event)"
-      />
+      <template
+        v-for="node in renderNodes"
+        :key="node.type === 'thread' ? node.thread.key : node.item.key"
+      >
+        <EventRow
+          v-if="node.type === 'single'"
+          :item="node.item"
+          :correlation="correlationFor(node.item)"
+          :selected="isSelected(node.item)"
+          @open="emit('open', $event)"
+        />
+        <template v-else>
+          <EventRow
+            :item="displayItem(node.thread.primary, node.thread.display)"
+            :correlation="correlationFor(node.thread.primary)"
+            :selected="isSelected(node.thread.primary)"
+            @open="emit('open', $event)"
+          />
+          <div
+            class="border-border/50 ml-5 flex flex-col border-l pl-2"
+            data-testid="tool-thread-children"
+          >
+            <EventRow
+              v-for="child in node.thread.children"
+              :key="child.key"
+              :item="child"
+              :correlation="correlationFor(child)"
+              :selected="isSelected(child)"
+              nested
+              @open="emit('open', $event)"
+            />
+          </div>
+        </template>
+      </template>
     </div>
   </section>
 </template>

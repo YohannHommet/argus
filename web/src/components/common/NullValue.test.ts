@@ -30,6 +30,23 @@ describe('NullValue', () => {
     expect(wrapper.find('[title]').exists()).toBe(false)
   })
 
+  // Round-3 critic gap: a bare "—" with a dotted underline, repeated down
+  // an always-null table column with nothing else beside it, read as a
+  // rendering glitch ("clipped glyphs") rather than an intentional null
+  // marker. `plain` keeps the same title/aria-label tooltip contract and
+  // just drops the underline styling for that case.
+  it('drops the dotted-underline styling (but keeps the same title/aria-label) when plain is set', () => {
+    const wrapper = mount(NullValue, { props: { reason: 'Claude Code does not emit per-agent cost', plain: true } })
+    const trigger = wrapper.get('[title]')
+    expect(trigger.attributes('title')).toBe('Claude Code does not emit per-agent cost')
+    expect(trigger.classes()).not.toContain('underline')
+  })
+
+  it('keeps the dotted-underline styling by default (plain unset)', () => {
+    const wrapper = mount(NullValue, { props: { reason: 'Not measured' } })
+    expect(wrapper.get('[title]').classes()).toContain('underline')
+  })
+
   // NOT COVERED (honestly): TooltipContent's `{{ reason }}` interpolation
   // (the line inside <TooltipContent> in NullValue.vue) only renders once
   // reka-ui's Presence/PopperContent machinery actually opens the

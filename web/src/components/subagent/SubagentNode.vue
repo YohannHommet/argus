@@ -33,6 +33,7 @@ export const MAX_RENDER_DEPTH = 24
 import { computed, ref } from 'vue'
 import { ChevronDown, ChevronRight, TriangleAlert } from '@lucide/vue'
 
+import CopyIconButton from '@/components/common/CopyIconButton.vue'
 import NullValue from '@/components/common/NullValue.vue'
 import RawValue from '@/components/common/RawValue.vue'
 import { Badge } from '@/components/ui/badge'
@@ -156,7 +157,34 @@ function onChildSelect(agentId: string): void {
         />
       </Badge>
 
-      <span class="text-muted-foreground text-xs">
+      <!--
+        Sibling subagents of the same agent_type (e.g. two "explore" runs)
+        render as visually identical rows without something to tell them
+        apart — round-3 critic gap: "unnamed rows labeled only by
+        agent_type". There is no subagent *name* in this schema (honesty
+        limit — SPEC §1.9 has none to promote), so `agent_id` is the one
+        real distinguishing value every node already has; showing it
+        (truncated, full value on hover/copy) disambiguates without
+        inventing a name that isn't there.
+      -->
+      <span
+        class="text-muted-foreground hidden min-w-0 items-center gap-1 font-mono text-[0.6875rem] sm:flex"
+        data-testid="subagent-node-agent-id"
+      >
+        <span
+          class="max-w-32 truncate"
+          :title="node.agent_id"
+        >{{ node.agent_id }}</span>
+        <CopyIconButton
+          :text="node.agent_id"
+          label="Copy agent_id"
+        />
+      </span>
+
+      <span
+        class="text-muted-foreground text-xs"
+        data-testid="subagent-node-tools"
+      >
         tools:
         <NullValue
           v-if="node.tool_call_count === null"
@@ -190,6 +218,7 @@ function onChildSelect(agentId: string): void {
         <NullValue
           v-if="node.cost_usd === null"
           :reason="effectiveCostNote"
+          plain
         />
         <template v-else>
           {{ formatCost(node.cost_usd) }}

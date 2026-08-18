@@ -40,4 +40,17 @@ describe('EventRow', () => {
     expect(mount(EventRow, { props: { item: skewed } }).find('svg[aria-hidden="true"][title]').exists()).toBe(true)
     expect(mount(EventRow, { props: { item: notSkewed } }).findAll('svg[title]').length).toBe(0)
   })
+
+  // Round-3 critic gap: "row selection state must be visible" — the
+  // inspector can be open on some event, but nothing in the list shows
+  // which row that is without this.
+  it('marks the row selected via aria-selected/data-selected when selected is true, and not otherwise', () => {
+    const [item] = collapseEvents([otelToolResultEvent])
+    const selected = mount(EventRow, { props: { item: item!, selected: true } }).get('[data-testid="event-row"]')
+    const notSelected = mount(EventRow, { props: { item: item!, selected: false } }).get('[data-testid="event-row"]')
+
+    expect(selected.attributes('aria-selected')).toBe('true')
+    expect(selected.attributes('data-selected')).toBe('true')
+    expect(notSelected.attributes('aria-selected')).toBe('false')
+  })
 })

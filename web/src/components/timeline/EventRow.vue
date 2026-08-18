@@ -21,9 +21,13 @@ interface Props {
   item: TimelineItem
   /** ToolCall.correlation for this item's decision, when known — see EventRow's host for how it's derived. */
   correlation?: Correlation | null
+  /** True when this row's event_ref is the one currently open in the inspector — the only visible selection cue (round-3 critic gap: "row selection state must be visible"). */
+  selected?: boolean
+  /** True for a tool-thread child (tool.decision/tool.permission_request/tool.result nested under its tool.pre call, see TimelineGroup's `buildToolThreads` usage) — renders slightly smaller/quieter than a top-level row, since the thread's own rail already shows the nesting. */
+  nested?: boolean
 }
 
-const props = withDefaults(defineProps<Props>(), { correlation: null })
+const props = withDefaults(defineProps<Props>(), { correlation: null, selected: false, nested: false })
 
 const emit = defineEmits<{
   /** The user wants the raw `attrs` for one event_ref — the primary event by default, or a specific source from the "N sources" list. */
@@ -45,16 +49,20 @@ function openEvent(eventRef: string) {
 
 <template>
   <div
-    class="border-border/50 hover:bg-muted/40 flex cursor-pointer items-start gap-3 border-b px-3 py-2 text-sm"
+    class="border-border/50 hover:bg-muted/40 flex cursor-pointer items-start gap-3 border-b text-sm"
+    :class="[nested ? 'px-2 py-1.5' : 'px-3 py-2', selected ? 'bg-muted border-l-primary border-l-2' : '']"
     data-testid="event-row"
+    :data-selected="selected"
     role="button"
     tabindex="0"
+    :aria-selected="selected"
     @click="openPrimary"
     @keydown.enter="openPrimary"
   >
     <component
       :is="meta.icon"
-      class="text-muted-foreground mt-0.5 size-4 shrink-0"
+      class="text-muted-foreground mt-0.5 shrink-0"
+      :class="nested ? 'size-3.5' : 'size-4'"
       aria-hidden="true"
     />
 
