@@ -22,6 +22,11 @@ npm-debug.log*
 # already ignored above.
 /dist/
 
+# Screenshot harness output (scripts/ui-capture.sh takes the out dir as $1;
+# these are the conventional locations, and PNGs are never committed).
+/screenshots/
+/web/screenshots/
+
 # Env
 .env
 .env.*

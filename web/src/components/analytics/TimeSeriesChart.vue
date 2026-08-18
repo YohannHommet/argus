@@ -1,0 +1,198 @@
+<script setup lang="ts">
+/**
+ * Renders `GET /analytics/timeseries` (SPEC §4.3) as a multi-series line
+ * chart. Buckets are dense/zero-filled server-side — no gap handling here.
+ * A series whose `key` is `""` (events with no model attributed) is
+ * labelled "unattributed" for the legend/tooltip; `data.other` (series
+ * beyond `limit_series`, folded by total desc) renders as its own
+ * "Other" series rather than being dropped.
+ */
+import { computed, ref } from 'vue'
+import type { ComposeOption } from 'echarts/core'
+import type { LineSeriesOption } from 'echarts/charts'
+import type {
+  DataZoomComponentOption,
+  GridComponentOption,
+  LegendComponentOption,
+  TooltipComponentOption,
+} from 'echarts/components'
+
+import { ApiError } from '@/api/errors'
+import type { components } from '@/api/schema'
+import { formatterForMetric, useChartResize, VChart, type ChartMetricKind, type ResizableChart } from '@/lib/echarts'
+import { chartLegend, metricColor, paletteColor, slimDataZoom, useChartTheme, withAlpha, type MetricKey } from '@/lib/echartsTheme'
+import ErrorState from '@/components/common/ErrorState.vue'
+import EmptyState from '@/components/common/EmptyState.vue'
+import { Skeleton } from '@/components/ui/skeleton'
+
+type TimeSeriesOption = ComposeOption<
+  LineSeriesOption | GridComponentOption | TooltipComponentOption | LegendComponentOption | DataZoomComponentOption
+>
+
+interface Props {
+  data?: components['schemas']['Series'] | null
+  loading?: boolean
+  error?: ApiError | Error | null
+  metric?: ChartMetricKind
+}
+
+const props = withDefaults(defineProps<Props>(), {
+  data: null,
+  loading: false,
+  error: null,
+  metric: 'count',
+})
+
+const emit = defineEmits<{ retry: [] }>()
+
+const theme = useChartTheme()
+
+const containerRef = ref<HTMLElement | null>(null)
+const chartRef = ref<ResizableChart | null>(null)
+useChartResize(containerRef, chartRef)
+
+const valueFormatter = computed(() => formatterForMetric(props.metric))
+
+/** `''` (unattributed) gets a visible label; every other key is the vendor's own name, verbatim. */
+function seriesLabel(key: string): string {
+  return key === '' ? 'unattributed' : key
+}
+
+const isEmpty = computed(() => {
+  const d = props.data
+  return !d || (d.series.length === 0 && !d.other)
+})
+
+/**
+ * This chart only ever renders `metric="cost"` or `metric="tokens"` on the
+ * Analytics screen (see `AnalyticsView.vue`'s two panels) — both are the
+ * `'neutral'`/primary hue in `echartsTheme.ts`'s `METRIC_SEMANTICS` table,
+ * so a solo (unattributed, nothing to distinguish it from) series just
+ * takes that metric's own semantic color rather than a hardcoded value.
+ */
+function soloSeriesMetricKey(metric: ChartMetricKind): MetricKey {
+  return metric === 'tokens' ? 'tokens' : 'cost'
+}
+
+function axisLabels(d: components['schemas']['Series']): string[] {
+  const opts: Intl.DateTimeFormatOptions =
+    d.bucket === 'hour' ? { hour: '2-digit', minute: '2-digit' } : { month: 'short', day: 'numeric' }
+  return d.buckets.map((iso) => new Intl.DateTimeFormat('en-US', opts).format(new Date(iso)))
+}
+
+const option = computed<TimeSeriesOption>(() => {
+  const d = props.data
+  const t = theme.value
+  if (!d) {
+    return { backgroundColor: t.cardBackgroundColor, textStyle: t.textStyle, series: [] }
+  }
+
+  // A chart with exactly one series and no `other` bucket (e.g. "Tokens over
+  // time" with no group_by dimension) has nothing for that lone series to be
+  // distinguished FROM — dashing/muting it the way a real "unattributed
+  // amongst named series" gets treated would read as a placeholder instead
+  // of the metric's own data (round-3 UI pass gap: "near-invisible dashed
+  // white token line"). Only the multi-series case still mutes+dashes
+  // "unattributed" so it stays visually subordinate to real, named series.
+  const isSoloSeries = d.series.length === 1 && !d.other
+
+  // A palette index is only ever spent on a real, named series — "unattributed" (`key === ''`)
+  // always renders muted/dashed, the same treatment `other` gets below, so blue (palette index 0)
+  // means the same thing in every chart on this screen: a real, named entity, never "no model"
+  // (round-5 UI pass, gap: "blue means different things in adjacent charts").
+  let paletteIndex = 0
+  const series: LineSeriesOption[] = d.series.map((point) => {
+    const isUnattributed = point.key === '' && !isSoloSeries
+    const color = isUnattributed
+      ? t.mutedColor
+      : point.key === ''
+        ? metricColor(t, soloSeriesMetricKey(props.metric))
+        : paletteColor(t, paletteIndex++)
+    return {
+      type: 'line',
+      name: seriesLabel(point.key),
+      data: point.values,
+      showSymbol: false,
+      smooth: 0.2,
+      lineStyle: { color, width: isSoloSeries ? 2.5 : 2, type: isUnattributed ? 'dashed' : 'solid' },
+      itemStyle: { color },
+      emphasis: { focus: 'series', lineStyle: { width: isSoloSeries ? 3.5 : 3 } },
+    }
+  })
+
+  if (d.other) {
+    series.push({
+      type: 'line',
+      name: 'Other',
+      data: d.other.values,
+      showSymbol: false,
+      lineStyle: { color: t.mutedColor, type: 'dashed', width: 2 },
+      itemStyle: { color: t.mutedColor },
+      emphasis: { focus: 'series', lineStyle: { width: 3 } },
+    })
+  }
+
+  // A single-series legend ("unattributed" alone, e.g. the tokens chart with no group_by
+  // dimension) carries no information — there's nothing to distinguish it from (round-5 UI pass).
+  const showLegend = series.length > 1
+
+  return {
+    backgroundColor: t.cardBackgroundColor,
+    textStyle: t.textStyle,
+    grid: { left: 56, right: 16, top: 40, bottom: 40 },
+    tooltip: {
+      trigger: 'axis',
+      valueFormatter: (value) => valueFormatter.value(typeof value === 'number' ? value : Number(value)),
+    },
+    ...(showLegend ? { legend: chartLegend(t) } : {}),
+    dataZoom: slimDataZoom(t),
+    xAxis: {
+      type: 'category',
+      data: axisLabels(d),
+      axisLine: { lineStyle: { color: t.borderColor } },
+      axisTick: { show: false },
+      axisLabel: { color: t.mutedColor, fontSize: 11 },
+    },
+    yAxis: {
+      type: 'value',
+      axisLine: { show: false },
+      axisTick: { show: false },
+      axisLabel: { color: t.mutedColor, fontSize: 11, formatter: (value: number) => valueFormatter.value(value) },
+      // Lighter/thinner than `t.borderColor`'s own 10% alpha (round-3 UI pass:
+      // the grid must sit visually *below* a solid, weighted series line, not
+      // compete with it) — `withAlpha` replaces rather than stacks the
+      // border token's own baked-in alpha.
+      splitLine: { lineStyle: { color: withAlpha(t.borderColor, 6), type: 'dashed', width: 1 } },
+    },
+    series,
+  }
+})
+</script>
+
+<template>
+  <ErrorState
+    v-if="error"
+    :error="error"
+    @retry="emit('retry')"
+  />
+  <Skeleton
+    v-else-if="loading"
+    class="h-64 w-full"
+  />
+  <EmptyState
+    v-else-if="isEmpty"
+    title="No data for this range"
+  />
+  <div
+    v-else
+    ref="containerRef"
+    class="h-64 w-full"
+  >
+    <VChart
+      ref="chartRef"
+      class="h-full w-full"
+      :option="option"
+      :autoresize="false"
+    />
+  </div>
+</template>

@@ -38,16 +38,46 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html'],
+      // What the gate is allowed to measure. Both entries below remove code
+      // that was never meant to be under an Argus coverage bar; neither
+      // relaxes the bar itself.
+      //
+      // - `src/components/ui/**` is shadcn-vue's registry output, copied in
+      //   verbatim (SPEC §6.1 "copied into web/src/components/ui/, owned
+      //   code"). We own it in the sense that we may edit it, but we do not
+      //   write tests for reka-ui primitives — we test our own components
+      //   that use them. Measuring it meant ~20 files at 0% dragging the
+      //   global number purely as a function of how many primitives the
+      //   phase happened to install.
+      // - test scaffolding (`src/test/**` fixtures, `*.test.ts`,
+      //   `__tests__/**`) is the measuring instrument, not the subject.
+      exclude: [
+        'src/components/ui/**',
+        'src/test/**',
+        'src/**/*.test.ts',
+        'src/**/__tests__/**',
+      ],
       // Gate, not just report: `pnpm unit --coverage` collected numbers
-      // but nothing failed the build if they regressed (m23). Set at the
-      // measured baseline on this commit (statements 88.88%, branches
-      // 85.36%, functions 75%, lines 88.23%) so today's suite is green
-      // and any drop below it is red.
+      // but nothing failed the build if they regressed (m23). Each floor is
+      // the measured value truncated to an integer, so the gate always
+      // states what the suite actually achieves rather than an aspiration.
+      //
+      // Set at the P4-01 baseline as statements 88.88 / branches 85.36 /
+      // functions 75.00 / lines 88.23 -> 88/85/75/88. Re-measured at the
+      // Phase-4 exit, after the visual gauntlet's ten rounds added component
+      // tests alongside every design change: statements 91.68 / branches
+      // 88.22 / functions 86.87 / lines 93.03. Raised to match — a floor
+      // left at the old number would silently permit losing the coverage
+      // the gauntlet actually bought. Floors are only ever raised here.
+      //
+      // Caveat for Phase 5: `views/LiveView.vue` is a 0%-covered stub and is
+      // that phase's subject, so it will move all four numbers when filled
+      // in. Re-measure and re-truncate then; do not lower these to make room.
       thresholds: {
-        statements: 88,
-        branches: 85,
-        functions: 75,
-        lines: 88,
+        statements: 91,
+        branches: 88,
+        functions: 86,
+        lines: 93,
       },
     },
   },

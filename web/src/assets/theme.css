@@ -15,6 +15,16 @@
 :root {
   --radius: 0.625rem;
 
+  /*
+   * Tells the browser which UI-agent palette to paint native form control
+   * chrome with (date-picker icon/popup, select caret, spinner buttons).
+   * Without this, Chromium renders those pieces with its light-mode
+   * defaults regardless of our own dark tokens above — the classic
+   * "white mm/dd/yyyy box in an otherwise dark page" bug. Kept in sync
+   * with the `.dark`/`.light` class ui.ts toggles on `<html>`.
+   */
+  color-scheme: dark;
+
   /* shadcn-vue token set (dark values) */
   --background: oklch(0.145 0 0);
   --foreground: oklch(0.985 0 0);
@@ -22,8 +32,16 @@
   --card-foreground: oklch(0.985 0 0);
   --popover: oklch(0.205 0 0);
   --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
+  /*
+   * One deliberate primary accent (a calm indigo) drives buttons, links,
+   * the checked switch state and the sidebar's active nav item — the
+   * single spot of hue in an otherwise neutral, grayscale UI. Everything
+   * else (--chart-*, semantic tokens below) is built off the same
+   * chroma/lightness family so the product reads as one system rather
+   * than a grab-bag of library defaults (round-4 UI pass, gap #2).
+   */
+  --primary: oklch(0.65 0.19 258);
+  --primary-foreground: oklch(0.985 0 0);
   --secondary: oklch(0.269 0 0);
   --secondary-foreground: oklch(0.985 0 0);
   --muted: oklch(0.269 0 0);
@@ -36,39 +54,56 @@
   --input: oklch(1 0 0 / 15%);
   --ring: oklch(0.556 0 0);
 
-  --chart-1: oklch(0.488 0.243 264.376);
-  --chart-2: oklch(0.696 0.17 162.48);
-  --chart-3: oklch(0.769 0.188 70.08);
-  --chart-4: oklch(0.627 0.265 303.9);
-  --chart-5: oklch(0.645 0.246 16.439);
+  /*
+   * Categorical chart palette: 5 hues at matching chroma (~0.15-0.19) and
+   * lightness (~0.65-0.78 dark-mode), spaced around the wheel and kept
+   * clear of the semantic hues below (accept's green ~155, reject's red
+   * ~22, warn/pending's amber ~80) so a generic series never looks like it
+   * is making a good/bad claim. chart-1 doubles as --primary on purpose —
+   * the "dominant" series in a chart is the same hue as the rest of the
+   * product's one accent.
+   */
+  --chart-1: oklch(0.65 0.19 258); /* indigo (== primary) */
+  --chart-2: oklch(0.75 0.14 200); /* cyan */
+  --chart-3: oklch(0.78 0.15 85); /* amber */
+  --chart-4: oklch(0.68 0.18 305); /* violet */
+  --chart-5: oklch(0.7 0.17 350); /* rose */
 
   --sidebar: oklch(0.205 0 0);
   --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary: oklch(0.65 0.19 258);
   --sidebar-primary-foreground: oklch(0.985 0 0);
   --sidebar-accent: oklch(0.269 0 0);
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
 
-  /* Argus semantic tokens */
-  --accept: oklch(0.696 0.17 162.48);
+  /*
+   * Argus semantic tokens. --cost is deliberately NOT red — cost is
+   * neutral measured data, not an error signal, so it reads as plain
+   * foreground text everywhere (KPI tiles, tables, timeline). Red/danger
+   * (--reject, --destructive) is reserved strictly for actual rejects and
+   * failures (gap #1).
+   */
+  --accept: oklch(0.72 0.17 155);
   --reject: oklch(0.704 0.191 22.216);
-  --pending: oklch(0.769 0.188 70.08);
-  --cost: oklch(0.645 0.246 16.439);
-  --warn: oklch(0.769 0.188 70.08);
+  --pending: oklch(0.78 0.15 85);
+  --cost: var(--foreground);
+  --warn: oklch(0.78 0.15 85);
   --unknown: oklch(0.708 0 0);
-  --vendor-claude: oklch(0.627 0.265 303.9);
+  --vendor-claude: oklch(0.68 0.18 305);
 }
 
 .light {
+  color-scheme: light;
+
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);
   --card-foreground: oklch(0.145 0 0);
   --popover: oklch(1 0 0);
   --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
+  --primary: oklch(0.5 0.19 258);
   --primary-foreground: oklch(0.985 0 0);
   --secondary: oklch(0.97 0 0);
   --secondary-foreground: oklch(0.205 0 0);
@@ -82,29 +117,30 @@
   --input: oklch(0.922 0 0);
   --ring: oklch(0.708 0 0);
 
-  --chart-1: oklch(0.646 0.222 41.116);
-  --chart-2: oklch(0.6 0.118 184.704);
-  --chart-3: oklch(0.398 0.07 227.392);
-  --chart-4: oklch(0.828 0.189 84.429);
-  --chart-5: oklch(0.769 0.188 70.08);
+  /* Same 5-hue family as :root, recalibrated darker/more saturated for contrast on a white card. */
+  --chart-1: oklch(0.5 0.19 258); /* indigo (== primary) */
+  --chart-2: oklch(0.58 0.12 200); /* cyan */
+  --chart-3: oklch(0.62 0.15 85); /* amber */
+  --chart-4: oklch(0.55 0.18 305); /* violet */
+  --chart-5: oklch(0.58 0.17 350); /* rose */
 
   --sidebar: oklch(0.985 0 0);
   --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
+  --sidebar-primary: oklch(0.5 0.19 258);
   --sidebar-primary-foreground: oklch(0.985 0 0);
   --sidebar-accent: oklch(0.97 0 0);
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
 
-  /* Argus semantic tokens */
-  --accept: oklch(0.6 0.118 184.704);
+  /* Argus semantic tokens — --cost stays neutral foreground text, never red (see :root). */
+  --accept: oklch(0.6 0.14 155);
   --reject: oklch(0.577 0.245 27.325);
-  --pending: oklch(0.769 0.188 70.08);
-  --cost: oklch(0.398 0.07 227.392);
-  --warn: oklch(0.769 0.188 70.08);
+  --pending: oklch(0.62 0.15 85);
+  --cost: var(--foreground);
+  --warn: oklch(0.62 0.15 85);
   --unknown: oklch(0.556 0 0);
-  --vendor-claude: oklch(0.646 0.222 41.116);
+  --vendor-claude: oklch(0.55 0.18 305);
 }
 
 @theme inline {

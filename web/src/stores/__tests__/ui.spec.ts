@@ -80,6 +80,53 @@ describe('useUiStore', () => {
     })
   })
 
+  it('falls back to the default theme when the stored value is neither "dark" nor "light"', () => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ theme: 'blue' }))
+
+    const ui = useUiStore()
+
+    // Valid JSON, but an unrecognized theme value — readStoredTheme()'s
+    // own validation must reject it (returning null) rather than trusting
+    // whatever a stale/foreign write left behind, falling through to
+    // prefers-color-scheme / dark exactly as if nothing were stored.
+    expect(ui.theme).toBe('dark')
+  })
+
+  it('defaults to dark when window.matchMedia itself is unavailable (older/embedded webviews)', () => {
+    const original = window.matchMedia
+    Reflect.deleteProperty(window, 'matchMedia')
+
+    try {
+      const ui = useUiStore()
+      expect(ui.theme).toBe('dark')
+    } finally {
+      window.matchMedia = original
+    }
+  })
+
+  it('falls back to the default theme when the stored value is malformed JSON', () => {
+    localStorage.setItem(STORAGE_KEY, 'not-json{')
+
+    const ui = useUiStore()
+
+    // readStoredTheme()'s try/catch swallows the JSON.parse failure and
+    // returns null, so detection falls through to prefers-color-scheme /
+    // dark — it must not throw and leave the store unusable.
+    expect(ui.theme).toBe('dark')
+    expect(document.documentElement.classList.contains('dark')).toBe(true)
+  })
+
+  it('setTheme() sets the theme directly, applies the class and persists it', () => {
+    const ui = useUiStore()
+
+    ui.setTheme('light')
+
+    expect(ui.theme).toBe('light')
+    expect(document.documentElement.classList.contains('light')).toBe(true)
+    expect(document.documentElement.classList.contains('dark')).toBe(false)
+    expect(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}')).toEqual({ theme: 'light' })
+  })
+
   it('uses light when prefers-color-scheme: light matches and no localStorage entry exists', () => {
     window.matchMedia = (query: string) =>
       ({

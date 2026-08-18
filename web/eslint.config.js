@@ -33,6 +33,19 @@ export default tseslint.config(
     },
   },
   {
+    // web/scripts/* are Node tooling scripts (the OpenAPI fixture generator,
+    // the screenshot harness's Playwright half), not browser code: they use
+    // `process`, `console` and Node's `fetch`, which the browser globals set
+    // above does not declare.
+    name: 'app/node-scripts',
+    files: ['scripts/**/*.{js,mjs,ts}'],
+    languageOptions: {
+      globals: {
+        ...globals.node,
+      },
+    },
+  },
+  {
     name: 'app/rules',
     rules: {
       'vue/multi-word-component-names': 'off',
@@ -43,10 +56,27 @@ export default tseslint.config(
     // src/components/ui/) type optional props via a TS interface rather
     // than Vue's runtime prop-default system; vue/require-default-prop
     // doesn't understand TS-optional props and flags every one of them.
+    // vue/max-attributes-per-line is off for the same reason: the registry
+    // ships these files pre-formatted, and reformatting them by hand turns
+    // every future `shadcn-vue add --overwrite` into a conflict.
+    // Argus-authored components are held to both rules.
     name: 'app/shadcn-ui-overrides',
     files: ['src/components/ui/**/*.vue'],
     rules: {
       'vue/require-default-prop': 'off',
+      'vue/max-attributes-per-line': 'off',
+    },
+  },
+  {
+    // Specs legitimately declare several throwaway `defineComponent` harnesses
+    // in one file (a parent that provides, a child that injects, a wrapper
+    // that unmounts). vue/one-component-per-file is a source-organisation
+    // rule aimed at shipped components; splitting a test's fixtures across
+    // files to satisfy it would make the tests harder to read, not better.
+    name: 'app/test-overrides',
+    files: ['src/**/*.test.ts', 'src/**/__tests__/**/*.ts'],
+    rules: {
+      'vue/one-component-per-file': 'off',
     },
   },
 )
