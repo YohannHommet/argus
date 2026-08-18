@@ -133,17 +133,108 @@ export function paletteColor(theme: ChartTheme, index: number): string {
 }
 
 /**
- * Appends an alpha channel to a token's resolved `oklch(L C H)` string —
- * `theme.css` never stores alpha on `--primary`/`--chart-*` (only `--border`
- * and `--input` bake one in), so this is how chart chrome gets a translucent
- * fill (dataZoom's selected range, hover halos) without a second token per
- * color. No-ops (returns the input unchanged) on anything not already
- * `oklch(...)`, so passing an already-alpha'd token like `--border` through
- * here can never double up the alpha component.
+ * Sets a token's resolved `oklch(L C H [/ A%])` string to a new alpha
+ * channel — `theme.css` never stores alpha on `--primary`/`--chart-*` (only
+ * `--border` and `--input` bake one in), so this is how chart chrome gets a
+ * translucent fill (dataZoom's selected range, hover halos, the round-3
+ * lighter grid lines below) without a second token per color. No-ops
+ * (returns the input unchanged) on anything not `oklch(...)`. Replaces
+ * (rather than appends) any alpha component already present, so passing an
+ * already-alpha'd token like `--border` through here can never double up
+ * the alpha into an invalid `oklch(... / 10% / 6%)`.
  */
 export function withAlpha(oklchColor: string, percent: number): string {
-  if (!/^oklch\([^)]*\)$/.test(oklchColor)) return oklchColor
-  return oklchColor.replace(/\)$/, ` / ${percent}%)`)
+  const match = /^oklch\(([^)]*)\)$/.exec(oklchColor)
+  if (!match) return oklchColor
+  const withoutExistingAlpha = match[1].replace(/\s*\/\s*[\d.]+%\s*$/, '')
+  return `oklch(${withoutExistingAlpha} / ${percent}%)`
+}
+
+/**
+ * Semantic identity of a KPI/series metric, independent of `ChartMetricKind`
+ * (`lib/echarts.ts`'s `cost`/`tokens`/`count`/`duration`, which only selects
+ * a *formatter* and says nothing about whether more is good or bad). Every
+ * metric the Analytics screen shows a sparkline/delta/series for maps to
+ * exactly one entry in {@link METRIC_SEMANTICS} — the single table that
+ * decides hue + polarity (round-3 UI pass gap: "sparklines, deltas, and
+ * chart series are all rendered in one undifferentiated blue/gray").
+ */
+export type MetricKey =
+  | 'cost'
+  | 'tokens'
+  | 'api_requests'
+  | 'api_errors'
+  | 'tool_rejects'
+  | 'tool_calls'
+  | 'sessions'
+  | 'turns'
+  | 'loc_added'
+  | 'loc_removed'
+  | 'active_time'
+  | 'reject_rate'
+
+/** Which of the theme's three semantic colors a metric's sparkline/series uses. */
+type MetricHue = 'neutral' | 'destructive' | 'secondary'
+
+/**
+ * Whether a *rising* value is bad news for this metric. `'destructive'`
+ * (errors, rejects, reject rate) means up reads as a warning and down as an
+ * improvement. `'neutral'` (cost, tokens, requests, and the other count-ish
+ * KPIs) means more isn't failure — spending more or running more
+ * sessions/turns/tool-calls is simply more, so its delta is tinted with the
+ * accent color going up and muted going down, never red/green.
+ */
+export type MetricPolarity = 'neutral' | 'destructive'
+
+const METRIC_SEMANTICS: Record<MetricKey, { hue: MetricHue; polarity: MetricPolarity }> = {
+  cost: { hue: 'neutral', polarity: 'neutral' },
+  tokens: { hue: 'neutral', polarity: 'neutral' },
+  api_requests: { hue: 'neutral', polarity: 'neutral' },
+  api_errors: { hue: 'destructive', polarity: 'destructive' },
+  tool_rejects: { hue: 'destructive', polarity: 'destructive' },
+  tool_calls: { hue: 'secondary', polarity: 'neutral' },
+  sessions: { hue: 'secondary', polarity: 'neutral' },
+  turns: { hue: 'secondary', polarity: 'neutral' },
+  loc_added: { hue: 'secondary', polarity: 'neutral' },
+  loc_removed: { hue: 'secondary', polarity: 'neutral' },
+  active_time: { hue: 'secondary', polarity: 'neutral' },
+  reject_rate: { hue: 'destructive', polarity: 'destructive' },
+}
+
+/** This metric's polarity — see {@link MetricPolarity}. Exposed standalone so hosts can direction-tint a delta without reaching into the hue mapping. */
+export function metricPolarity(key: MetricKey): MetricPolarity {
+  return METRIC_SEMANTICS[key].polarity
+}
+
+/**
+ * Resolves a metric's semantic hue to an actual theme color: `'neutral'` ->
+ * `t.primary` (the same hue cost/tokens/requests use everywhere else on the
+ * screen), `'destructive'` -> `t.reject`, `'secondary'` -> the categorical
+ * palette's second color (`--chart-2`) — a fixed, muted hue distinct from
+ * both, never cycled per-series the way `paletteColor` cycles a
+ * multi-series chart's palette.
+ */
+export function metricColor(t: ChartTheme, key: MetricKey): string {
+  const { hue } = METRIC_SEMANTICS[key]
+  if (hue === 'neutral') return t.primary
+  if (hue === 'destructive') return t.reject
+  return t.categoricalPalette[1]
+}
+
+/**
+ * Tints a delta by direction *and* the metric's own polarity (gap:
+ * "deltas ... rendered in one undifferentiated blue/gray" +
+ * "encode polarity, don't moralize neutral metrics"). A zero delta is
+ * always muted — there's no direction to tint. For a `'destructive'` metric
+ * rising is bad (`t.reject`) and falling is good (`t.accept`); for a
+ * `'neutral'` metric rising gets the accent color and falling is simply
+ * muted, never red/green.
+ */
+export function deltaColor(t: ChartTheme, key: MetricKey, delta: number | null | undefined): string {
+  if (delta === null || delta === undefined || delta === 0) return t.mutedColor
+  const { polarity } = METRIC_SEMANTICS[key]
+  if (polarity === 'destructive') return delta > 0 ? t.reject : t.accept
+  return delta > 0 ? t.primary : t.mutedColor
 }
 
 /**

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { useUiStore } from '@/stores/ui'
 import { ApiError } from '@/api/errors'
+import { buildChartTheme } from '@/lib/echartsTheme'
 import { getAnalyticsTimeseries200Default } from '@/test/fixtures'
 import { timeseriesWithUnattributedSeries } from '@/test/fixtures.extra'
 import { makeVChartStub, stubResizeObserver, VCHART_STUB_KEY } from '@/test/chartStub'
@@ -92,6 +93,29 @@ describe('TimeSeriesChart', () => {
     })
     const singleSeriesOption = singleChart.props('option') as { legend?: unknown }
     expect(singleSeriesOption.legend).toBeUndefined()
+  })
+
+  it('renders a solo unattributed series (nothing to distinguish it from, e.g. "Tokens over time" with no group_by) solid and metric-colored, not dashed/muted (round-3 UI gap: "near-invisible dashed white token line")', () => {
+    const theme = buildChartTheme()
+    const soloData = {
+      bucket: 'day' as const,
+      buckets: ['2026-08-11T08:00:00Z', '2026-08-12T08:00:00Z'],
+      series: [{ key: '', values: [1, 2] }],
+    }
+    const { chart } = mountChart({ data: soloData, metric: 'tokens' })
+    const option = chart.props('option') as {
+      series: { name: string; lineStyle: { color: string; type?: string; width?: number } }[]
+    }
+    const solo = option.series.find((s) => s.name === 'unattributed')!
+    expect(solo.lineStyle.type).toBe('solid')
+    expect(solo.lineStyle.color).toBe(theme.primary)
+    expect(solo.lineStyle.width).toBeGreaterThan(2)
+  })
+
+  it('still dashes/mutes "unattributed" when it sits alongside other series (something to distinguish it from)', () => {
+    const { chart } = mountChart({ data: timeseriesWithUnattributedSeries, metric: 'cost' })
+    const option = chart.props('option') as { series: { name: string; lineStyle: { type?: string } }[] }
+    expect(option.series.find((s) => s.name === 'unattributed')!.lineStyle.type).toBe('dashed')
   })
 
   it('changes backgroundColor and textStyle.color in the regenerated option when the theme toggles', () => {

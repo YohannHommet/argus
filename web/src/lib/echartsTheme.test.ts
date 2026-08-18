@@ -3,7 +3,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it } from 'vitest'
 
 import { useUiStore } from '@/stores/ui'
-import { buildChartTheme, paletteColor, useChartTheme } from './echartsTheme'
+import { buildChartTheme, deltaColor, metricColor, metricPolarity, paletteColor, useChartTheme, withAlpha, type MetricKey } from './echartsTheme'
 
 describe('buildChartTheme', () => {
   beforeEach(() => {
@@ -49,6 +49,105 @@ describe('paletteColor', () => {
     expect(paletteColor(theme, 5)).toBe(theme.categoricalPalette[0])
     expect(paletteColor(theme, 6)).toBe(theme.categoricalPalette[1])
   })
+})
+
+describe('withAlpha', () => {
+  it('appends an alpha channel to a token with none', () => {
+    const theme = buildChartTheme()
+    expect(withAlpha(theme.primary, 18)).toBe(`${theme.primary.slice(0, -1)} / 18%)`)
+  })
+
+  it('replaces (never doubles up) an alpha channel already present on the token', () => {
+    // --border's own fallback already bakes in "/ 10%" — round-3 fix: a
+    // naive append would produce the invalid "oklch(1 0 0 / 10% / 6%)".
+    const replaced = withAlpha('oklch(1 0 0 / 10%)', 6)
+    expect(replaced).toBe('oklch(1 0 0 / 6%)')
+    expect(replaced.match(/%/g)).toHaveLength(1)
+  })
+
+  it('no-ops on a value that is not an oklch(...) string', () => {
+    expect(withAlpha('transparent', 50)).toBe('transparent')
+  })
+})
+
+/**
+ * Round-3 UI pass gap: "sparklines, deltas, and chart series are all
+ * rendered in one undifferentiated blue/gray ... assign semantic color".
+ * Table-driven per the fix's own instruction — every {@link MetricKey} the
+ * Analytics screen shows gets one row asserting its hue class and polarity
+ * together, so a future metric added to `METRIC_SEMANTICS` without an entry
+ * here is undocumented, not silently defaulted.
+ */
+const METRIC_TABLE: { key: MetricKey; expectHue: 'neutral' | 'destructive' | 'secondary' }[] = [
+  { key: 'cost', expectHue: 'neutral' },
+  { key: 'tokens', expectHue: 'neutral' },
+  { key: 'api_requests', expectHue: 'neutral' },
+  { key: 'api_errors', expectHue: 'destructive' },
+  { key: 'tool_rejects', expectHue: 'destructive' },
+  { key: 'reject_rate', expectHue: 'destructive' },
+  { key: 'tool_calls', expectHue: 'secondary' },
+  { key: 'sessions', expectHue: 'secondary' },
+  { key: 'turns', expectHue: 'secondary' },
+  { key: 'loc_added', expectHue: 'secondary' },
+  { key: 'loc_removed', expectHue: 'secondary' },
+  { key: 'active_time', expectHue: 'secondary' },
+]
+
+describe('metricColor', () => {
+  const theme = buildChartTheme()
+
+  it.each(METRIC_TABLE)('resolves $key to its $expectHue hue', ({ key, expectHue }) => {
+    const color = metricColor(theme, key)
+    if (expectHue === 'neutral') expect(color).toBe(theme.primary)
+    if (expectHue === 'destructive') expect(color).toBe(theme.reject)
+    if (expectHue === 'secondary') expect(color).toBe(theme.categoricalPalette[1])
+  })
+})
+
+describe('metricPolarity', () => {
+  it.each([
+    { key: 'cost' as const, expected: 'neutral' as const },
+    { key: 'tokens' as const, expected: 'neutral' as const },
+    { key: 'api_requests' as const, expected: 'neutral' as const },
+    { key: 'tool_calls' as const, expected: 'neutral' as const },
+    { key: 'sessions' as const, expected: 'neutral' as const },
+    { key: 'turns' as const, expected: 'neutral' as const },
+    { key: 'loc_added' as const, expected: 'neutral' as const },
+    { key: 'loc_removed' as const, expected: 'neutral' as const },
+    { key: 'active_time' as const, expected: 'neutral' as const },
+    { key: 'api_errors' as const, expected: 'destructive' as const },
+    { key: 'tool_rejects' as const, expected: 'destructive' as const },
+    { key: 'reject_rate' as const, expected: 'destructive' as const },
+  ])('$key is $expected', ({ key, expected }) => {
+    expect(metricPolarity(key)).toBe(expected)
+  })
+})
+
+describe('deltaColor', () => {
+  const theme = buildChartTheme()
+
+  it('is muted for a zero, null, or undefined delta regardless of metric', () => {
+    expect(deltaColor(theme, 'cost', 0)).toBe(theme.mutedColor)
+    expect(deltaColor(theme, 'api_errors', 0)).toBe(theme.mutedColor)
+    expect(deltaColor(theme, 'cost', null)).toBe(theme.mutedColor)
+    expect(deltaColor(theme, 'cost', undefined)).toBe(theme.mutedColor)
+  })
+
+  it.each(['cost', 'tokens', 'api_requests', 'tool_calls', 'sessions', 'turns'] as const)(
+    'tints a rising %s neutrally (accent), never red/green — more cost/usage is not failure',
+    (key) => {
+      expect(deltaColor(theme, key, 5)).toBe(theme.primary)
+      expect(deltaColor(theme, key, -5)).toBe(theme.mutedColor)
+    },
+  )
+
+  it.each(['api_errors', 'tool_rejects', 'reject_rate'] as const)(
+    'tints a rising %s destructive (red) and a falling one positive (green)',
+    (key) => {
+      expect(deltaColor(theme, key, 5)).toBe(theme.reject)
+      expect(deltaColor(theme, key, -5)).toBe(theme.accept)
+    },
+  )
 })
 
 describe('useChartTheme', () => {

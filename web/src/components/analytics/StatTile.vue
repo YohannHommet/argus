@@ -13,6 +13,7 @@ import { computed } from 'vue'
 
 import { ApiError } from '@/api/errors'
 import { formatterForMetric, type ChartMetricKind } from '@/lib/echarts'
+import { metricPolarity, type MetricKey } from '@/lib/echartsTheme'
 import { NOT_ATTRIBUTABLE_TO_MODEL } from '@/lib/nullReasons'
 import NullValue from '@/components/common/NullValue.vue'
 import ErrorState from '@/components/common/ErrorState.vue'
@@ -26,6 +27,14 @@ interface Props {
   value?: number | null
   /** Selects the `lib/format.ts` formatter. Defaults to a plain count. */
   metric?: ChartMetricKind
+  /**
+   * Which KPI this tile is — selects the sparkline's hue and the delta's
+   * direction-tint via `lib/echartsTheme.ts`'s `METRIC_SEMANTICS` table
+   * (round-3 UI pass gap: "sparklines, deltas ... rendered in one
+   * undifferentiated blue/gray"). Defaults to `'cost'` (neutral/primary)
+   * for callers that don't pass one.
+   */
+  metricKey?: MetricKey
   /**
    * Why `value` is null. Defaults to `NOT_ATTRIBUTABLE_TO_MODEL` — the
    * common case this tile exists for (a `?model=` filter's non-attributable
@@ -61,6 +70,7 @@ interface Props {
 const props = withDefaults(defineProps<Props>(), {
   value: undefined,
   metric: 'count',
+  metricKey: 'cost',
   reason: undefined,
   delta: undefined,
   sparkline: undefined,
@@ -96,6 +106,20 @@ const formattedDelta = computed(() => {
 
 const hasSparkline = computed(() => !isNull.value && !!props.sparkline && props.sparkline.length > 1)
 const showTrendReason = computed(() => !isNull.value && !hasSparkline.value && !!props.trendReason)
+
+/**
+ * Direction-tints the delta text by this tile's metric polarity (round-3
+ * UI pass gap): a zero/absent delta stays muted, a `'destructive'` metric
+ * (errors, rejects) reads red rising / green falling, and every other
+ * metric reads accent rising / muted falling — never a moralizing
+ * red/green for "spent more money" or "ran more sessions".
+ */
+const deltaClass = computed(() => {
+  if (!showDelta.value || !props.delta) return 'text-muted-foreground'
+  const polarity = metricPolarity(props.metricKey)
+  if (polarity === 'destructive') return props.delta > 0 ? 'text-reject' : 'text-accept'
+  return props.delta > 0 ? 'text-primary' : 'text-muted-foreground'
+})
 </script>
 
 <template>
@@ -134,7 +158,7 @@ const showTrendReason = computed(() => !isNull.value && !hasSparkline.value && !
         </p>
         <p
           v-if="showDelta"
-          class="text-muted-foreground mt-0.5 text-xs tabular-nums"
+          :class="[deltaClass, 'mt-0.5 text-xs tabular-nums']"
           data-testid="stat-tile-delta"
         >
           {{ formattedDelta }} vs previous window
@@ -144,7 +168,10 @@ const showTrendReason = computed(() => !isNull.value && !hasSparkline.value && !
           class="mt-1.5"
           data-testid="stat-tile-sparkline"
         >
-          <Sparkline :values="sparkline" />
+          <Sparkline
+            :values="sparkline"
+            :metric-key="metricKey"
+          />
         </div>
         <div
           v-else-if="showTrendReason"

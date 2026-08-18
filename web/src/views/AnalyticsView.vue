@@ -24,6 +24,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useCaptureReady } from '@/composables/useCaptureReady'
+import { metricPolarity } from '@/lib/echartsTheme'
 import { formatRejectRate } from '@/lib/format'
 import { NOT_ATTRIBUTABLE_TO_MODEL } from '@/lib/nullReasons'
 import { ANALYTICS_PRESETS, GROUP_BY_OPTIONS, useAnalyticsStore } from '@/stores/analytics'
@@ -119,6 +120,15 @@ const formattedRejectRateDelta = computed(() => {
   if (delta === null) return null
   const sign = delta > 0 ? '+' : delta < 0 ? '−' : '±'
   return `${sign}${formatRejectRate(Math.abs(delta))}`
+})
+
+/** Reject rate is 'destructive'-polarity (round-3 UI pass): rising reads as a warning, falling as an improvement — same rule `StatTile`'s own `deltaClass` applies, duplicated here only because this one KPI renders its own `Card` rather than a `StatTile` (SPEC has no percent `ChartMetricKind`). */
+const rejectRateDeltaClass = computed(() => {
+  const delta = rejectRateDelta.value
+  if (!delta) return 'text-muted-foreground'
+  const polarity = metricPolarity('reject_rate')
+  if (polarity === 'destructive') return delta > 0 ? 'text-reject' : 'text-accept'
+  return delta > 0 ? 'text-primary' : 'text-muted-foreground'
 })
 </script>
 
@@ -325,6 +335,7 @@ const formattedRejectRateDelta = computed(() => {
       <StatTile
         label="Cost"
         metric="cost"
+        metric-key="cost"
         size="lg"
         :value="summary?.cost.usd ?? null"
         :delta="analytics.costDelta"
@@ -337,6 +348,7 @@ const formattedRejectRateDelta = computed(() => {
       <StatTile
         label="Tokens"
         metric="tokens"
+        metric-key="tokens"
         size="lg"
         :value="totalTokens"
         :delta="analytics.tokenDelta"
@@ -348,6 +360,7 @@ const formattedRejectRateDelta = computed(() => {
       />
       <StatTile
         label="API requests"
+        metric-key="api_requests"
         size="lg"
         :value="summary?.api_requests ?? null"
         :delta="analytics.kpiDelta('api_requests')"
@@ -365,6 +378,7 @@ const formattedRejectRateDelta = computed(() => {
     >
       <StatTile
         label="Sessions"
+        metric-key="sessions"
         :value="summary?.sessions ?? null"
         :reason="tileReason('sessions')"
         :delta="analytics.kpiDelta('sessions')"
@@ -376,6 +390,7 @@ const formattedRejectRateDelta = computed(() => {
       />
       <StatTile
         label="Turns"
+        metric-key="turns"
         :value="summary?.turns ?? null"
         :reason="tileReason('turns')"
         :delta="analytics.kpiDelta('turns')"
@@ -387,6 +402,7 @@ const formattedRejectRateDelta = computed(() => {
       />
       <StatTile
         label="API errors"
+        metric-key="api_errors"
         :value="summary?.api_errors ?? null"
         :delta="analytics.kpiDelta('api_errors')"
         :sparkline="analytics.kpiSparkline('api_errors')"
@@ -397,6 +413,7 @@ const formattedRejectRateDelta = computed(() => {
       />
       <StatTile
         label="Tool calls"
+        metric-key="tool_calls"
         :value="summary?.tool_calls ?? null"
         :reason="tileReason('tool_calls')"
         :delta="analytics.kpiDelta('tool_calls')"
@@ -408,6 +425,7 @@ const formattedRejectRateDelta = computed(() => {
       />
       <StatTile
         label="Tool rejects"
+        metric-key="tool_rejects"
         :value="summary?.tool_rejects ?? null"
         :reason="tileReason('tool_rejects')"
         :delta="analytics.kpiDelta('tool_rejects')"
@@ -419,6 +437,7 @@ const formattedRejectRateDelta = computed(() => {
       />
       <StatTile
         label="LOC added"
+        metric-key="loc_added"
         :value="summary?.loc?.added ?? null"
         :reason="tileReason('loc')"
         :delta="analytics.summaryFieldDelta('locAdded')"
@@ -430,6 +449,7 @@ const formattedRejectRateDelta = computed(() => {
       />
       <StatTile
         label="LOC removed"
+        metric-key="loc_removed"
         :value="summary?.loc?.removed ?? null"
         :reason="tileReason('loc')"
         :delta="analytics.summaryFieldDelta('locRemoved')"
@@ -442,6 +462,7 @@ const formattedRejectRateDelta = computed(() => {
       <StatTile
         label="Active time"
         metric="duration"
+        metric-key="active_time"
         :value="activeMs"
         :reason="tileReason('active_seconds')"
         :delta="activeTimeDelta"
@@ -476,7 +497,7 @@ const formattedRejectRateDelta = computed(() => {
           />
           <p
             v-if="formattedRejectRateDelta"
-            class="text-muted-foreground mt-0.5 text-xs tabular-nums"
+            :class="[rejectRateDeltaClass, 'mt-0.5 text-xs tabular-nums']"
             data-testid="stat-tile-delta"
           >
             {{ formattedRejectRateDelta }} vs previous window

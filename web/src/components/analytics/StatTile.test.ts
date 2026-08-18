@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 
 import { ApiError } from '@/api/errors'
 import { NOT_ATTRIBUTABLE_TO_MODEL, NOT_MEASURED } from '@/lib/nullReasons'
+import Sparkline from './Sparkline.vue'
 import StatTile from './StatTile.vue'
 
 describe('StatTile', () => {
@@ -106,5 +107,40 @@ describe('StatTile', () => {
   it('renders a larger value with size="lg" (the promoted primary tiles)', () => {
     const wrapper = mount(StatTile, { props: { label: 'Cost', value: 71.44, metric: 'cost', size: 'lg' } })
     expect(wrapper.get('[data-testid="stat-tile-value"]').classes()).toContain('text-3xl')
+  })
+
+  describe('delta direction-tinting (round-3 UI pass: deltas were all one undifferentiated blue/gray)', () => {
+    it('tints a rising neutral-polarity metric (cost) with the accent color, not red/green', () => {
+      const wrapper = mount(StatTile, { props: { label: 'Cost', value: 10, metric: 'cost', metricKey: 'cost', delta: 5 } })
+      expect(wrapper.get('[data-testid="stat-tile-delta"]').classes()).toContain('text-primary')
+    })
+
+    it('mutes a falling neutral-polarity metric (cost) rather than reading it as bad news', () => {
+      const wrapper = mount(StatTile, { props: { label: 'Cost', value: 10, metric: 'cost', metricKey: 'cost', delta: -5 } })
+      const classes = wrapper.get('[data-testid="stat-tile-delta"]').classes()
+      expect(classes).toContain('text-muted-foreground')
+      expect(classes).not.toContain('text-reject')
+      expect(classes).not.toContain('text-accept')
+    })
+
+    it('tints a rising destructive-polarity metric (api_errors) red', () => {
+      const wrapper = mount(StatTile, { props: { label: 'API errors', value: 10, metricKey: 'api_errors', delta: 2 } })
+      expect(wrapper.get('[data-testid="stat-tile-delta"]').classes()).toContain('text-reject')
+    })
+
+    it('tints a falling destructive-polarity metric (tool_rejects) green — fewer rejects is an improvement', () => {
+      const wrapper = mount(StatTile, { props: { label: 'Tool rejects', value: 3, metricKey: 'tool_rejects', delta: -4 } })
+      expect(wrapper.get('[data-testid="stat-tile-delta"]').classes()).toContain('text-accept')
+    })
+
+    it('mutes a zero delta regardless of polarity', () => {
+      const wrapper = mount(StatTile, { props: { label: 'API errors', value: 0, metricKey: 'api_errors', delta: 0 } })
+      expect(wrapper.get('[data-testid="stat-tile-delta"]').classes()).toContain('text-muted-foreground')
+    })
+  })
+
+  it('passes metricKey through to the sparkline so its hue matches the tile', () => {
+    const wrapper = mount(StatTile, { props: { label: 'API errors', value: 3, metricKey: 'api_errors', sparkline: [1, 2, 3] } })
+    expect(wrapper.findComponent(Sparkline).props('metricKey')).toBe('api_errors')
   })
 })
