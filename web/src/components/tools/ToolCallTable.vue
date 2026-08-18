@@ -50,7 +50,7 @@ export function sortRows(rows: ToolCall[], key: SortableKey | null | undefined):
  * prop — the table stays a controlled component either way.
  */
 import { computed } from 'vue'
-import { CircleCheck, CircleHelp, Link2, Link2Off, ShieldQuestion, X } from '@lucide/vue'
+import { ArrowDown, ArrowUpDown, CircleCheck, CircleHelp, Link2, Link2Off, ShieldQuestion, X } from '@lucide/vue'
 import type { Component } from 'vue'
 import { RouterLink } from 'vue-router'
 
@@ -106,6 +106,24 @@ const SORTABLE_COLUMNS: ColumnMeta[] = [
   { key: 'wait_ms', label: 'Wait' },
   { key: 'duration_ms', label: 'Duration' },
 ]
+
+/**
+ * `wait_ms`/`file_path` render `—` per-row already (SPEC §6.1's null-vs-zero
+ * rule), but the round-6 UI-pass gap is coarser than that: in a loaded page
+ * where *every* row is null for one of these fields, the whole column is
+ * dead weight — ~20% of the table's width spent on a wall of dashes. Rather
+ * than fabricate a merged pseudo-column, this drops the column outright
+ * (honest — it's genuinely carrying zero information for what's loaded) and
+ * says so once, rather than 50 times.
+ */
+const showWaitColumn = computed(() => props.rows.some((row) => row.wait_ms !== null))
+const showFileColumn = computed(() => props.rows.some((row) => row.file_path !== null))
+const visibleSortableColumns = computed(() => SORTABLE_COLUMNS.filter((c) => c.key !== 'wait_ms' || showWaitColumn.value))
+const hiddenEmptyColumnNote = computed(() => {
+  const hidden = [!showWaitColumn.value && 'Wait', !showFileColumn.value && 'File'].filter((v): v is string => !!v)
+  if (hidden.length === 0) return null
+  return `No ${hidden.join('/').toLowerCase()} data in loaded set — ${hidden.length > 1 ? 'columns' : 'column'} hidden.`
+})
 
 function onSortClick(key: SortableKey): void {
   emit('sortChange', key)
@@ -217,20 +235,35 @@ function onRowClick(row: ToolCall): void {
             </TableHead>
             <TableHead>Decision</TableHead>
             <TableHead
-              v-for="column in SORTABLE_COLUMNS"
+              v-for="column in visibleSortableColumns"
               :key="column.key"
               class="cursor-pointer select-none"
+              :class="column.key === 'duration_ms' ? 'text-right' : undefined"
               :data-testid="`sort-${column.key}`"
               @click="onSortClick(column.key)"
             >
-              {{ column.label }}
               <span
-                v-if="sort === column.key"
-                aria-hidden="true"
-              >&darr;</span>
+                class="inline-flex items-center gap-1"
+                :class="column.key === 'duration_ms' ? 'flex-row-reverse' : undefined"
+              >
+                {{ column.label }}
+                <ArrowDown
+                  v-if="sort === column.key"
+                  class="text-foreground size-3"
+                  aria-hidden="true"
+                  data-testid="sort-caret-active"
+                />
+                <ArrowUpDown
+                  v-else
+                  class="text-muted-foreground/50 size-3"
+                  aria-hidden="true"
+                />
+              </span>
             </TableHead>
             <TableHead>Success</TableHead>
-            <TableHead>File</TableHead>
+            <TableHead v-if="showFileColumn">
+              File
+            </TableHead>
             <TableHead>Correlation</TableHead>
           </TableRow>
         </TableHeader>
@@ -289,6 +322,7 @@ function onRowClick(row: ToolCall): void {
             </TableCell>
 
             <TableCell
+              v-if="showWaitColumn"
               data-testid="cell-wait-ms"
               class="tabular-nums"
             >
@@ -301,7 +335,7 @@ function onRowClick(row: ToolCall): void {
 
             <TableCell
               data-testid="cell-duration-ms"
-              class="tabular-nums"
+              class="text-right tabular-nums"
             >
               <NullValue
                 v-if="row.duration_ms === null"
@@ -339,7 +373,10 @@ function onRowClick(row: ToolCall): void {
               </Badge>
             </TableCell>
 
-            <TableCell class="max-w-56 truncate font-mono text-xs">
+            <TableCell
+              v-if="showFileColumn"
+              class="max-w-56 truncate font-mono text-xs"
+            >
               <NullValue
                 v-if="row.file_path === null"
                 reason="Not applicable to this tool"
@@ -388,6 +425,13 @@ function onRowClick(row: ToolCall): void {
           </TableRow>
         </TableBody>
       </Table>
+      <p
+        v-if="hiddenEmptyColumnNote"
+        class="text-muted-foreground text-xs"
+        data-testid="hidden-empty-column-note"
+      >
+        {{ hiddenEmptyColumnNote }}
+      </p>
     </template>
 
     <div

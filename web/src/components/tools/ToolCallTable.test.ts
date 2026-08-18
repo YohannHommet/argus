@@ -64,8 +64,11 @@ describe('ToolCallTable', () => {
 
   describe('AC: wait_ms null renders — , never 0ms', () => {
     it('the live seed-42 row (wait_ms: null) renders an em dash with a reason, not "0ms"', async () => {
-      const wrapper = await mountTable({ rows: [toolCallLiveSeed42OtelOnly] })
-      const cell = wrapper.get('[data-testid="cell-wait-ms"]')
+      // Mixed with a non-null wait_ms row so the Wait column isn't hidden by the
+      // round-6 "always-empty column" collapse below — this test is about the
+      // per-row null-vs-zero rule, not the column-visibility feature.
+      const wrapper = await mountTable({ rows: [toolCallLiveSeed42OtelOnly, toolCallHeuristic] })
+      const cell = wrapper.findAll('[data-testid="cell-wait-ms"]')[0]
       expect(cell.text()).toBe('—')
       expect(cell.text()).not.toContain('0ms')
       expect(cell.find('[title]').attributes('title')).toBeTruthy()
@@ -178,5 +181,59 @@ describe('ToolCallTable', () => {
     const wrapper = await mountTable({ rows: [toolCallLiveSeed42OtelOnly], hasMore: true })
     await wrapper.get('[data-testid="load-more"]').trigger('click')
     expect(wrapper.emitted('loadMore')).toHaveLength(1)
+  })
+
+  describe('round-6 UI pass: empty Wait/File columns collapse instead of wasting width', () => {
+    it('hides the Wait column and shows a muted note when every loaded row has wait_ms: null', async () => {
+      // Both fixtures here are file_path: null too, so File is also hidden.
+      const wrapper = await mountTable({ rows: [toolCallLiveSeed42OtelOnly, toolCallHookOnly] })
+      expect(wrapper.find('[data-testid="sort-wait_ms"]').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="cell-wait-ms"]').exists()).toBe(false)
+      const note = wrapper.get('[data-testid="hidden-empty-column-note"]')
+      expect(note.text()).toContain('wait')
+    })
+
+    it('keeps the Wait column when at least one loaded row has a measured wait_ms', async () => {
+      // Both fixtures are file_path: null too, so the note still fires — for File alone.
+      const wrapper = await mountTable({ rows: [toolCallLiveSeed42OtelOnly, toolCallHeuristic] })
+      expect(wrapper.find('[data-testid="sort-wait_ms"]').exists()).toBe(true)
+      expect(wrapper.findAll('[data-testid="cell-wait-ms"]')).toHaveLength(2)
+    })
+
+    it('hides the File column only, independently of Wait, when file_path is null throughout but wait_ms is not', async () => {
+      // toolCallHeuristic/toolCallLiveSeed42OtelOnly both have file_path: null; mixing in a real
+      // wait_ms keeps Wait visible while File still has nothing to show.
+      const wrapper = await mountTable({ rows: [toolCallLiveSeed42OtelOnly, toolCallHeuristic] })
+      expect(wrapper.find('[data-testid="sort-wait_ms"]').exists()).toBe(true)
+      const headers = wrapper.findAll('th').map((h) => h.text())
+      expect(headers.some((h) => h.includes('File'))).toBe(false)
+      const note = wrapper.get('[data-testid="hidden-empty-column-note"]')
+      expect(note.text()).toContain('file')
+    })
+
+    it('shows both columns, and no note, once at least one row backs each', async () => {
+      const wrapper = await mountTable({ rows: [toolCallHeuristic, toolCallExactRejected] })
+      expect(wrapper.find('[data-testid="sort-wait_ms"]').exists()).toBe(true)
+      const headers = wrapper.findAll('th').map((h) => h.text())
+      expect(headers.some((h) => h.includes('File'))).toBe(true)
+      expect(wrapper.find('[data-testid="hidden-empty-column-note"]').exists()).toBe(false)
+    })
+  })
+
+  describe('round-6 UI pass: sort affordance', () => {
+    it('shows a muted sortable icon on an unsorted sortable column, and a filled caret once it is the active sort', async () => {
+      const wrapper = await mountTable({ rows: [toolCallHeuristic, toolCallExactRejected] })
+      const durationHeader = wrapper.get('[data-testid="sort-duration_ms"]')
+      expect(durationHeader.find('[data-testid="sort-caret-active"]').exists()).toBe(false)
+
+      const sorted = await mountTable({ rows: [toolCallHeuristic, toolCallExactRejected], sort: 'duration_ms' })
+      expect(sorted.get('[data-testid="sort-duration_ms"]').find('[data-testid="sort-caret-active"]').exists()).toBe(true)
+    })
+
+    it('right-aligns the Duration header and cells with tabular-nums', async () => {
+      const wrapper = await mountTable({ rows: [toolCallHeuristic] })
+      expect(wrapper.get('[data-testid="sort-duration_ms"]').classes()).toContain('text-right')
+      expect(wrapper.get('[data-testid="cell-duration-ms"]').classes()).toEqual(expect.arrayContaining(['text-right', 'tabular-nums']))
+    })
   })
 })

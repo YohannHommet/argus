@@ -14,6 +14,7 @@ import ToolCallTable from '@/components/tools/ToolCallTable.vue'
 import type { SortableKey } from '@/components/tools/ToolCallTable.vue'
 import RawValue from '@/components/common/RawValue.vue'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { useCaptureReady } from '@/composables/useCaptureReady'
 import { useToolsStore } from '@/stores/tools'
 
@@ -25,6 +26,23 @@ const tools = useToolsStore()
 useCaptureReady(() => tools.initialized)
 
 const totalLoaded = computed(() => tools.toolCalls.length)
+
+/**
+ * Client-side substring match over the currently-loaded page — there is no
+ * free-text query param on `GET /api/v1/tool-calls` (see tools.ts's own
+ * doc comment: `project`/`tool`/`decision_source`/`from`/`to`/`limit`/
+ * `cursor` only), and at this scale (`DEFAULT_LIMIT = 50` per page) a
+ * server round-trip per keystroke would be solving a problem the loaded
+ * array doesn't have. `tools.filters.tool` (the exact-match chip filter
+ * DecisionMatrix's deep link drives) is untouched by this — the two are
+ * independent, composable filters over different things.
+ */
+const search = ref('')
+const searchedRows = computed(() => {
+  const q = search.value.trim().toLowerCase()
+  if (!q) return tools.toolCalls
+  return tools.toolCalls.filter((row) => row.tool_name.toLowerCase().includes(q))
+})
 
 // Client-side-only (no server sort param exists for this endpoint — see tools.ts's doc comment on
 // ToolCallFilters). Lives here, not in the store: it's a display concern of the currently-loaded
@@ -77,9 +95,22 @@ function clearAllFilters(): void {
         v-if="totalLoaded > 0"
         class="text-muted-foreground text-sm"
       >
-        {{ totalLoaded }} loaded
+        <template v-if="search.trim() && searchedRows.length !== totalLoaded">
+          {{ searchedRows.length }} of {{ totalLoaded }} loaded
+        </template>
+        <template v-else>
+          {{ totalLoaded }} loaded
+        </template>
       </p>
     </div>
+
+    <Input
+      v-model="search"
+      type="search"
+      placeholder="Search by tool name…"
+      class="max-w-64"
+      data-testid="tools-search"
+    />
 
     <!--
       Active-filter chips: the visible half of exit criterion 5's "arrives with the filter applied"
@@ -127,7 +158,7 @@ function clearAllFilters(): void {
     </div>
 
     <ToolCallTable
-      :rows="tools.toolCalls"
+      :rows="searchedRows"
       :loading="tools.loading"
       :loading-more="tools.loadingMore"
       :error="tools.error"

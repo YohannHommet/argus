@@ -10,6 +10,7 @@
  * never renders a delta regardless of what `delta` holds.
  */
 import { computed } from 'vue'
+import { CircleHelp } from '@lucide/vue'
 
 import { ApiError } from '@/api/errors'
 import { formatterForMetric, type ChartMetricKind } from '@/lib/echarts'
@@ -20,6 +21,7 @@ import ErrorState from '@/components/common/ErrorState.vue'
 import Sparkline from '@/components/analytics/Sparkline.vue'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 
 interface Props {
   label: string
@@ -65,6 +67,16 @@ interface Props {
   size?: 'default' | 'lg'
   loading?: boolean
   error?: ApiError | Error | null
+  /**
+   * One short muted line under the value — the entire on-card prose budget
+   * (round-6 UI-pass fix: tiles that used to carry a 4-5-line paragraph
+   * *outside* the card, breaking containment and dwarfing the metric).
+   * Truncates to a single line; the full story lives in `description`'s
+   * tooltip instead of pushing the card taller.
+   */
+  summary?: string
+  /** Full explanation, shown in a tooltip off an info icon next to `label`. Omit to skip the icon entirely. */
+  description?: string
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -78,6 +90,8 @@ const props = withDefaults(defineProps<Props>(), {
   size: 'default',
   loading: false,
   error: null,
+  summary: undefined,
+  description: undefined,
 })
 
 const emit = defineEmits<{ retry: [] }>()
@@ -128,8 +142,23 @@ const deltaClass = computed(() => {
     data-testid="stat-tile"
   >
     <CardHeader class="pb-0">
-      <CardTitle class="text-muted-foreground text-xs font-normal">
+      <CardTitle class="text-muted-foreground flex items-center gap-1 text-xs font-normal">
         {{ label }}
+        <TooltipProvider v-if="description">
+          <Tooltip>
+            <TooltipTrigger as-child>
+              <CircleHelp
+                class="size-3 cursor-help"
+                :title="description"
+                :aria-label="description"
+                data-testid="stat-tile-info"
+              />
+            </TooltipTrigger>
+            <TooltipContent class="max-w-64 text-wrap">
+              {{ description }}
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       </CardTitle>
     </CardHeader>
     <CardContent class="flex min-h-14 flex-col justify-center">
@@ -183,6 +212,13 @@ const deltaClass = computed(() => {
             :reason="trendReason"
           />
         </div>
+        <p
+          v-if="summary"
+          class="text-muted-foreground mt-1.5 line-clamp-1 text-xs"
+          data-testid="stat-tile-summary"
+        >
+          {{ summary }}
+        </p>
       </template>
     </CardContent>
   </Card>

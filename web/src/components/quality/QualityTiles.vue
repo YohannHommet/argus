@@ -27,15 +27,29 @@
  * `StatTile` (components/analytics) is reused as-is for the four tiles
  * with no color-reactivity requirement below — it already owns the
  * null/loading/error rendering this view needs and has no reason to be
- * duplicated. It has no slot or color-override prop, though, so the two
+ * duplicated. It has no color-override prop, though, so the two
  * "problem count" tiles whose value must flip to the warn colour when
  * positive (unknown-kind events, and dropped total once/if a future API
  * version exposes it) are built directly here instead, the same way
  * `components/session/SessionKpiStrip.vue` already handles its
  * color-reactive reject-rate tile (explicit `text-warn` class bound to a
  * computed, rather than a StatTile prop that doesn't exist).
+ *
+ * Round-6 UI-pass fix: every tile used to carry a 4-5-line prose paragraph
+ * as a *sibling* of its Card (a bare `<p>` after `<StatTile>`, or a second
+ * paragraph beneath `CardContent` for the two hand-built tiles) — never
+ * inside the same containing box, so half the grid's tiles had their
+ * description spill past the card border while the other half didn't,
+ * giving the grid a ragged, self-contradicting bottom edge. `StatTile` now
+ * takes the prose itself, via two dedicated props (`summary`: one always-
+ * visible muted line; `description`: the full explanation, in an info-icon
+ * tooltip next to the label) — see `StatTile.vue`'s doc comment. That keeps
+ * every tile's entire content, including its explanation, inside one Card,
+ * and collapses the six wildly-different card heights the old prose
+ * paragraphs produced down to the same handful of lines per tile.
  */
 import { computed } from 'vue'
+import { CircleHelp } from '@lucide/vue'
 
 import { ApiError } from '@/api/errors'
 import StatTile from '@/components/analytics/StatTile.vue'
@@ -43,6 +57,7 @@ import ErrorState from '@/components/common/ErrorState.vue'
 import NullValue from '@/components/common/NullValue.vue'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { formatCount } from '@/lib/format'
 import { NOT_EXPOSED_BY_API } from '@/lib/nullReasons'
 
@@ -87,18 +102,42 @@ const oldestRawEventReason = computed(() => {
       : ''
   return `${NOT_EXPOSED_BY_API}.${retentionNote}`
 })
+
+const oldestRawEventSummary = computed(() =>
+  props.retentionDays !== null
+    ? `Not exposed — retention is ${props.retentionDays}d, the nearest available signal.`
+    : 'Not exposed; the retention window is the nearest available signal.',
+)
 </script>
 
 <template>
   <div
     data-testid="quality-tiles"
-    class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3"
+    class="grid grid-cols-1 items-stretch gap-3 sm:grid-cols-2 lg:grid-cols-3"
   >
     <!-- Unknown-kind events (24h) — the one tile backed by a real endpoint. -->
     <Card data-testid="quality-tile-unknown-events">
       <CardHeader>
-        <CardTitle class="text-muted-foreground text-xs font-normal">
+        <CardTitle class="text-muted-foreground flex items-center gap-1 text-xs font-normal">
           Unknown-kind events (24h)
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger as-child>
+                <CircleHelp
+                  class="size-3 cursor-help"
+                  title="Events in the last 24h whose event_name Argus doesn't recognise — the first sign a vendor added a new instrumentation point. A non-zero count is expected right after a Claude Code upgrade; inspect the table below and, if it persists, teach Argus the new event name."
+                  aria-label="Events in the last 24h whose event_name Argus doesn't recognise — the first sign a vendor added a new instrumentation point. A non-zero count is expected right after a Claude Code upgrade; inspect the table below and, if it persists, teach Argus the new event name."
+                  data-testid="quality-tile-info"
+                />
+              </TooltipTrigger>
+              <TooltipContent class="max-w-64 text-wrap">
+                Events in the last 24h whose <code>event_name</code> Argus doesn't recognise — the
+                first sign a vendor added a new instrumentation point. A non-zero count is
+                expected right after a Claude Code upgrade; inspect the table below and, if it
+                persists, teach Argus the new event name.
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         </CardTitle>
       </CardHeader>
       <CardContent>
@@ -127,13 +166,10 @@ const oldestRawEventReason = computed(() => {
             </template>
           </p>
           <p
-            class="text-muted-foreground mt-2 text-xs"
-            data-testid="quality-tile-explanation"
+            class="text-muted-foreground mt-1.5 line-clamp-1 text-xs"
+            data-testid="quality-tile-summary"
           >
-            Events in the last 24h whose <code>event_name</code> Argus doesn't recognise — the
-            first sign a vendor added a new instrumentation point. A non-zero count is expected
-            right after a Claude Code upgrade; inspect the table below and, if it persists, teach
-            Argus the new event name.
+            Unrecognised event_name in the last 24h — check the table below.
           </p>
         </template>
       </CardContent>
@@ -142,8 +178,26 @@ const oldestRawEventReason = computed(() => {
     <!-- Dropped total — no aggregate endpoint exposes this yet (see file-level comment). -->
     <Card data-testid="quality-tile-dropped-total">
       <CardHeader>
-        <CardTitle class="text-muted-foreground text-xs font-normal">
+        <CardTitle class="text-muted-foreground flex items-center gap-1 text-xs font-normal">
           Dropped total
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger as-child>
+                <CircleHelp
+                  class="size-3 cursor-help"
+                  title="Events the ingest pipeline discarded outright, e.g. a subscriber's buffer overflowing under load. Any non-zero count means Argus's own view of the data is incomplete; check the ingest pipeline's resource headroom and consider raising subscriber buffer sizes."
+                  aria-label="Events the ingest pipeline discarded outright, e.g. a subscriber's buffer overflowing under load. Any non-zero count means Argus's own view of the data is incomplete; check the ingest pipeline's resource headroom and consider raising subscriber buffer sizes."
+                  data-testid="quality-tile-info"
+                />
+              </TooltipTrigger>
+              <TooltipContent class="max-w-64 text-wrap">
+                Events the ingest pipeline discarded outright, e.g. a subscriber's buffer
+                overflowing under load. Any non-zero count means Argus's own view of the data is
+                incomplete; check the ingest pipeline's resource headroom and consider raising
+                subscriber buffer sizes.
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         </CardTitle>
       </CardHeader>
       <CardContent>
@@ -161,84 +215,52 @@ const oldestRawEventReason = computed(() => {
           </template>
         </p>
         <p
-          class="text-muted-foreground mt-2 text-xs"
-          data-testid="quality-tile-explanation"
+          class="text-muted-foreground mt-1.5 line-clamp-1 text-xs"
+          data-testid="quality-tile-summary"
         >
-          Events the ingest pipeline discarded outright, e.g. a subscriber's buffer overflowing
-          under load. Any non-zero count means Argus's own view of the data is incomplete; check
-          the ingest pipeline's resource headroom and consider raising subscriber buffer sizes.
+          Ingest-pipeline drops — non-zero means Argus's view is incomplete.
         </p>
       </CardContent>
     </Card>
 
     <!-- Partial sessions — SessionSummary.partial exists per-session, never as a count. -->
-    <div data-testid="quality-tile-partial-sessions">
-      <StatTile
-        label="Partial sessions"
-        :value="null"
-        :reason="`${NOT_EXPOSED_BY_API}: partial is a per-session flag on /sessions, never an aggregate count.`"
-      />
-      <p
-        class="text-muted-foreground mt-2 px-1 text-xs"
-        data-testid="quality-tile-explanation"
-      >
-        Sessions Argus only ever saw via a later reference, with no <code>session.start</code>
-        event (SPEC §1.7) — usually a truncated export or a session that started before Argus's
-        retention window began. Inspect individual sessions' "Partial" badge on the Sessions view
-        to find them.
-      </p>
-    </div>
+    <StatTile
+      data-testid="quality-tile-partial-sessions"
+      label="Partial sessions"
+      :value="null"
+      :reason="`${NOT_EXPOSED_BY_API}: partial is a per-session flag on /sessions, never an aggregate count.`"
+      summary="Seen only via a later reference, no session.start event."
+      description="Sessions Argus only ever saw via a later reference, with no session.start event (SPEC §1.7) — usually a truncated export or a session that started before Argus's retention window began. Inspect individual sessions' &quot;Partial&quot; badge on the Sessions view to find them."
+    />
 
     <!-- Clock-skewed (24h) — TimelineEvent.clock_skewed exists per-event, never as a count. -->
-    <div data-testid="quality-tile-clock-skewed">
-      <StatTile
-        label="Clock-skewed events (24h)"
-        :value="null"
-        :reason="`${NOT_EXPOSED_BY_API}: clock_skewed is a per-event flag on the events/timeline endpoints, never an aggregate count.`"
-      />
-      <p
-        class="text-muted-foreground mt-2 px-1 text-xs"
-        data-testid="quality-tile-explanation"
-      >
-        Events whose reported timestamp fell outside Argus's accepted window and were clamped on
-        ingest. If you suspect skew, check the system clock on the machine(s) running Claude Code
-        against a reliable time source (NTP).
-      </p>
-    </div>
+    <StatTile
+      data-testid="quality-tile-clock-skewed"
+      label="Clock-skewed events (24h)"
+      :value="null"
+      :reason="`${NOT_EXPOSED_BY_API}: clock_skewed is a per-event flag on the events/timeline endpoints, never an aggregate count.`"
+      summary="Timestamps outside Argus's accepted window, clamped on ingest."
+      description="Events whose reported timestamp fell outside Argus's accepted window and were clamped on ingest. If you suspect skew, check the system clock on the machine(s) running Claude Code against a reliable time source (NTP)."
+    />
 
     <!-- Heuristic tool-call share — Correlation is a per-row enum, never aggregated into a share. -->
-    <div data-testid="quality-tile-heuristic-share">
-      <StatTile
-        label="Heuristic tool-call share"
-        :value="null"
-        :reason="`${NOT_EXPOSED_BY_API}: correlation is a per-tool-call field (SPEC §1.6), never aggregated into a share.`"
-      />
-      <p
-        class="text-muted-foreground mt-2 px-1 text-xs"
-        data-testid="quality-tile-explanation"
-      >
-        Share of tool-call correlations resolved by heuristic matching rather than exact
-        hook/OTel correlation — the weakest confidence tier. A high share means tool-call
-        attribution on this data is less trustworthy; check individual rows' correlation on the
-        tool-calls endpoint if a number looks off.
-      </p>
-    </div>
+    <StatTile
+      data-testid="quality-tile-heuristic-share"
+      label="Heuristic tool-call share"
+      :value="null"
+      :reason="`${NOT_EXPOSED_BY_API}: correlation is a per-tool-call field (SPEC §1.6), never aggregated into a share.`"
+      summary="Share of tool-calls correlated by best-effort matching, not exact join."
+      description="Share of tool-call correlations resolved by heuristic matching rather than exact hook/OTel correlation — the weakest confidence tier. A high share means tool-call attribution on this data is less trustworthy; check individual rows' correlation on the tool-calls endpoint if a number looks off."
+    />
 
     <!-- Oldest raw event — no field anywhere carries this. -->
-    <div data-testid="quality-tile-oldest-raw-event">
-      <StatTile
-        label="Oldest raw event"
-        :value="null"
-        :reason="oldestRawEventReason"
-      />
-      <p
-        class="text-muted-foreground mt-2 px-1 text-xs"
-        data-testid="quality-tile-explanation"
-      >
-        How close Argus's oldest still-queryable raw event is to falling out of the retention
-        window. Not exposed today; the retention window itself (above) is the nearest available
-        signal for "how much history is left".
-      </p>
-    </div>
+    <StatTile
+      data-testid="quality-tile-oldest-raw-event"
+      label="Oldest raw event"
+      :value="null"
+      :reason="oldestRawEventReason"
+      :summary="oldestRawEventSummary"
+      description="How close Argus's oldest still-queryable raw event is to falling out of the retention window. Not exposed today; the retention window itself is the nearest available signal for &quot;how much history is left&quot;."
+    />
   </div>
 </template>

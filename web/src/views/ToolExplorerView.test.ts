@@ -119,6 +119,48 @@ describe('ToolExplorerView', () => {
     expect(document.documentElement.getAttribute(CAPTURE_READY_ATTR)).toBe('true')
   })
 
+  describe('round-6 UI pass: client-side tool-name search over the loaded page', () => {
+    const rowA = listToolCalls200Default.data[0]!
+    const rowB = { ...rowA, id: 'search-fixture-row-b', tool_name: 'Bash' }
+    const twoTools = [rowA, rowB]
+
+    it('typing a substring of one tool name filters the table to matching rows only', async () => {
+      getToolCalls = vi.fn(() => okResponse(page(twoTools)))
+      const { wrapper } = await mountAt('/tools')
+      expect(wrapper.findAll('[data-testid="tool-call-row"]')).toHaveLength(2)
+
+      await wrapper.get('[data-testid="tools-search"]').setValue('bash')
+      await flushPromises()
+
+      const rows = wrapper.findAll('[data-testid="tool-call-row"]')
+      expect(rows).toHaveLength(1)
+      expect(rows[0]!.text()).toContain('Bash')
+    })
+
+    it('does not refetch from the API — filtering is client-side over the already-loaded page', async () => {
+      getToolCalls = vi.fn(() => okResponse(page(twoTools)))
+      const { wrapper } = await mountAt('/tools')
+      const callsBefore = getToolCalls.mock.calls.length
+
+      await wrapper.get('[data-testid="tools-search"]').setValue('bash')
+      await flushPromises()
+
+      expect(getToolCalls.mock.calls.length).toBe(callsBefore)
+    })
+
+    it('clearing the search restores every loaded row', async () => {
+      getToolCalls = vi.fn(() => okResponse(page(twoTools)))
+      const { wrapper } = await mountAt('/tools')
+
+      await wrapper.get('[data-testid="tools-search"]').setValue('bash')
+      await flushPromises()
+      await wrapper.get('[data-testid="tools-search"]').setValue('')
+      await flushPromises()
+
+      expect(wrapper.findAll('[data-testid="tool-call-row"]')).toHaveLength(2)
+    })
+  })
+
   it('an error response shows ErrorState and data-capture-ready still becomes true', async () => {
     getToolCalls = vi.fn(() =>
       Promise.resolve({

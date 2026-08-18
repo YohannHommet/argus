@@ -16,15 +16,63 @@ describe('QualityTiles', () => {
     expect(wrapper.find('[data-testid="quality-tile-oldest-raw-event"]').exists()).toBe(true)
   })
 
-  it('every tile carries an explanation of what it means and what to do about it', () => {
-    const wrapper = mount(QualityTiles, { props: { unknownEventsTotal: 5 } })
+  it('every tile carries a short one-line summary plus an info-icon tooltip with the full explanation', () => {
+    const wrapper = mount(QualityTiles, {
+      props: { unknownEventsTotal: 5 },
+      global: { stubs: { teleport: true } },
+    })
 
-    const explanations = wrapper.findAll('[data-testid="quality-tile-explanation"]')
-    // 2 built-in explanation paragraphs (unknown-events, dropped-total) +
-    // 4 more sitting alongside the StatTile-based tiles.
-    expect(explanations.length).toBe(6)
-    for (const explanation of explanations) {
-      expect(explanation.text().length).toBeGreaterThan(20)
+    // 2 hand-built summary lines (unknown-events, dropped-total) + 4 StatTile-internal ones.
+    const summaries = [
+      ...wrapper.findAll('[data-testid="quality-tile-summary"]'),
+      ...wrapper.findAll('[data-testid="stat-tile-summary"]'),
+    ]
+    expect(summaries.length).toBe(6)
+    for (const summary of summaries) {
+      // The whole point of the round-6 fix: one line, not a paragraph.
+      expect(summary.text().length).toBeGreaterThan(10)
+      expect(summary.text().length).toBeLessThan(90)
+    }
+
+    const infoIcons = [
+      ...wrapper.findAll('[data-testid="quality-tile-info"]'),
+      ...wrapper.findAll('[data-testid="stat-tile-info"]'),
+    ]
+    expect(infoIcons.length).toBe(6)
+    for (const icon of infoIcons) {
+      expect((icon.attributes('title') ?? '').length).toBeGreaterThan(20)
+    }
+  })
+
+  it('regression: every tile\'s entire content (value + summary) is contained inside its own Card border — no sibling prose escaping the box', () => {
+    const wrapper = mount(QualityTiles, {
+      props: { unknownEventsTotal: 5 },
+      global: { stubs: { teleport: true } },
+    })
+
+    const testIds = [
+      'quality-tile-unknown-events',
+      'quality-tile-dropped-total',
+      'quality-tile-partial-sessions',
+      'quality-tile-clock-skewed',
+      'quality-tile-heuristic-share',
+      'quality-tile-oldest-raw-event',
+    ]
+
+    for (const testId of testIds) {
+      const tile = wrapper.get(`[data-testid="${testId}"]`)
+      // The outer element callers can select by testid must itself BE the
+      // Card — not a wrapping <div> with the Card and a stray <p> as
+      // siblings (the round-6 bug: 4 of 6 tiles rendered their description
+      // outside the card border because of exactly that wrapper-div shape).
+      expect(tile.attributes('data-slot')).toBe('card')
+      // And that Card must contain both the value and the (now single-line)
+      // summary — nothing for this tile renders outside it.
+      expect(tile.find('[data-testid$="-value"], [data-testid="stat-tile-value"]').exists()).toBe(true)
+      expect(
+        tile.find('[data-testid="quality-tile-summary"]').exists() ||
+          tile.find('[data-testid="stat-tile-summary"]').exists(),
+      ).toBe(true)
     }
   })
 
