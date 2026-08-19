@@ -18,7 +18,7 @@
 # equivalent for the default path, strictly more useful for the others.
 
 # --- web: build the Vue SPA -------------------------------------------------
-FROM node:25-alpine AS web
+FROM node:26-alpine AS web
 WORKDIR /web
 # Pin pnpm explicitly: Node 25 no longer bundles corepack (it was removed
 # from core, see nodejs/node#59802), and web/package.json has no
@@ -30,7 +30,7 @@ COPY web/ ./
 RUN pnpm build
 
 # --- build: compile argusd, embedding the SPA build -------------------------
-FROM golang:1.25-alpine AS build
+FROM golang:1.27rc3-alpine AS build
 ARG VERSION=dev
 ARG COMMIT=unknown
 WORKDIR /src
