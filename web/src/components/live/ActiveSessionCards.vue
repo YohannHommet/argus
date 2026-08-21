@@ -119,9 +119,18 @@ function followTarget(sessionId: string) {
             :title="session.cwd"
             data-testid="active-session-card-title"
           >
+            <!--
+              Round-8 critic gap: "Unknown Unknown project" — `StatusDot` to
+              this row's left already renders its own visible status word
+              (falling back to "Unknown" for an out-of-vocabulary/unset
+              status), and this placeholder used to lead with "Unknown" too,
+              so the two collided into a stutter reading as one garbled
+              phrase. Reworded so the status word — whatever it is — appears
+              exactly once on the row; this placeholder no longer repeats it.
+            -->
             <NullValue
               v-if="session.project === ''"
-              label="Unknown project"
+              label="No project yet"
               :reason="NO_PROJECT_SIGNAL_YET"
             />
             <template v-else>

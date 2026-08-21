@@ -20,6 +20,7 @@ import { useMetaStore } from '@/stores/meta'
 import ActiveSessionCards from '@/components/live/ActiveSessionCards.vue'
 import LiveFeed from '@/components/live/LiveFeed.vue'
 import HealthStrip from '@/components/layout/HealthStrip.vue'
+import { Badge } from '@/components/ui/badge'
 
 const live = useLiveStore()
 const meta = useMetaStore()
@@ -99,9 +100,19 @@ function onResume(): void {
     />
 
     <section class="flex flex-col gap-2">
-      <h2 class="text-lg font-medium">
-        Active sessions
-      </h2>
+      <div class="flex items-center gap-2.5">
+        <h2 class="text-lg font-medium">
+          Active sessions
+        </h2>
+        <!-- Round-8 critic ask: the same "N loaded" badge idiom `SessionListView.vue`'s own heading already uses. -->
+        <Badge
+          v-if="activeSessions.length > 0"
+          variant="secondary"
+          class="font-normal"
+        >
+          {{ activeSessions.length }} active
+        </Badge>
+      </div>
       <ActiveSessionCards
         :sessions="activeSessions"
         :events="live.events"

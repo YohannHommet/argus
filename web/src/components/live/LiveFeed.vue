@@ -7,20 +7,36 @@
  * right-hand metrics are otherwise four unlabeled numeric tracks, mostly
  * `EM_DASH` on any one row, with no way to tell which is which.
  *
-
+ * Round-8 critic gap: the "Time" column rendered each row's own
+ * vendor-emitted `ts` (SPEC's `ts`, not arrival order) down a list ordered
+ * by *arrival* (newest-received-first) — out-of-order event clocks are real
+ * (clock skew, multi-source fan-in) and this is the one view whose whole
+ * point is showing stream truth, so the fix is not to re-sort the feed, it
+ * is to stop mislabeling the column. The column is now "Received": each
+ * row's client wall-clock the instant this tab's `EventSource` handler saw
+ * the frame (`liveStore`'s `receivedAt`, stamped once as frames land —
+ * monotonic by construction), which reads monotonically top-to-bottom by
+ * the same construction that made the row order itself monotonic. The
+ * event's own `ts` is not discarded — it rides along on the row's own hover
+ * title (see the `title` fallthrough on `EventRow` below) and stays exactly
+ * what `EventDetailSheet` shows in the inspector, since that fetches by
+ * `event_ref` independently of anything this column displays.
+ *
  * Fully props-in/events-out (no store read of its own) — the ticket calls
  * this out explicitly as the easier-to-test shape for "100 fake frames
  * render correctly", and it is: every one of this file's tests mounts with
  * a plain `TimelineEvent[]` fixture array, no Pinia store, no fake
- * `EventSource`.
+ * `EventSource`. `receivedAt` is optional for exactly that reason — a
+ * fixture that never went through `liveStore` still renders, falling back
+ * to the event's own `ts`.
  */
 import { computed, nextTick, ref, watch } from 'vue'
 import { ArrowUp, Pause, Play } from '@lucide/vue'
 
-import type { SessionSummary, TimelineEvent } from '@/stores/live'
+import type { LiveTimelineEvent, SessionSummary } from '@/stores/live'
 import { collapseEvents, type TimelineItem } from '@/lib/collapseEvents'
 import { ALL_KINDS, eventKindMeta, type Kind } from '@/lib/eventKinds'
-import { formatCount, formatDuration } from '@/lib/format'
+import { formatAbsoluteTime, formatCount, formatDuration } from '@/lib/format'
 import { maxDuration } from '@/lib/timelineDisplay'
 import EmptyState from '@/components/common/EmptyState.vue'
 import EventDetailSheet from '@/components/timeline/EventDetailSheet.vue'
@@ -31,7 +47,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 
 interface Props {
   /** Chronological (oldest-first) events to render — same convention as `liveStore.events`; never mutated here. */
-  events: TimelineEvent[]
+  events: LiveTimelineEvent[]
   /**
    * `liveStore.sessions.values()` — read only to resolve each row's compact
    * "project · shortId" identity column (round-5 critic gap: "it's a
@@ -85,7 +101,7 @@ const emit = defineEmits<{
  * from something other than `liveStore` and would still get the documented
  * behaviour "for free".
  */
-const frozenEvents = ref<TimelineEvent[]>(props.events)
+const frozenEvents = ref<LiveTimelineEvent[]>(props.events)
 watch(
   () => props.events,
   (next) => {
@@ -120,7 +136,7 @@ function onKindFilterChange(value: unknown): void {
   selectedKinds.value = Array.isArray(value) ? value.filter((v): v is Kind => typeof v === 'string') : []
 }
 
-const kindFilteredEvents = computed<TimelineEvent[]>(() => {
+const kindFilteredEvents = computed<LiveTimelineEvent[]>(() => {
   if (selectedKinds.value.length === 0) return frozenEvents.value
   const selected = new Set<string>(selectedKinds.value)
   return frozenEvents.value.filter((event) => selected.has(event.kind))
@@ -147,6 +163,52 @@ const timelineItems = computed<TimelineItem[]>(() => collapseEvents(kindFiltered
  * once, right here, immediately before render.
  */
 const displayItems = computed<TimelineItem[]>(() => [...timelineItems.value].reverse())
+
+/**
+ * `event_ref -> receivedAt`, built straight from `props.events` rather than
+ * from `timelineItems`/`displayItems`: `collapseEvents` types its output
+ * `TimelineItem`s (and their nested `events: TimelineEvent[]`) against the
+ * wire schema, which has no `receivedAt` field, so that store-only value
+ * doesn't survive the trip through it. `item.key` is exactly the anchor
+ * event's `event_ref` (`collapseEvents.ts`'s own doc — `collapse: false`
+ * gives a 1:1 mapping), so it is the right join key back to this map.
+ */
+const receivedAtByRef = computed(() => {
+  const map = new Map<string, string>()
+  for (const event of props.events) {
+    if (event.receivedAt) map.set(event.event_ref, event.receivedAt)
+  }
+  return map
+})
+
+/**
+ * `EventRow`'s `wallClockTime` mode reads a single field, `item.ts`, for
+ * both the "Received" column's value and that same cell's own hover title
+ * (`EventRow.vue`: `formatWallClockTime(item.ts)` / `formatAbsoluteTime(item.ts)`).
+ * Rather than adding a second time field to `EventRow`'s contract, this
+ * feeds it a shallow-copied item whose `ts` *is* the receive stamp — the
+ * one and only value that column now means. Falls back to the event's own
+ * `ts` when no `receivedAt` is known (a plain-fixture test that never went
+ * through `liveStore`), so every prop-driven test not about this column
+ * keeps rendering exactly as before.
+ */
+function receivedDisplayItem(item: TimelineItem): TimelineItem {
+  const receivedAt = receivedAtByRef.value.get(item.key)
+  return receivedAt ? { ...item, ts: receivedAt } : item
+}
+
+/**
+ * The event's own `ts` — no longer this row's headline value, but not
+ * discarded either (round-8 decision: "one honest label, one monotonic
+ * read", not "throw the vendor timestamp away"). Surfaced as a plain HTML
+ * `title` passed straight through to `<EventRow>`: it isn't one of
+ * `EventRow`'s declared props, so Vue's default attribute fallthrough lands
+ * it on the row's own root element as a native hover tooltip, with no
+ * change to `EventRow.vue` itself.
+ */
+function eventTimeTitle(item: TimelineItem): string {
+  return `Event time: ${formatAbsoluteTime(item.ts)}`
+}
 
 const maxDurationMs = computed(() => maxDuration(displayItems.value))
 
@@ -369,8 +431,8 @@ function onRowOpen(eventRef: string): void {
         <div class="flex shrink-0 items-center gap-3">
           <span
             class="w-16 text-right"
-            data-testid="live-feed-header-time"
-          >Time</span>
+            data-testid="live-feed-header-received"
+          >Received</span>
           <span
             class="w-16 text-right"
             data-testid="live-feed-header-duration"
@@ -389,10 +451,11 @@ function onRowOpen(eventRef: string): void {
       <EventRow
         v-for="item in displayItems"
         :key="item.key"
-        :item="item"
+        :item="receivedDisplayItem(item)"
         :selected="item.key === selectedEventRef"
         :max-duration-ms="maxDurationMs"
         :session-label="sessionLabel(item)"
+        :title="eventTimeTitle(item)"
         wall-clock-time
         @open="onRowOpen"
       />

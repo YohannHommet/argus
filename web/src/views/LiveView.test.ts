@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { resetEventSourceFactory, setEventSourceFactory } from '@/lib/sse'
 import type { EventSourceLike } from '@/lib/sse'
-import { getFacets200Default, getMeta200Default } from '@/test/fixtures'
+import { getFacets200Default, getMeta200Default, listSessions200Default } from '@/test/fixtures'
 import LiveView from './LiveView.vue'
 
 /** Minimal structural fake, same contract as `stores/__tests__/live.spec.ts`'s own — only what this file's tests need (`open`/`emit`), not the full reconnect-scenario surface that file drives. */
@@ -106,6 +106,19 @@ describe('LiveView', () => {
 
     expect(headings).toContain('Active sessions')
     expect(headings).toContain('Event feed')
+  })
+
+  // Round-8 critic ask: the "Active sessions" heading gets the same "N loaded"
+  // count-badge idiom `SessionListView.vue`'s own heading already uses.
+  it('shows an active-session count badge next to the "Active sessions" heading once a session frame arrives', async () => {
+    const wrapper = await mountLiveView()
+    expect(wrapper.text()).not.toMatch(/\d+ active\b/)
+
+    instances[0]!.open()
+    instances[0]!.emit('session', listSessions200Default.data[0]!)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('1 active')
   })
 
   it('does not flip data-capture-ready before the stream has opened and a frame has arrived', async () => {

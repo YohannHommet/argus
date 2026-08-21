@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 
 import { listSessions200Default } from '@/test/fixtures'
 import { makeTimelineEvent, secondSessionSummary } from '@/test/fixtures.extra'
+import { formatAbsoluteTime, formatWallClockTime } from '@/lib/format'
 import type { TimelineEvent } from '@/stores/live'
 import { Select } from '@/components/ui/select'
 import EventDetailSheet from '@/components/timeline/EventDetailSheet.vue'
@@ -233,7 +234,7 @@ describe('LiveFeed', () => {
       expect(header.classes()).toContain('sticky')
       expect(header.get('[data-testid="live-feed-header-session"]').text()).toBe('Session')
       expect(header.get('[data-testid="live-feed-header-event"]').text()).toBe('Event')
-      expect(header.get('[data-testid="live-feed-header-time"]').text()).toBe('Time')
+      expect(header.get('[data-testid="live-feed-header-received"]').text()).toBe('Received')
       expect(header.get('[data-testid="live-feed-header-duration"]').text()).toBe('Duration')
       expect(header.get('[data-testid="live-feed-header-cost"]').text()).toBe('Cost')
       expect(header.get('[data-testid="live-feed-header-tokens"]').text()).toBe('Tokens')
@@ -248,14 +249,70 @@ describe('LiveFeed', () => {
   // Round-6 critic gap: the leading numeric column was `EM_DASH` on every
   // single row (no `originTs` for a firehose to offset against) — an
   // "unnameable" column because it never carried a real value to name.
-  describe('arrival time column', () => {
-    it('shows the event\'s own wall-clock time, never EM_DASH (every TimelineEvent carries a ts)', () => {
-      const events = [makeTimelineEvent({ ts: '2026-08-19T09:05:03.000Z' })]
+  // Round-8 critic gap: once it *did* carry a value, that value was each
+  // row's own `ts` rendered down a list ordered by arrival — real
+  // out-of-order event clocks then read as a jumbled column (12:15:57, 50,
+  // 55, 45 …) even though the row order itself is perfectly consistent
+  // (newest arrival on top). The column is now "Received": `liveStore`'s
+  // `receivedAt`, stamped once as each frame lands, which is monotonic by
+  // construction — the event's own `ts` moves to the row's hover title and
+  // stays untouched in `EventDetailSheet`'s inspector.
+  describe('Received column', () => {
+    it('shows the client receive time, not the event\'s own ts, when receivedAt is present', () => {
+      const events = [{ ...makeTimelineEvent({ ts: '2026-08-19T09:05:03.000Z' }), receivedAt: '2026-08-19T09:06:40.000Z' }]
       const wrapper = mount(LiveFeed, { props: { events, paused: false, bufferedCount: 0 } })
 
       const time = wrapper.get('[data-testid="event-row-time"]')
       expect(time.text()).toMatch(/^\d{2}:\d{2}:\d{2}$/)
       expect(time.text()).not.toBe('—')
+      expect(time.text()).toBe(formatWallClockTime('2026-08-19T09:06:40.000Z'))
+    })
+
+    it('falls back to the event\'s own ts when no receivedAt stamp is present (a plain fixture that never went through liveStore)', () => {
+      const events = [makeTimelineEvent({ ts: '2026-08-19T09:05:03.000Z' })]
+      const wrapper = mount(LiveFeed, { props: { events, paused: false, bufferedCount: 0 } })
+
+      const time = wrapper.get('[data-testid="event-row-time"]')
+      expect(time.text()).toBe(formatWallClockTime('2026-08-19T09:05:03.000Z'))
+    })
+
+    it('carries the event\'s own ts on the row\'s hover title instead of dropping it', () => {
+      const events = [{ ...makeTimelineEvent({ ts: '2026-08-19T09:05:03.000Z' }), receivedAt: '2026-08-19T09:06:40.000Z' }]
+      const wrapper = mount(LiveFeed, { props: { events, paused: false, bufferedCount: 0 } })
+
+      const row = wrapper.get('[data-testid="event-row"]')
+      expect(row.attributes('title')).toContain(formatAbsoluteTime('2026-08-19T09:05:03.000Z'))
+    })
+
+    // The round-8 critic's own example, reproduced: arrival order carries
+    // strictly increasing receivedAt stamps (liveStore's "monotonic by
+    // construction" guarantee) while the underlying event ts values are
+    // shuffled — real clock skew / multi-source fan-in, not a bug to sort
+    // away. The firehose keeps arrival order; only the displayed axis must
+    // read monotonically.
+    it('reads monotonically top-to-bottom by arrival even when the underlying event ts values are shuffled', () => {
+      const base = Date.parse('2026-08-19T12:00:00.000Z')
+      const shuffledTsOffsetSeconds = [57, 50, 55, 45, 37, 30]
+      const events = shuffledTsOffsetSeconds.map((offsetSeconds, arrivalIndex) => ({
+        ...makeTimelineEvent({ ts: new Date(base + offsetSeconds * 1000).toISOString() }),
+        // Arrival order (index 0 = first received) with receivedAt strictly increasing by 1s per frame.
+        receivedAt: new Date(base + arrivalIndex * 1000).toISOString(),
+      }))
+
+      const wrapper = mount(LiveFeed, { props: { events, paused: false, bufferedCount: 0 } })
+      const times = wrapper.findAll('[data-testid="event-row-time"]').map((el) => el.text())
+
+      expect(times).toHaveLength(6)
+      // Newest arrival renders first (LiveFeed's own reversal), so the "Received" column must be
+      // non-increasing top-to-bottom — the exact property the critic's screenshot showed missing.
+      for (let i = 1; i < times.length; i++) {
+        expect(times[i - 1]! >= times[i]!).toBe(true)
+      }
+      // And it is not simply the sorted event ts values in disguise: it is arrival order.
+      const expected = shuffledTsOffsetSeconds
+        .map((_, arrivalIndex) => formatWallClockTime(new Date(base + arrivalIndex * 1000).toISOString()))
+        .reverse()
+      expect(times).toEqual(expected)
     })
   })
 

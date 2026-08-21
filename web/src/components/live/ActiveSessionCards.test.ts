@@ -126,7 +126,21 @@ describe('ActiveSessionCards', () => {
     const title = wrapper.get('[data-testid="active-session-card-title"]')
 
     expect(title.text().trim()).not.toBe('')
-    expect(title.text()).toContain('Unknown project')
+    expect(title.text()).toContain('No project yet')
+  })
+
+  // Round-8 critic gap: `StatusDot`'s own visible status word (falling back
+  // to "Unknown" when `status` is out-of-vocabulary/unset) plus a project
+  // placeholder that used to also read "Unknown project" collided into a
+  // stutter — "Unknown Unknown project". The placeholder's wording no
+  // longer starts with "Unknown", so the status word appears once per row.
+  it('does not stutter "Unknown" when both the status and the project are unresolved', async () => {
+    const unknownStatusNoProject = { ...firstSession, status: 'unknown', project: '' }
+    const wrapper = await mountCards({ sessions: [unknownStatusNoProject], events: [] })
+    const card = wrapper.get('[data-testid="active-session-card"]')
+
+    expect(card.text()).not.toContain('Unknown Unknown')
+    expect(card.text()).toContain('No project yet')
   })
 
   it('the "follow" affordance renders as a button, not a bare link', async () => {

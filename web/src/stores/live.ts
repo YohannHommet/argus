@@ -19,6 +19,27 @@ export type StreamStatsFrame = components['schemas']['StreamStatsFrame']
 export type StreamResetFrame = components['schemas']['StreamResetFrame']
 export type StreamLagFrame = components['schemas']['StreamLagFrame']
 
+/**
+ * A `TimelineEvent` as retained in the live ring buffer — always carrying
+ * `receivedAt`, this tab's own wall-clock the instant `handleEventFrame`
+ * processed the frame. The wire payload (SPEC §4.3) has no such field, only
+ * the vendor-emitted `ts`, and `ts` is not reliable arrival order: two
+ * frames can legitimately land out of `ts` order (clock skew, multi-source
+ * fan-in), which is exactly why a firehose that displays `ts` down a
+ * newest-arrival-first column reads as jumbled. `receivedAt` is stamped
+ * once, here, the moment a frame actually lands — monotonic by
+ * construction, since frames are stamped in the same order the ring buffer
+ * stores them (`EventRing`'s own doc).
+ *
+ * Optional at the type level even though this store always sets it: a
+ * caller of `LiveFeed.vue` (its own tests included) can supply plain
+ * `TimelineEvent`s that never went through this store, and that component
+ * falls back to the event's own `ts` when `receivedAt` is absent.
+ */
+export interface LiveTimelineEvent extends TimelineEvent {
+  receivedAt?: string
+}
+
 export type LiveStatus = 'idle' | 'connecting' | 'open' | 'reconnecting' | 'closed'
 
 /** A `subscribe()` handle. `close()` is idempotent — a component that unmounts twice (StrictMode-style double effects, or a defensive cleanup) can't double-remove someone else's entry. */
@@ -36,7 +57,7 @@ export interface LiveSubscription {
  * `events_per_sec` can spike well above one frame per render tick.
  */
 class EventRing {
-  private readonly slots: (TimelineEvent | undefined)[]
+  private readonly slots: (LiveTimelineEvent | undefined)[]
   private writeIndex = 0
   private filled = 0
 
@@ -44,7 +65,7 @@ class EventRing {
     this.slots = new Array(capacity)
   }
 
-  push(frame: TimelineEvent): void {
+  push(frame: LiveTimelineEvent): void {
     this.slots[this.writeIndex] = frame
     this.writeIndex = (this.writeIndex + 1) % this.capacity
     if (this.filled < this.capacity) this.filled += 1
@@ -62,9 +83,9 @@ class EventRing {
    * view that wants newest-on-top (PLAN.md P5-05) reverses its own render order; the store stays the
    * one honest, order-stable source of truth.
    */
-  toArray(): TimelineEvent[] {
-    if (this.filled < this.capacity) return this.slots.slice(0, this.filled) as TimelineEvent[]
-    return [...this.slots.slice(this.writeIndex), ...this.slots.slice(0, this.writeIndex)] as TimelineEvent[]
+  toArray(): LiveTimelineEvent[] {
+    if (this.filled < this.capacity) return this.slots.slice(0, this.filled) as LiveTimelineEvent[]
+    return [...this.slots.slice(this.writeIndex), ...this.slots.slice(0, this.writeIndex)] as LiveTimelineEvent[]
   }
 }
 
@@ -123,7 +144,7 @@ export const useLiveStore = defineStore('live', () => {
    * unavoidably O(RING_CAPACITY) step) happens at most once per reactive flush, regardless of how
    * many frames arrived since the last one.
    */
-  const events = computed<TimelineEvent[]>(() => {
+  const events = computed<LiveTimelineEvent[]>(() => {
     void ringVersion.value
     return ring.toArray()
   })
@@ -189,7 +210,10 @@ export const useLiveStore = defineStore('live', () => {
       bufferedWhilePaused.value += 1
       return
     }
-    ring.push(payload)
+    // Stamped here, not earlier: this is the instant the frame is actually accepted onto the ring
+    // (a paused tab discards the frame above without ever storing it, so it never needs a receive
+    // stamp it would never show).
+    ring.push({ ...payload, receivedAt: new Date().toISOString() })
     ringVersion.value += 1
   }
 
