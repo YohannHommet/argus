@@ -112,6 +112,43 @@ func CORS(origins string) func(http.Handler) http.Handler {
 	}
 }
 
+// StreamAwareTimeout wraps chi's own Timeout middleware so every route
+// keeps its existing 30s request-context bound EXCEPT the two SSE routes
+// (Trap 1, P5-02): chi's Timeout does `ctx, cancel :=
+// context.WithTimeout(r.Context(), timeout)` unconditionally (verified
+// against the vendored module), and the SSE handler selects on
+// r.Context().Done() as its teardown signal — so every live stream would be
+// killed at exactly `timeout`, while every unit test (which finishes in
+// milliseconds) would stay green and hide the bug.
+//
+// A chi.Group cannot express this exemption: chi's middleware stack is
+// fixed once, before any route is registered (New builds it at the very
+// top, before r.Route("/api", ...) runs), so there is no way to attach
+// Timeout to "every route except these two" through routing structure
+// alone — nothing "un-applies" a middleware for a subset of routes already
+// under it. The SSE routes also cannot move to a sibling, Timeout-free
+// router: they must stay inside the same /api/v1 subtree as everything else
+// (a root-mounted `r.Get("/api/v1/stream", ...)` would conflict with the
+// `api.Route("/api", ...)` mount below it). The only place left to decide
+// is per-request, by path, in one middleware wrapping every request either
+// way — hence a plain path check here rather than a routing-level opt-out.
+// isStreamPath (sse.go) owns the predicate itself: that knowledge belongs
+// with the handler that owns those two routes, not with this generic
+// timeout wrapper.
+func StreamAwareTimeout(timeout time.Duration) func(http.Handler) http.Handler {
+	bound := chimw.Timeout(timeout)
+	return func(next http.Handler) http.Handler {
+		timed := bound(next)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if isStreamPath(r.URL.Path) {
+				next.ServeHTTP(w, r)
+				return
+			}
+			timed.ServeHTTP(w, r)
+		})
+	}
+}
+
 func parseOrigins(raw string) map[string]bool {
 	if raw == "" {
 		return nil

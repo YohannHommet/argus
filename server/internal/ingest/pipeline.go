@@ -343,6 +343,15 @@ func laneSaturated(depth, capacity int) bool {
 	return float64(depth)/float64(capacity) >= saturationThreshold
 }
 
+// QueueDepth reports how many batches are currently buffered across both
+// lanes (SPEC §5.1's stats frame `queue_depth` field) — the exact same
+// len(p.events)+len(p.metricsCh) lanes QueueSaturated reads, so a caller
+// building a stream.Snapshot (internal/app) never has to duplicate that
+// arithmetic or drift from it.
+func (p *Pipeline) QueueDepth() int {
+	return len(p.events) + len(p.metricsCh)
+}
+
 // EnqueueEvents hands a request's worth of normalized events to the event
 // lane, without blocking (SPEC §3.6). An empty batch is a no-op success —
 // normalize.go's job is to never hand ingest zero events for a non-empty

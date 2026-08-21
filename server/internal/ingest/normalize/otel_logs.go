@@ -286,8 +286,23 @@ func applyKindMapping(eventName string, attrs map[string]any, evt *model.Event) 
 		evt.CacheCreationTokens = Int64(attrs, "cache_creation_tokens")
 		evt.DurationMS = int64PtrToIntPtr(Int64(attrs, "duration_ms"))
 		evt.CostUSD = resolveCostUSD(attrs)
-		costSource := "reported"
-		evt.CostSource = &costSource
+		// D-30 (docs/review/phase-4-gauntlet.md, owner-ratified 2026-08-18):
+		// cost_source must never claim "reported" when cost_usd is NULL — a
+		// {cost_usd: NULL, cost_source: "reported"} row asserts a reported
+		// cost that does not exist (SPEC §1.3 types cost_source `text
+		// null`). --cost-mode=omit (and any agent that just doesn't report
+		// cost) makes resolveCostUSD return nil here; before this fix the
+		// line below ran unconditionally, so upsert_session.go/
+		// upsert_turn.go's old cost_source=="estimated" check could never
+		// see a real "this needs estimating" signal in the first place —
+		// this fix's other half (their fold logic) now branches on
+		// evt.CostUSD instead, belt and braces, but a wrong cost_source
+		// would still be a lie on its own regardless of what any projection
+		// does with it.
+		if evt.CostUSD != nil {
+			costSource := "reported"
+			evt.CostSource = &costSource
+		}
 		evt.RequestID = String(attrs, "request_id")
 		evt.QuerySource = String(attrs, "query_source") // unconstrained text passthrough — SPEC §0, §1.9
 		success := true

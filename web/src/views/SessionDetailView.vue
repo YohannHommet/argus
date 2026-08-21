@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import ErrorState from '@/components/common/ErrorState.vue'
@@ -10,6 +10,7 @@ import Timeline from '@/components/timeline/Timeline.vue'
 import ToolCallTable from '@/components/tools/ToolCallTable.vue'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useCaptureReady } from '@/composables/useCaptureReady'
 import { formatAbsoluteTime, formatPercent, formatRelativeTime } from '@/lib/format'
@@ -79,10 +80,58 @@ watch(
 watch(
   () => props.id,
   (id) => {
-    if (id) void store.loadSession(id)
+    if (!id) return
+    void store.loadSession(id)
+    // `startLive` is idempotent per id and tears down the *previous* id's subscription itself (see
+    // its own doc comment) — this view never remounts across an id change (it's the same component
+    // instance reacting to a new `props.id`), so this watcher, not onMounted, is what makes a
+    // same-view navigation from one session to another migrate the live subscription instead of
+    // leaking it.
+    store.startLive(id)
+    applyLiveDefault(id)
   },
   { immediate: true },
 )
+
+/**
+ * PLAN.md P5-06 / SPEC §6.2 ("follow session jumps to detail in live mode"): honours `?live=1`
+ * literally. P5-05 owns the actual follow link and its exact param name isn't visible from here, so
+ * the *absence* of the param still defaults to live for an `active` session (Phase-5 exit criterion
+ * 2 — opening an actively-generating session must show new rows with no manual refresh) — the feature
+ * works whether or not P5-05 ends up using this exact name.
+ */
+function applyLiveDefault(id: string): void {
+  const raw = route.query.live
+  const liveParam = Array.isArray(raw) ? raw[0] : raw
+  if (liveParam === '1') {
+    store.setLiveEnabled(true)
+    return
+  }
+  if (liveParam === '0') {
+    store.setLiveEnabled(false)
+    return
+  }
+  if (store.session && store.session.id === id) {
+    store.setLiveEnabled(store.session.status === 'active')
+    return
+  }
+  // First navigation to this id: the session hasn't loaded yet, so its `status` isn't known. Waits
+  // for it once, then stops — deliberately not a persistent watcher, since a *later* live `session`
+  // frame also mutates `store.session` and must never silently re-override a toggle the user has
+  // since flipped by hand.
+  const stopWatchingSession = watch(
+    () => store.session,
+    (session) => {
+      if (!session || session.id !== id) return
+      store.setLiveEnabled(session.status === 'active')
+      stopWatchingSession()
+    },
+  )
+}
+
+onBeforeUnmount(() => {
+  store.stopLive()
+})
 
 // Lazy per tab (SPEC/PLAN P4-03 design note): Subagents/Tools panels are
 // other tickets' (P4-05/P4-06), but this view owns tab activation, so it is
@@ -174,6 +223,25 @@ const hasSessionYet = computed(() => store.session !== null)
         >
           Partial — no session.start seen
         </Badge>
+
+        <!--
+          PLAN.md P5-06: "off" stops the timeline from appending new rows but never closes the
+          underlying subscription — see `sessionDetail.ts`'s `liveEnabled` doc comment for why this is
+          not `liveStore.pause()`. `role="status"`/label text make the toggle's current state
+          announced, not just its control.
+        -->
+        <label class="ml-auto flex items-center gap-2 text-xs">
+          <span
+            class="text-muted-foreground"
+            role="status"
+          >{{ store.liveEnabled ? 'Live' : 'Live (paused)' }}</span>
+          <Switch
+            :model-value="store.liveEnabled"
+            data-testid="live-toggle"
+            aria-label="Toggle live timeline updates"
+            @update:model-value="store.setLiveEnabled"
+          />
+        </label>
       </div>
 
       <p class="text-muted-foreground text-xs">
@@ -269,11 +337,20 @@ const hasSessionYet = computed(() => store.session !== null)
               @retry="store.loadSubagents({ force: true })"
             />
           </div>
+          <!--
+            estimated-usd/estimated-share come from the *session* projection,
+            not from `costAttribution`: SPEC §2.1 makes `by_query_source`
+            reported-cost-only, so an all-estimated session has nothing in it
+            to derive an estimate from and the card would otherwise render
+            "$0.00 of $0.00" as though it were measured (D-30).
+          -->
           <CostAttributionCard
             class="shrink-0"
             :data="store.costAttribution"
             :loading="store.subagentsLoading"
             :error="store.subagentsError"
+            :estimated-usd="store.session?.cost.estimated_usd ?? 0"
+            :estimated-share="store.session?.cost.estimated_share ?? 0"
             @retry="store.loadSubagents({ force: true })"
           />
         </div>

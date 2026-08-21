@@ -340,9 +340,15 @@ func TestRetry_PermanentErrorNotRetried(t *testing.T) {
 
 	require.NoError(t, p.EnqueueEvents([]model.Event{testEvent("a", model.SourceHook)}))
 
+	// Waits on BOTH counters, not just WriteFailed: retryLoop increments
+	// WriteFailed and returns, and only then does flushEvents call dropEvents
+	// to increment Dropped — so a wait that stops at WriteFailed can resume in
+	// the window between the two and read Dropped as 0. Latent and invisible
+	// on an idle machine; reproduced here under a loaded one.
 	require.Eventually(t, func() bool {
-		return metricValue(t, p.Metrics().WriteFailed.WithLabelValues("permanent")) == 1
-	}, 2*time.Second, 5*time.Millisecond)
+		return metricValue(t, p.Metrics().WriteFailed.WithLabelValues("permanent")) == 1 &&
+			metricValue(t, p.Metrics().Dropped.WithLabelValues(string(model.SourceHook))) == 1
+	}, 2*time.Second, 5*time.Millisecond, "the batch must be counted both as a permanent write failure and as dropped")
 
 	require.EqualValues(t, 1, attempts.Load(), "a permanent error must never be retried")
 	require.InDelta(t, float64(1), metricValue(t, p.Metrics().Dropped.WithLabelValues(string(model.SourceHook))), 0)
@@ -362,9 +368,12 @@ func TestRetry_TransientExhaustsThenDrops(t *testing.T) {
 
 	require.NoError(t, p.EnqueueEvents([]model.Event{testEvent("a", model.SourceHook)}))
 
+	// Waits on both counters — see TestRetry_PermanentErrorNotRetried's comment
+	// on the WriteFailed-then-Dropped ordering window this closes.
 	require.Eventually(t, func() bool {
-		return metricValue(t, p.Metrics().WriteFailed.WithLabelValues("transient")) == 1
-	}, 2*time.Second, 5*time.Millisecond)
+		return metricValue(t, p.Metrics().WriteFailed.WithLabelValues("transient")) == 1 &&
+			metricValue(t, p.Metrics().Dropped.WithLabelValues(string(model.SourceHook))) == 1
+	}, 2*time.Second, 5*time.Millisecond, "the batch must be counted both as a transient write failure and as dropped")
 
 	require.EqualValues(t, 3, attempts.Load())
 	require.InDelta(t, float64(2), metricValue(t, p.Metrics().Retries.WithLabelValues("transient")), 0)

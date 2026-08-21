@@ -3,6 +3,20 @@ import { describe, expect, it } from 'vitest'
 
 import CostAttributionCard from './CostAttributionCard.vue'
 import { getSessionSubagentsDepth2Live } from '@/test/fixtures.extra'
+import type { components } from '@/api/schema'
+
+// D-30 (docs/review/phase-4-gauntlet.md, owner-ratified 2026-08-18): a
+// session whose api_request events never reported cost (--cost-mode=omit)
+// has nothing to put in by_query_source at all — sessions.cost_by_query_source
+// only ever sums *reported* cost (SPEC §2.1) — so this is the exact shape
+// that used to render "$0.00 of $0.00" as though it were a measurement.
+const allEstimatedCostAttribution = {
+  by_query_source: {},
+  dominant_query_source: '',
+  other_query_source_usd: 0,
+  per_node_available: false,
+  note: 'Claude Code does not emit per-agent cost; api_request carries query_source only.',
+} satisfies components['schemas']['SubagentCostAttribution']
 
 describe('CostAttributionCard', () => {
   it('renders a loading skeleton while loading', () => {
@@ -96,5 +110,50 @@ describe('CostAttributionCard', () => {
     expect(wrapper.text()).not.toContain('Per-node cost is not available for this session')
     const hint = wrapper.get('[data-testid="cost-attribution-per-node-hint"]')
     expect(hint.attributes('title')).toContain('Per-node cost is not available')
+  })
+
+  // --- D-30 (docs/review/phase-4-gauntlet.md, owner-ratified 2026-08-18):
+  // an all-estimated session's by_query_source is legitimately empty (SPEC
+  // §2.1: reported-cost-only), so this card must not render "$0.00 of
+  // $0.00" as though that were a measurement.
+
+  it('estimated_share 0 (no estimatedUsd prop passed): renders exactly what it renders today — no-regression pin', () => {
+    const wrapper = mount(CostAttributionCard, { props: { data: getSessionSubagentsDepth2Live.cost_attribution } })
+
+    expect(wrapper.find('[data-testid="cost-attribution-estimated-notice"]').exists()).toBe(false)
+    const summary = wrapper.get('[data-testid="cost-attribution-other-share"]')
+    expect(summary.text()).toContain('sdk')
+    expect(summary.text()).toContain('other query sources')
+  })
+
+  it('estimated_share 1 with an empty by_query_source: renders the estimated marker and the vendor-reported-only caveat instead of "$0.00 of $0.00"', () => {
+    const wrapper = mount(CostAttributionCard, {
+      props: { data: allEstimatedCostAttribution, estimatedUsd: 90, estimatedShare: 1 },
+      global: { stubs: { teleport: true } },
+    })
+
+    expect(wrapper.find('[data-testid="cost-attribution-other-share"]').exists()).toBe(false)
+    const notice = wrapper.get('[data-testid="cost-attribution-estimated-notice"]')
+    expect(notice.get('[data-testid="cost-attribution-estimated-badge"]').text()).toBe('Estimated')
+    expect(notice.get('[data-testid="cost-attribution-estimated-text"]').text()).toContain('$90.00')
+    expect(notice.text()).not.toContain('$0.00 of $0.00')
+
+    const caveat = wrapper.get('[data-testid="cost-attribution-estimated-caveat-hint"]')
+    expect(caveat.attributes('title')).toContain('only ever covers vendor-reported cost')
+  })
+
+  it('a partial share (e.g. 0.32) with non-empty by_query_source keeps the existing reported-cost summary byte for byte — SPEC §2.1 scope limit', () => {
+    const wrapper = mount(CostAttributionCard, {
+      props: { data: getSessionSubagentsDepth2Live.cost_attribution, estimatedUsd: 1.5, estimatedShare: 0.32 },
+    })
+
+    // Reported cost is non-zero here (rows is non-empty), so this ticket's
+    // scope explicitly stops at "keep the existing behaviour byte for byte"
+    // — the per-query-source table is a true, if incomplete, answer, not a
+    // lie worth this card's own fix.
+    expect(wrapper.find('[data-testid="cost-attribution-estimated-notice"]').exists()).toBe(false)
+    const summary = wrapper.get('[data-testid="cost-attribution-other-share"]')
+    expect(summary.text()).toContain('sdk')
+    expect(summary.text()).toContain('other query sources')
   })
 })

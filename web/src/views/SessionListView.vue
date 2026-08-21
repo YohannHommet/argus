@@ -16,7 +16,7 @@
  * nothing to filter either way, so `SetupCard` is the right answer even
  * with a filter active.
  */
-import { computed } from 'vue'
+import { computed, onBeforeUnmount, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 
 import SessionFilterBar from '@/components/session/SessionFilterBar.vue'
@@ -28,6 +28,8 @@ import SkeletonTable from '@/components/common/SkeletonTable.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { useCaptureReady } from '@/composables/useCaptureReady'
+import type { LiveSubscription } from '@/stores/live'
+import { useLiveStore } from '@/stores/live'
 import { useMetaStore } from '@/stores/meta'
 import { useSessionsStore } from '@/stores/sessions'
 
@@ -35,6 +37,27 @@ const router = useRouter()
 const sessions = useSessionsStore()
 const meta = useMetaStore()
 void meta.load()
+
+/**
+ * SPEC §6.4 / PLAN.md P5-06: this view owns the firehose subscription (the sessions *store* only
+ * reacts to whatever `liveStore.sessions` already holds — see its own doc comment — it never
+ * subscribes itself, matching `liveStore`'s "sole owner of the connection" contract). Scoped to this
+ * view's mount so navigating away releases it — a `/sessions/:id` detail page pushes its own
+ * session-scoped topic on top instead (`sessionDetail.ts`'s `startLive`), and closing this one on
+ * unmount is what lets that topic become active without a second, redundant firehose connection ever
+ * competing with it (exit criterion 6).
+ */
+const live = useLiveStore()
+let liveSubscription: LiveSubscription | null = null
+
+onMounted(() => {
+  liveSubscription = live.subscribe({ kind: 'firehose' })
+})
+
+onBeforeUnmount(() => {
+  liveSubscription?.close()
+  liveSubscription = null
+})
 
 // "Ready to decide which empty state applies" needs meta/facets settled too, not just the
 // sessions fetch — otherwise a still-loading `hasNoData` (false until loaded, see meta.ts) would

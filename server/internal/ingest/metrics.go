@@ -1,6 +1,9 @@
 package ingest
 
-import "github.com/prometheus/client_golang/prometheus"
+import (
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
+)
 
 // metricsNamespace/metricsSubsystem give every ingest metric the
 // "argus_ingest_*" prefix SPEC §3.6's self-metrics list names explicitly.
@@ -141,4 +144,64 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		m.WriteDuration, m.Retries, m.WriteFailed, m.Lag,
 	)
 	return m
+}
+
+// EventsTotal sums argus_ingest_events_total across every "source" label
+// value (Events' own doc comment: persisted items by source) into the
+// single cumulative number internal/app's stats-broadcaster Snapshot needs
+// (SPEC §5.1's events_per_sec is one fleet-wide rate, not a per-source
+// breakdown). Read via dto.Metric.Write — the same technique
+// prometheus/client_golang/prometheus/testutil uses internally — because a
+// *prometheus.CounterVec has no cheap synchronous "sum every label" method
+// of its own; see pipeline_test.go's metricValue doc comment for why this
+// package writes against client_model directly rather than importing
+// testutil (a transitive dependency this module's go.mod does not
+// otherwise pull in).
+func (m *Metrics) EventsTotal() float64 { return sumCounterVec(m.Events) }
+
+// DroppedCount is EventsTotal's counterpart for argus_ingest_dropped_total
+// (Dropped's own doc comment: items that never reached storage at all —
+// queue-full shedding, a permanent write error, a drain-deadline timeout),
+// summed the same way and for the same one-cumulative-number reason.
+func (m *Metrics) DroppedCount() float64 { return sumCounterVec(m.Dropped) }
+
+// sumCounterVec drains every label combination of v into pb and sums their
+// current values. The channel is closed after one synchronous Collect call
+// completes (no concurrent reader needed): every CounterVec this package
+// registers has a label cardinality of two or three ("source" values), well
+// under the buffer below, so Collect never blocks waiting for a reader that
+// isn't there yet.
+func sumCounterVec(v *prometheus.CounterVec) float64 {
+	ch := make(chan prometheus.Metric, 8)
+	v.Collect(ch)
+	close(ch)
+	var total float64
+	for metric := range ch {
+		var pb dto.Metric
+		_ = metric.Write(&pb)
+		total += pb.GetCounter().GetValue()
+	}
+	return total
+}
+
+// LagObservations reads argus_ingest_lag_seconds' cumulative sum/count
+// straight off the histogram (Lag's own doc comment), so internal/app's
+// stats broadcaster can compute a mean-lag-over-a-window
+// (Snapshot.LagSum/LagCount, stream/stats.go) without importing
+// prometheus/client_golang/prometheus/testutil itself — same reasoning as
+// EventsTotal/DroppedCount above. A histogram collects as exactly one
+// metric regardless of label cardinality (this one is unlabeled), so a
+// zero-value return only happens if Collect produced nothing at all, which
+// cannot happen for a *prometheus.Histogram registered by NewMetrics.
+func (m *Metrics) LagObservations() (sum float64, count uint64) {
+	ch := make(chan prometheus.Metric, 1)
+	m.Lag.Collect(ch)
+	close(ch)
+	for metric := range ch {
+		var pb dto.Metric
+		_ = metric.Write(&pb)
+		h := pb.GetHistogram()
+		return h.GetSampleSum(), h.GetSampleCount()
+	}
+	return 0, 0
 }

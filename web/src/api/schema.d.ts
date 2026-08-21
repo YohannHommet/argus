@@ -959,13 +959,8 @@ export interface components {
         };
         /** @description event: event — a persisted event, slim shape (SPEC §5.1). Carries `id:` (the event_ref) on the SSE frame. */
         StreamEventFrame: components["schemas"]["TimelineEvent"];
-        /** @description event: session — debounced (500ms/session) projection snapshot (SPEC §5.1). No `id:` line. */
-        StreamSessionFrame: {
-            id: string;
-            status: components["schemas"]["SessionStatus"];
-            turn_count: number;
-            cost: components["schemas"]["SessionCost"];
-        };
+        /** @description event: session — debounced (500ms/session) projection snapshot (SPEC §5.1). No `id:` line. SPEC §5.1's own example shows a 4-field subset ({id, status, turn_count, cost}) for brevity, but the handler emits the full SessionSummary row: the client provably needs more than four fields (the KPI strip and SessionTable both re-render from this frame), and internal/stream's own Filter.MatchSession filters on project/vendor, which the 4-field subset does not carry. */
+        StreamSessionFrame: components["schemas"]["SessionSummary"];
         /** @description event: stats — pipeline health, every 2s (SPEC §5.1). No `id:` line. */
         StreamStatsFrame: {
             events_per_sec: number;
@@ -1472,6 +1467,15 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["NotFound"];
             405: components["responses"]["MethodNotAllowed"];
+            /** @description Too many live SSE subscribers (ARGUS_STREAM_MAX_SUBSCRIBERS, SPEC §5.3), or the server is shutting down. Inline, not a shared component: Argus has no ServiceUnavailable component analogous to the OTLP operations' OTLPUnavailable (their body is google.rpc.Status, not problem+json), so this repeats the readyz-style problem+json shape verbatim on both stream operations instead. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
         };
     };
     listEvents: {
@@ -1834,6 +1838,15 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             405: components["responses"]["MethodNotAllowed"];
+            /** @description Too many live SSE subscribers (ARGUS_STREAM_MAX_SUBSCRIBERS, SPEC §5.3), or the server is shutting down. Inline, not a shared component: Argus has no ServiceUnavailable component analogous to the OTLP operations' OTLPUnavailable (their body is google.rpc.Status, not problem+json), so this repeats the readyz-style problem+json shape verbatim on both stream operations instead. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
         };
     };
     ingestLogs: {

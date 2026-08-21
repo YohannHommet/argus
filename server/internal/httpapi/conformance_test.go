@@ -17,6 +17,7 @@ package httpapi_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -521,8 +522,8 @@ func requireOperationIDCoverage(t *testing.T, doc *openapi3.T, table requestTabl
 	// someone deliberately edits it here — which is the point at which the
 	// trade-off gets reviewed rather than assumed.
 	allowedExemptions := map[string]string{
-		"streamSession": "SSE; no hub before Phase 5 — covered instead by direct StreamEvent schema validation",
-		"streamAll":     "SSE; no hub before Phase 5 — covered instead by direct StreamEvent schema validation",
+		"streamSession": "SSE response never completes; this table reads a whole body, so it cannot round-trip a stream — covered by TestConformance_StreamEventSchemas (frame shapes) and sse_test.go (live wire behavior)",
+		"streamAll":     "SSE response never completes; this table reads a whole body, so it cannot round-trip a stream — covered by TestConformance_StreamEventSchemas (frame shapes) and sse_test.go (live wire behavior)",
 		"ingestLogs":    "mounted via Deps.OTLPMounter, not the Reader ports this Fake backs",
 		"ingestMetrics": "mounted via Deps.OTLPMounter, not the Reader ports this Fake backs",
 		"ingestTraces":  "mounted via Deps.OTLPMounter, not the Reader ports this Fake backs",
@@ -596,15 +597,31 @@ func TestConformance_UnknownQuerySourceValidates(t *testing.T) {
 }
 
 // TestConformance_StreamEventSchemas is streamSession/streamAll's exemption
-// treatment (requests.yaml's `exempt` entries, SPEC §5.1): the hub does not
-// exist before Phase 5, so there is no live SSE connection to round-trip,
-// but every frame *shape* SPEC §5.1 documents is validated directly against
-// components.schemas.StreamEvent — the same schema-conformance guarantee the
-// request-table rows get, just without an HTTP round trip.
+// treatment (requests.yaml's `exempt` entries, SPEC §5.1): an SSE response
+// never completes — it is framed events over one connection that is meant
+// to stay open — so the request-table harness above (which reads a whole
+// response body before validating it) cannot structurally round-trip
+// streamAll/streamSession at all. sse_test.go's httptest.NewServer-based
+// suite covers the live wire behavior instead; this test covers the one
+// thing that suite cannot: that every frame *shape* SPEC §5.1 documents
+// validates against components.schemas.StreamEvent's oneOf, and validates
+// against exactly one member of it (never zero, never more than one).
 func TestConformance_StreamEventSchemas(t *testing.T) {
 	doc, _ := loadSpec(t)
 	streamEvent := doc.Components.Schemas["StreamEvent"].Value
 	require.NotNil(t, streamEvent, "openapi.yaml must define components.schemas.StreamEvent")
+
+	// The session fixture is the full model.SessionSummary conformFixtures
+	// already builds for GET /api/v1/sessions (not the SPEC §5.1 example's
+	// 4-field subset): StreamSessionFrame is now `allOf: [SessionSummary]`
+	// (P5-02), so this is the shape the real handler actually emits.
+	// Round-tripping through JSON (rather than a hand-built map literal)
+	// keeps this fixture from silently drifting out of sync with
+	// SessionSummary's own field set.
+	sessionJSON, err := json.Marshal(newConformFixtures().session.SessionSummary)
+	require.NoError(t, err)
+	var sessionPayload map[string]any
+	require.NoError(t, json.Unmarshal(sessionJSON, &sessionPayload))
 
 	frames := map[string]map[string]any{
 		"event": {
@@ -616,13 +633,7 @@ func TestConformance_StreamEventSchemas(t *testing.T) {
 			"duration_ms": 180, "success": true, "error_type": nil, "agent_id": nil, "agent_type": nil,
 			"permission_mode": "default", "file_path": "server/internal/store/postgres/store.go", "clock_skewed": false,
 		},
-		"session": {
-			"id": conformSessionID, "status": "active", "turn_count": 12,
-			"cost": map[string]any{
-				"usd": 4.27, "reported_usd": 4.27, "estimated_usd": 0.0, "estimated_share": 0.0,
-				"by_query_source": map[string]any{}, "dominant_query_source": "", "other_query_source_usd": 0.0,
-			},
-		},
+		"session":  sessionPayload,
 		"stats":    {"events_per_sec": 42.1, "active_sessions": 3, "queue_depth": 0, "ingest_lag_ms": 180, "dropped_total": 0},
 		"lag":      {"dropped": 3},
 		"reset":    {"reason": "replay_window_exceeded", "from": "2026-08-11T09:00:00Z"},
