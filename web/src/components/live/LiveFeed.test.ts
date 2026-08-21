@@ -9,6 +9,7 @@ import { formatAbsoluteTime, formatWallClockTime } from '@/lib/format'
 import type { TimelineEvent } from '@/stores/live'
 import { Select } from '@/components/ui/select'
 import EventDetailSheet from '@/components/timeline/EventDetailSheet.vue'
+import EventRow from '@/components/timeline/EventRow.vue'
 import LiveFeed from './LiveFeed.vue'
 
 const firstSession = listSessions200Default.data[0]!
@@ -243,6 +244,36 @@ describe('LiveFeed', () => {
     it('renders no header when there are no events to label (EmptyState instead)', () => {
       const wrapper = mount(LiveFeed, { props: { events: [], paused: false, bufferedCount: 0 } })
       expect(wrapper.find('[data-testid="live-feed-header"]').exists()).toBe(false)
+    })
+  })
+
+  // Round-9 critic gap: the Event column's `flex-1` soaked up all remaining
+  // row width, stranding the Received/Duration/Cost/Tokens cluster in a
+  // 460–630px void from the actual event content — one row reading as two
+  // disconnected halves. Every row now renders `EventRow` with
+  // `compactEventColumn` (a fixed identity-cluster width instead of a
+  // growing one, see `EventRow.vue`'s own doc on that prop), and the sticky
+  // header's "Event" column is kept at that same fixed width so the two
+  // never drift out of lockstep.
+  describe('compact event-column layout', () => {
+    it('renders every row with EventRow\'s compactEventColumn, not the timeline\'s default growing column', () => {
+      const events = makeFrames(2)
+      const wrapper = mount(LiveFeed, { props: { events, paused: false, bufferedCount: 0 } })
+
+      const rows = wrapper.findAllComponents(EventRow)
+      expect(rows).toHaveLength(2)
+      for (const row of rows) {
+        expect(row.props('compactEventColumn')).toBe(true)
+      }
+    })
+
+    it('gives the sticky header\'s Event column the same fixed width as the row\'s identity cluster, not the old flex-1', () => {
+      const events = makeFrames(1)
+      const wrapper = mount(LiveFeed, { props: { events, paused: false, bufferedCount: 0 } })
+
+      const headerEvent = wrapper.get('[data-testid="live-feed-header-event"]')
+      expect(headerEvent.classes()).toContain('w-96')
+      expect(headerEvent.classes()).not.toContain('flex-1')
     })
   })
 

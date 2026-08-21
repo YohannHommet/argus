@@ -60,6 +60,24 @@ interface Props {
    * before.
    */
   wallClockTime?: boolean
+  /**
+   * Round-9 (live view) critic gap: the identity cluster below (label/detail/
+   * decision/skew/file_path) was `flex-1`, so on the firehose — where this
+   * cluster's own content is usually short — it stretched to soak up every
+   * pixel the row wasn't using elsewhere, stranding the right-hand metric
+   * cluster out at the row's far edge with a 460–630px dead gap in between:
+   * one row reading as two disconnected halves. `true` gives the cluster a
+   * fixed content width instead of a growing one, so the metric cluster sits
+   * immediately after it — same tight column rhythm `SessionTable.vue` uses
+   * — at the cost of trailing whitespace on a wide row, which is the
+   * accepted trade (a left-weighted table, not a full-bleed one). It also
+   * lets the `tool_name`/`model` detail chip truncate under that fixed width
+   * (vendor strings are unbounded length) rather than the unconditional
+   * `shrink-0` below, which relied on the cluster always having room to grow
+   * to fit it. Default `false` so `Timeline.vue`/`TimelineGroup.vue`, which
+   * never pass this prop, render byte-for-byte as before.
+   */
+  compactEventColumn?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -70,6 +88,7 @@ const props = withDefaults(defineProps<Props>(), {
   maxDurationMs: 0,
   sessionLabel: null,
   wallClockTime: false,
+  compactEventColumn: false,
 })
 
 const emit = defineEmits<{
@@ -84,6 +103,31 @@ const primaryEventRef = computed(() => props.item.events[0]!.event_ref)
 const detail = computed(() => rowDetail(props.item))
 const barScale = computed(() => durationBarScale(props.item.duration_ms, props.maxDurationMs))
 const totalTokens = computed(() => (props.item.tokens ? props.item.tokens.input + props.item.tokens.output : null))
+
+/**
+ * See `compactEventColumn`'s doc above: a fixed `w-96` instead of the
+ * growing `flex-1` `Timeline.vue`/`TimelineGroup.vue` still get by default.
+ * `w-96` (24rem/384px) is sized off `eventKinds.ts`'s own longest labels
+ * (e.g. "Permission mode changed") plus a typical `tool_name`/model chip and
+ * a decision badge — long enough that most real rows never truncate, capped
+ * far short of the void the critic measured.
+ */
+const eventColumnClass = computed(() =>
+  props.compactEventColumn ? 'flex w-96 shrink-0 items-center gap-2 overflow-hidden' : 'flex min-w-0 flex-1 items-center gap-2 overflow-hidden',
+)
+
+/**
+ * The detail chip's `shrink-0` is fine under `flex-1` (the cluster just grows
+ * to fit it) but would force `compactEventColumn`'s fixed-width cluster to
+ * overflow past its own edge instead of truncating whenever a vendor
+ * `tool_name`/model is long — so compact mode trades `shrink-0` for
+ * `min-w-0`, letting `truncate` (already on this span either way) actually
+ * engage. The kind label and `DecisionBadge` stay `shrink-0` unconditionally
+ * either way — those are protected idioms, never squeezed.
+ */
+const detailClass = computed(() =>
+  props.compactEventColumn ? 'text-muted-foreground min-w-0 truncate font-mono text-xs' : 'text-muted-foreground shrink-0 truncate font-mono text-xs',
+)
 
 function openPrimary() {
   emit('open', primaryEventRef.value)
@@ -130,11 +174,11 @@ function openEvent(eventRef: string) {
     >{{ sessionLabel }}</span>
 
     <!-- Left cluster: identity — label, detail chip, decision pill, skew flag. Truncates before the right-hand metrics ever do. -->
-    <div class="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
+    <div :class="eventColumnClass">
       <span class="text-foreground shrink-0 font-medium">{{ meta.label }}</span>
       <span
         v-if="detail"
-        class="text-muted-foreground shrink-0 truncate font-mono text-xs"
+        :class="detailClass"
         data-testid="event-row-detail"
       >{{ detail }}</span>
       <DecisionBadge

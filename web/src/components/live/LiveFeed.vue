@@ -22,6 +22,18 @@
  * what `EventDetailSheet` shows in the inspector, since that fetches by
  * `event_ref` independently of anything this column displays.
  *
+ * Round-9 critic gap: `EventRow`'s identity cluster (label/detail/decision/
+ * skew/file_path) rendered `flex-1`, so on a row whose own content was short
+ * it stretched to soak up every pixel between it and the right-hand metric
+ * cluster — a 460–630px dead void, up to half the table, versus ~95px on
+ * `SessionTable.vue`'s tightest inter-column gap. The row below now passes
+ * `compact-event-column` (see `EventRow.vue`'s own doc on that prop): the
+ * identity cluster gets a fixed `w-96` instead of a growing one, so the
+ * metric cluster sits immediately after it rather than floating to the
+ * table's far edge. On a wide viewport that leaves trailing whitespace after
+ * the row's content — an accepted trade for a left-weighted, Sessions-style
+ * table rather than a full-bleed one.
+ *
  * Fully props-in/events-out (no store read of its own) — the ticket calls
  * this out explicitly as the easier-to-test shape for "100 fake frames
  * render correctly", and it is: every one of this file's tests mounts with
@@ -411,6 +423,16 @@ function onRowOpen(eventRef: string): void {
         markup by hand — there is no single source of truth for them to
         drift from without one, but the two are right next to each other in
         every diff that touches either.
+
+        Round-9 critic gap: the "Event" header span below used to be
+        `min-w-0 flex-1`, growing to match `EventRow`'s own then-`flex-1`
+        identity cluster — which is exactly what stranded the metric
+        columns at the row's far edge with a 460–630px void in between (one
+        row reading as two disconnected halves). It's now the fixed `w-96`
+        `EventRow` renders under `compact-event-column` below, so the
+        "Received" header (and the rest of the metric cluster) sits right
+        after it — same tight rhythm as `SessionTable.vue`'s columns —
+        rather than floating off to the table's edge.
       -->
       <div
         class="border-border bg-muted/40 text-muted-foreground sticky top-0 z-10 flex min-w-0 items-center gap-3 border-b px-3 text-xs font-medium"
@@ -425,7 +447,7 @@ function onRowOpen(eventRef: string): void {
           data-testid="live-feed-header-session"
         >Session</span>
         <span
-          class="min-w-0 flex-1"
+          class="w-96 shrink-0"
           data-testid="live-feed-header-event"
         >Event</span>
         <div class="flex shrink-0 items-center gap-3">
@@ -457,6 +479,7 @@ function onRowOpen(eventRef: string): void {
         :session-label="sessionLabel(item)"
         :title="eventTimeTitle(item)"
         wall-clock-time
+        compact-event-column
         @open="onRowOpen"
       />
     </div>

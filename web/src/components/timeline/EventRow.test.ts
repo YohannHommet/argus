@@ -120,4 +120,40 @@ describe('EventRow', () => {
       expect(wrapper.get('[data-testid="event-row-time"]').text()).toMatch(/^\d{2}:\d{2}:\d{2}$/)
     })
   })
+
+  // Round-9 (live view) critic gap: the identity cluster (label/detail/
+  // decision/skew/file_path) was `flex-1`, growing to soak up whatever width
+  // the rest of the row wasn't using — on the firehose, where that cluster's
+  // own content is usually short, that stranded the metric cluster at the
+  // row's far edge with a 460–630px void in between. `compactEventColumn`
+  // swaps the growing column for a fixed one; `Timeline.vue`/
+  // `TimelineGroup.vue`, which never pass it, must keep rendering exactly as
+  // before.
+  describe('compactEventColumn', () => {
+    it('defaults to false: the identity cluster keeps growing (flex-1), matching Timeline\'s existing rendering', () => {
+      const [item] = collapseEvents([otelToolResultEvent])
+      const wrapper = mount(EventRow, { props: { item: item! } })
+      const cluster = wrapper.get('[data-testid="event-row-detail"]').element.parentElement as HTMLElement
+
+      expect(cluster.className).toContain('flex-1')
+      expect(cluster.className).not.toContain('w-96')
+    })
+
+    it('true: gives the identity cluster a fixed width instead of a growing one, and lets the detail chip truncate under it', () => {
+      const [item] = collapseEvents([otelToolResultEvent])
+      const wrapper = mount(EventRow, { props: { item: item!, compactEventColumn: true } })
+      const cluster = wrapper.get('[data-testid="event-row-detail"]').element.parentElement as HTMLElement
+
+      expect(cluster.className).toContain('w-96')
+      expect(cluster.className).not.toContain('flex-1')
+
+      // `shrink-0` (Timeline's default, inert under flex-1) would force a
+      // fixed-width cluster to overflow instead of truncating a long vendor
+      // tool_name/model — compact mode trades it for `min-w-0` so `truncate`
+      // (present either way) can actually engage.
+      const detail = wrapper.get('[data-testid="event-row-detail"]')
+      expect(detail.classes()).toContain('min-w-0')
+      expect(detail.classes()).not.toContain('shrink-0')
+    })
+  })
 })
