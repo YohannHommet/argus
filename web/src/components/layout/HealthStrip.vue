@@ -37,7 +37,7 @@
  * missed nothing so far"), not a placeholder.
  */
 import { computed } from 'vue'
-import { CheckCircle, CircleHelp, Loader2, RefreshCw, Wifi, WifiOff, XCircle } from '@lucide/vue'
+import { CircleHelp, Loader2, RefreshCw, Wifi, WifiOff } from '@lucide/vue'
 
 import type { LiveStatus, StreamStatsFrame } from '@/stores/live'
 import NullValue from '@/components/common/NullValue.vue'
@@ -96,11 +96,22 @@ const exporters = computed(() => [
  * Round-5 critic gap: every other tile in this strip leads with one
  * semibold `text-sm` value on its own baseline; this cell instead opened
  * straight into a wrapped row of 4 chips, breaking the strip's shared value
- * baseline. A "seen/total" count now fills that same slot, with the chips
- * kept below as the detail — same information, same scan rhythm as
- * queue depth/ingest lag/dropped.
+ * baseline. A "seen/total" count now fills that same slot.
+ *
+ * Round-7 critic gap: the per-exporter chip list (kept below the count as
+ * the detail) still wrapped onto two rows at typical widths, ballooning
+ * this one cell to 87px against the other five cells' 47px and leaving a
+ * dead band under them. Every other cell in this strip that carries detail
+ * beyond its headline value (Dropped (server)/Dropped (this tab)) puts that
+ * detail in a `CircleHelp` info tooltip rather than inline — this cell now
+ * follows the same idiom instead of being the one exception, which is what
+ * restores the shared two-line cell height across the whole strip.
  */
 const exportersSeenCount = computed(() => exporters.value.filter((e) => e.seen).length)
+
+const EXPORTERS_DETAIL_REASON = computed(
+  () => `Per-exporter breakdown: ${exporters.value.map((e) => `${e.label} — ${e.seen ? 'seen' : 'not seen'}`).join(', ')}.`,
+)
 </script>
 
 <template>
@@ -255,11 +266,26 @@ const exportersSeenCount = computed(() => exporters.value.filter((e) => e.seen).
     </div>
 
     <div
-      class="min-w-44 flex-1 px-3 py-1.5"
+      class="min-w-32 flex-1 px-3 py-1.5"
       data-testid="health-strip-exporters"
     >
-      <p class="text-muted-foreground text-[0.6875rem]">
+      <p class="text-muted-foreground flex items-center gap-1 text-[0.6875rem]">
         Exporters seen
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger as-child>
+              <CircleHelp
+                class="size-3 cursor-help"
+                :title="EXPORTERS_DETAIL_REASON"
+                :aria-label="EXPORTERS_DETAIL_REASON"
+                data-testid="health-strip-exporters-info"
+              />
+            </TooltipTrigger>
+            <TooltipContent class="max-w-64 text-wrap">
+              {{ EXPORTERS_DETAIL_REASON }}
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       </p>
       <p
         class="text-sm leading-tight font-semibold tabular-nums"
@@ -267,22 +293,6 @@ const exportersSeenCount = computed(() => exporters.value.filter((e) => e.seen).
       >
         {{ exportersSeenCount }}/{{ exporters.length }}
       </p>
-      <ul class="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs">
-        <li
-          v-for="exporter in exporters"
-          :key="exporter.key"
-          class="flex items-center gap-1"
-          :data-testid="`health-strip-exporter-${exporter.key}`"
-        >
-          <component
-            :is="exporter.seen ? CheckCircle : XCircle"
-            class="size-3.5 shrink-0"
-            :class="exporter.seen ? 'text-accept' : 'text-muted-foreground'"
-            aria-hidden="true"
-          />
-          {{ exporter.label }}
-        </li>
-      </ul>
     </div>
   </div>
 </template>

@@ -90,13 +90,21 @@ describe('HealthStrip', () => {
     expect(wrapper.find('[data-testid="health-strip-reconnect"]').exists()).toBe(false)
   })
 
-  it('renders exporters-seen state from the meta store flags', () => {
+  // Round-7 critic gap: the always-visible 2x2 chip grid ballooned this cell to 87px against
+  // the other five cells' 47px. The per-exporter breakdown now lives in an info tooltip (same
+  // idiom as Dropped (server)/Dropped (this tab)) instead of inline, so the cell shares the
+  // strip's two-line height; the count stays the headline value and the tooltip's title carries
+  // the same per-exporter facts the old chips did.
+  it('renders exporters-seen count from the meta store flags, with per-exporter detail in the info tooltip', () => {
     const wrapper = mount(HealthStrip, {
       props: { ...BASE_PROPS, logsExporterSeen: true, metricsExporterSeen: false, hooksSeen: true, toolDetailsSeen: false },
     })
 
-    expect(wrapper.get('[data-testid="health-strip-exporter-logs"] svg').classes()).toContain('text-accept')
-    expect(wrapper.get('[data-testid="health-strip-exporter-metrics"] svg').classes()).not.toContain('text-accept')
-    expect(wrapper.get('[data-testid="health-strip-exporter-metrics"]').text()).toContain('Metrics')
+    expect(wrapper.get('[data-testid="health-strip-exporters-value"]').text()).toBe('2/4')
+
+    const info = wrapper.get('[data-testid="health-strip-exporters-info"]')
+    const reason = info.attributes('title') ?? ''
+    expect(reason).toContain('Logs — seen')
+    expect(reason).toContain('Metrics — not seen')
   })
 })

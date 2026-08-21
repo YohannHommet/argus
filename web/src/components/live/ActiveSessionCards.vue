@@ -1,13 +1,25 @@
 <script setup lang="ts">
 /**
- * SPEC §6.2's live-view tiles: one card per session currently seen on the
- * firehose, with an identity heading (status, project, vendor, short id,
- * started/last-event — the same identity block `SessionRow`/
- * `SessionDetailView` already establish elsewhere), cost, its current/last
- * tool, and a "follow" affordance into `SessionDetailView` (P5-06's
- * territory — this only links to `/sessions/:id?live=1`; the query param is
- * a request for that view to open in live-follow mode, honoured or not on
- * its side).
+ * SPEC §6.2's live-view tiles: one dense row per session currently seen on
+ * the firehose, with an identity block (status, project, vendor, short id +
+ * copy) on the left and right-aligned tabular metric columns (last event,
+ * cost, current tool) plus a "follow" affordance into `SessionDetailView`
+ * (P5-06's territory — this only links to `/sessions/:id?live=1`; the query
+ * param is a request for that view to open in live-follow mode, honoured or
+ * not on its side) on the right.
+ *
+ * Round-7 critic gap: a per-session `Card` with cost/current-tool stacked
+ * *below* the identity heading wasted ~85% of a wide viewport's width on a
+ * single active session — the card's own content only needed a fraction of
+ * that box, pushing the event feed below it far down the page. Sessions now
+ * render as stacked rows inside one contained surface (the same
+ * border/rounded/bg-card idiom `SessionTable.vue` uses for its own row
+ * container), each row collapsing metrics into right-aligned tabular
+ * columns exactly like `SessionRow.vue`'s table cells — visually kin to a
+ * sessions-table row, not a floating card. "Started" is dropped from the
+ * row entirely (it was never part of this ticket's three requested metric
+ * columns — last event, cost, current tool — and a fourth column would
+ * undo the width win this round exists to deliver).
  *
  * Fully props-driven (no store read of its own): `sessions` is
  * `Array.from(liveStore.sessions.values())` and `events` is
@@ -23,12 +35,11 @@ import NullValue from '@/components/common/NullValue.vue'
 import RawValue from '@/components/common/RawValue.vue'
 import StatusDot from '@/components/session/StatusDot.vue'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { formatAbsoluteTime, formatCost, formatRelativeTime } from '@/lib/format'
 import { NO_PROJECT_SIGNAL_YET } from '@/lib/nullReasons'
 
 interface Props {
-  /** Latest per-session projection snapshot — one card per entry, insertion order. */
+  /** Latest per-session projection snapshot — one row per entry, insertion order. */
   sessions: SessionSummary[]
   /** The live ring buffer, chronological oldest-first — read only to derive each session's current tool (see `latestToolEventBySession` below). */
   events: TimelineEvent[]
@@ -77,22 +88,6 @@ function shortId(sessionId: string): string {
   return sessionId.slice(0, 8)
 }
 
-/**
- * Round-5 critic gap: the grid used a fixed responsive breakpoint set
- * (1/2/3 columns) regardless of how many sessions were actually active, so
- * 1-2 live sessions rendered as narrow tiles stranded in a mostly-empty row
- * instead of filling it. Column count now tracks the session count itself
- * (capped at the same 3-wide layout larger counts already used) — a `1fr`
- * grid track stretches to fill the row on its own once there are fewer of
- * them than columns.
- */
-const gridColsClass = computed(() => {
-  const count = props.sessions.length
-  if (count <= 1) return 'grid-cols-1'
-  if (count === 2) return 'grid-cols-1 sm:grid-cols-2'
-  return 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3'
-})
-
 /** `?live=1` — a request for `SessionDetailView` to open in live-follow mode (SPEC §6.2: "'follow session' jumps to detail in live mode"). The destination view's own handling of this param is a different ticket's territory. */
 function followTarget(sessionId: string) {
   return { path: `/sessions/${sessionId}`, query: { live: '1' } }
@@ -108,48 +103,32 @@ function followTarget(sessionId: string) {
     />
     <div
       v-else
-      class="grid items-stretch gap-3"
-      :class="gridColsClass"
+      class="border-border bg-card divide-border divide-y overflow-hidden rounded-xl border"
     >
-      <Card
+      <div
         v-for="session in sessions"
         :key="session.id"
         data-testid="active-session-card"
         :data-session-id="session.id"
+        class="flex min-w-0 items-center justify-between gap-4 px-3 py-3"
       >
-        <CardHeader class="pb-0">
-          <div class="flex min-w-0 items-center justify-between gap-2">
-            <div class="flex min-w-0 items-center gap-1.5">
-              <StatusDot :status="session.status" />
-              <CardTitle
-                class="min-w-0 truncate text-sm font-semibold"
-                :title="session.cwd"
-                data-testid="active-session-card-title"
-              >
-                <NullValue
-                  v-if="session.project === ''"
-                  label="Unknown project"
-                  :reason="NO_PROJECT_SIGNAL_YET"
-                />
-                <template v-else>
-                  {{ session.project }}
-                </template>
-              </CardTitle>
-            </div>
-            <Button
-              as-child
-              variant="outline"
-              size="sm"
-              class="shrink-0"
-              data-testid="active-session-card-follow"
-            >
-              <router-link :to="followTarget(session.id)">
-                Follow
-              </router-link>
-            </Button>
-          </div>
-
-          <p class="text-muted-foreground flex min-w-0 items-center gap-1.5 text-xs">
+        <div class="flex min-w-0 items-center gap-1.5">
+          <StatusDot :status="session.status" />
+          <span
+            class="min-w-0 truncate text-sm font-semibold"
+            :title="session.cwd"
+            data-testid="active-session-card-title"
+          >
+            <NullValue
+              v-if="session.project === ''"
+              label="Unknown project"
+              :reason="NO_PROJECT_SIGNAL_YET"
+            />
+            <template v-else>
+              {{ session.project }}
+            </template>
+          </span>
+          <span class="text-muted-foreground flex min-w-0 items-center gap-1.5 text-xs">
             <RawValue
               :value="session.vendor"
               kind="vendor"
@@ -164,28 +143,19 @@ function followTarget(sessionId: string) {
               :text="session.id"
               label="Copy session id"
             />
-          </p>
+          </span>
+        </div>
 
-          <p class="text-muted-foreground text-xs">
-            Started
-            <time :title="formatAbsoluteTime(session.started_at)">{{ formatRelativeTime(session.started_at) }}</time>
-            · Last event
-            <time :title="formatAbsoluteTime(session.last_event_at)">{{ formatRelativeTime(session.last_event_at) }}</time>
-          </p>
-        </CardHeader>
-        <!--
-          Round-6 critic gap: `justify-between` spread each label to the
-          card's left edge and its value to the right edge — harmless at a
-          KPI strip's narrow per-cell width, but this card can span the
-          entire row (a single active session gets a full-width, single-
-          column grid track), which flung "Cost"/"$1.90" ~1100px apart on a
-          wide viewport. Same idiom as `SessionKpiStrip.vue`'s "detail KPI
-          strip" instead: label stacked directly above its value in one
-          narrow cell, so the two stay visually paired regardless of how
-          wide the card itself grows.
-        -->
-        <CardContent class="flex flex-wrap gap-4">
-          <div class="min-w-0">
+        <div class="flex shrink-0 items-center gap-4">
+          <div class="min-w-[4.5rem] text-right">
+            <p class="text-muted-foreground text-[0.6875rem]">
+              Last event
+            </p>
+            <p class="text-sm leading-tight tabular-nums">
+              <time :title="formatAbsoluteTime(session.last_event_at)">{{ formatRelativeTime(session.last_event_at) }}</time>
+            </p>
+          </div>
+          <div class="min-w-14 text-right">
             <p class="text-muted-foreground text-[0.6875rem]">
               Cost
             </p>
@@ -196,7 +166,7 @@ function followTarget(sessionId: string) {
               {{ formatCost(session.cost.usd) }}
             </p>
           </div>
-          <div class="min-w-0">
+          <div class="min-w-20 text-right">
             <p class="text-muted-foreground text-[0.6875rem]">
               Current tool
             </p>
@@ -225,8 +195,19 @@ function followTarget(sessionId: string) {
               </template>
             </p>
           </div>
-        </CardContent>
-      </Card>
+          <Button
+            as-child
+            variant="outline"
+            size="sm"
+            class="shrink-0"
+            data-testid="active-session-card-follow"
+          >
+            <router-link :to="followTarget(session.id)">
+              Follow
+            </router-link>
+          </Button>
+        </div>
+      </div>
     </div>
   </div>
 </template>

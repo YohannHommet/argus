@@ -99,10 +99,12 @@ describe('ActiveSessionCards', () => {
   })
 
   // Round-5 critic gap: "the active-session card renders no session identity at all
-  // (empty title row above 'Follow')". The heading now carries the same identity block
-  // SessionRow/SessionDetailView already establish: status, project, vendor, short id,
-  // started/last-event.
-  it('renders the identity heading — status dot, project, vendor, short id, started/last-event', async () => {
+  // (empty title row above 'Follow')". The row now carries the same identity block
+  // SessionRow/SessionDetailView already establish: status, project, vendor, short id.
+  // Round-7 critic gap: "Started" was dropped from the row entirely (not one of the
+  // three metric columns this ticket asked for — last event, cost, current tool — and
+  // a fourth column would undo the width win the round exists to deliver).
+  it('renders the identity block — status dot, project, vendor, short id — and the last-event metric column', async () => {
     const wrapper = await mountCards({ sessions: [firstSession], events: [] })
     const card = wrapper.get('[data-testid="active-session-card"]')
 
@@ -110,7 +112,6 @@ describe('ActiveSessionCards', () => {
     expect(card.get('[data-testid="active-session-card-title"]').text()).toBe(firstSession.project)
     expect(card.text()).toContain(firstSession.vendor)
     expect(card.get('[data-testid="active-session-card-short-id"]').text()).toBe(firstSession.id.slice(0, 8))
-    expect(card.text()).toContain('Started')
     expect(card.text()).toContain('Last event')
   })
 
@@ -134,32 +135,14 @@ describe('ActiveSessionCards', () => {
     expect(follow.attributes('data-slot')).toBe('button')
   })
 
-  describe('grid stretch', () => {
-    function gridClasses(wrapper: Awaited<ReturnType<typeof mountCards>>): string[] {
-      return wrapper.get('[data-testid="active-session-cards"] > div').classes()
-    }
+  // Round-7 critic gap: multiple active sessions must stack as dense rows inside one
+  // contained surface, not a responsive card grid (that grid was the ~85%-width-waste
+  // culprit in the first place).
+  it('renders multiple active sessions as stacked rows sharing one container, not a grid of cards', async () => {
+    const wrapper = await mountCards({ sessions: [firstSession, secondSessionSummary], events: [] })
+    const container = wrapper.get('[data-testid="active-session-cards"] > div')
 
-    it('a single active session gets a single-column grid (stretches to fill the row)', async () => {
-      const wrapper = await mountCards({ sessions: [firstSession], events: [] })
-      const classes = gridClasses(wrapper)
-      expect(classes).toContain('grid-cols-1')
-      expect(classes).not.toContain('sm:grid-cols-2')
-      expect(classes).not.toContain('lg:grid-cols-3')
-    })
-
-    it('two active sessions get a two-column grid, not the three-column layout', async () => {
-      const wrapper = await mountCards({ sessions: [firstSession, secondSessionSummary], events: [] })
-      const classes = gridClasses(wrapper)
-      expect(classes).toContain('sm:grid-cols-2')
-      expect(classes).not.toContain('lg:grid-cols-3')
-    })
-
-    it('three or more active sessions keep the responsive 1/2/3-column layout', async () => {
-      const third = { ...firstSession, id: 'third-session-id' }
-      const wrapper = await mountCards({ sessions: [firstSession, secondSessionSummary, third], events: [] })
-      const classes = gridClasses(wrapper)
-      expect(classes).toContain('sm:grid-cols-2')
-      expect(classes).toContain('lg:grid-cols-3')
-    })
+    expect(container.classes()).not.toContain('grid')
+    expect(wrapper.findAll('[data-testid="active-session-card"]')).toHaveLength(2)
   })
 })
