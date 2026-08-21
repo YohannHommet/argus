@@ -114,3 +114,22 @@ counters. Reproduced under real CPU contention, not theorised.
   selector is **tallying `session_id`s off the firehose itself**. Two verification runs produced
   false negatives on exit criterion 2 before this was understood; it is not a product defect, but it
   is a trap worth one paragraph.
+
+---
+
+## D-34 (RULING NEEDED) — argusd exits on startup if Postgres refuses TCP during its init restart
+
+Surfaced while capturing the round-7 live-view gauntlet: two consecutive capture runs failed
+before any screen, with `argusd: serve: startup failed … running migrations: acquiring lock
+connection: … 5432 (postgres): connect: connection refused` — even though compose had already
+reported the postgres container **Healthy**. Root cause is the well-known Postgres-in-Docker race:
+the official image starts a temporary server for first-time init, passes a healthcheck, then
+**restarts** to apply config, refusing TCP for a beat. `argusd` opens its DB connection once at
+startup and treats a failure as fatal (exits non-zero) rather than retrying with backoff, so a
+`depends_on: service_healthy` gate is not enough — the first real `docker compose up` a self-hoster
+runs can die on this. Same family as audit m34 (`EnsurePartitions` fatal + unlocked) and m37
+(container healthcheck is liveness-only). Intermittent — most runs succeed — but user-facing on a
+cold start. **Recommendation:** give `argusd` a bounded startup DB-connection retry (e.g. ~10–15s
+backoff) before it gives up; a Phase-6 (release-hardening) ticket. Not a Phase-5 code defect and not
+a defect in the round-7 live-feed change, which passed all gates and its own capture; recorded here
+so it is not lost.
