@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/YohannHommet/argus/server/internal/httpapi"
@@ -27,7 +28,6 @@ func TestStreamAwareTimeout_BypassesOnlyTheTwoSSERoutes(t *testing.T) {
 
 	streamPaths := []string{"/api/v1/stream", "/api/v1/sessions/abc/stream"}
 	for _, path := range streamPaths {
-		path := path
 		t.Run("bypassed: "+path, func(t *testing.T) {
 			t.Parallel()
 
@@ -35,12 +35,12 @@ func TestStreamAwareTimeout_BypassesOnlyTheTwoSSERoutes(t *testing.T) {
 			inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				defer close(done)
 				_, hasDeadline := r.Context().Deadline()
-				require.False(t, hasDeadline, "an SSE route must reach the handler with an undeadlined context")
+				assert.False(t, hasDeadline, "an SSE route must reach the handler with an undeadlined context")
 				w.WriteHeader(http.StatusOK)
 			})
 
 			h := httpapi.StreamAwareTimeout(timeout)(inner)
-			req := httptest.NewRequest(http.MethodGet, path, nil)
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, nil)
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, req)
 
@@ -52,18 +52,18 @@ func TestStreamAwareTimeout_BypassesOnlyTheTwoSSERoutes(t *testing.T) {
 	t.Run("bounded: /api/v1/sessions keeps chi's timeout, and it fires", func(t *testing.T) {
 		t.Parallel()
 
-		inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		inner := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 			_, hasDeadline := r.Context().Deadline()
-			require.True(t, hasDeadline, "a non-SSE route must keep chi's Timeout deadline")
+			assert.True(t, hasDeadline, "a non-SSE route must keep chi's Timeout deadline")
 			// Wait for the 1ms timeout to actually fire (chi's own
 			// contract, middleware/timeout.go: the handler must select on
 			// ctx.Done() for the timeout to have any observable effect).
 			<-r.Context().Done()
-			require.ErrorIs(t, r.Context().Err(), context.DeadlineExceeded)
+			assert.ErrorIs(t, r.Context().Err(), context.DeadlineExceeded)
 		})
 
 		h := httpapi.StreamAwareTimeout(timeout)(inner)
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/sessions", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/sessions", nil)
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
 

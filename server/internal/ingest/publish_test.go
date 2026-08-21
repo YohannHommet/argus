@@ -180,7 +180,7 @@ func TestHubPublisher_ProjectSelfCorrects_AfterDebounceTick(t *testing.T) {
 	pub := ingest.NewHubPublisher(hub, reader, ingest.WithSessionDebounce(10*time.Millisecond))
 
 	pub.Publish([]model.Event{{SessionID: "sess-1", ID: "evt-1"}})
-	require.Equal(t, "", hub.lastEventProject("sess-1"),
+	require.Empty(t, hub.lastEventProject("sess-1"),
 		"an unknown session's cache miss must publish an envelope carrying an empty project")
 
 	// Resolve the session (as SessionStart landing would) and let the

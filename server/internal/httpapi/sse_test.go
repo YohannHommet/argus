@@ -148,7 +148,7 @@ func (s *sseReader) nextNamed(t *testing.T) sseFrame {
 
 // openStream issues a GET against url with ctx and returns the live
 // response — callers must close resp.Body (t.Cleanup does it here).
-func openStream(t *testing.T, ctx context.Context, url string) *http.Response {
+func openStream(ctx context.Context, t *testing.T, url string) *http.Response {
 	t.Helper()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	require.NoError(t, err)
@@ -160,9 +160,9 @@ func openStream(t *testing.T, ctx context.Context, url string) *http.Response {
 
 // openAndSkipRetry opens the stream and consumes the always-first retry
 // line, returning a reader positioned right after it.
-func openAndSkipRetry(t *testing.T, ctx context.Context, url string) (*http.Response, *sseReader) {
+func openAndSkipRetry(ctx context.Context, t *testing.T, url string) (*http.Response, *sseReader) {
 	t.Helper()
-	resp := openStream(t, ctx, url)
+	resp := openStream(ctx, t, url)
 	sr := newSSEReader(resp.Body)
 	first := sr.next(t)
 	require.Equal(t, "3000", first.Retry, "retry: must be the very first frame written (SPEC §5.3)")
@@ -218,7 +218,7 @@ func TestStreamAll_HeadersAndRetryLine(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	t.Cleanup(cancel)
-	resp := openStream(t, ctx, srv.URL+"/api/v1/stream")
+	resp := openStream(ctx, t, srv.URL+"/api/v1/stream") //nolint:bodyclose // resp.Body is closed via t.Cleanup in openStream
 
 	require.Equal(t, "text/event-stream", resp.Header.Get("Content-Type"))
 	require.Equal(t, "no-store", resp.Header.Get("Cache-Control"))
@@ -240,7 +240,7 @@ func TestStreamAll_PublishedEventsArriveInOrder(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	t.Cleanup(cancel)
-	_, sr := openAndSkipRetry(t, ctx, srv.URL+"/api/v1/stream")
+	_, sr := openAndSkipRetry(ctx, t, srv.URL+"/api/v1/stream") //nolint:bodyclose // resp.Body is closed via t.Cleanup in openStream
 
 	waitForSubscribers(t, hub, 1)
 
@@ -268,7 +268,7 @@ func TestStreamAll_SessionAndStatsFramesCarryNoID(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	t.Cleanup(cancel)
-	_, sr := openAndSkipRetry(t, ctx, srv.URL+"/api/v1/stream")
+	_, sr := openAndSkipRetry(ctx, t, srv.URL+"/api/v1/stream") //nolint:bodyclose // resp.Body is closed via t.Cleanup in openStream
 
 	waitForSubscribers(t, hub, 1)
 
@@ -359,7 +359,7 @@ func TestStreamAll_HeartbeatArrivesWithinInterval(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	t.Cleanup(cancel)
-	_, sr := openAndSkipRetry(t, ctx, srv.URL+"/api/v1/stream")
+	_, sr := openAndSkipRetry(ctx, t, srv.URL+"/api/v1/stream") //nolint:bodyclose // resp.Body is closed via t.Cleanup in openStream
 
 	start := time.Now()
 	f := sr.next(t)
@@ -477,7 +477,7 @@ func TestStreamAll_OutOfWindowReplayYieldsResetFirst(t *testing.T) {
 	oldRef := model.EventRef{TS: time.Now().Add(-time.Hour), Seq: 1}
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	t.Cleanup(cancel)
-	resp := openStream(t, ctx, srv.URL+"/api/v1/stream?after="+oldRef.Encode())
+	resp := openStream(ctx, t, srv.URL+"/api/v1/stream?after="+oldRef.Encode()) //nolint:bodyclose // resp.Body is closed via t.Cleanup in openStream
 
 	sr := newSSEReader(resp.Body)
 	first := sr.next(t)
@@ -490,14 +490,6 @@ func TestStreamAll_OutOfWindowReplayYieldsResetFirst(t *testing.T) {
 	require.False(t, calledEventsSince, "an out-of-window ref must not run the replay query at all")
 }
 
-// nilReplayer is used to exercise Deps.Replay's documented nil degradation
-// without going through storetest.Fake's stub-or-panic Replayer surface.
-type nilReplayer struct{}
-
-func (nilReplayer) EventsSince(context.Context, model.EventRef, time.Time, int) ([]model.Event, error) {
-	panic("nilReplayer.EventsSince should never be called")
-}
-
 func TestStreamAll_NilReplayerAlwaysResets(t *testing.T) {
 	hub := newTestHub()
 	t.Cleanup(hub.Shutdown)
@@ -506,7 +498,7 @@ func TestStreamAll_NilReplayerAlwaysResets(t *testing.T) {
 	ref := model.EventRef{TS: time.Now(), Seq: 1}
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	t.Cleanup(cancel)
-	resp := openStream(t, ctx, srv.URL+"/api/v1/stream?after="+ref.Encode())
+	resp := openStream(ctx, t, srv.URL+"/api/v1/stream?after="+ref.Encode()) //nolint:bodyclose // resp.Body is closed via t.Cleanup in openStream
 
 	sr := newSSEReader(resp.Body)
 	require.Equal(t, "3000", sr.next(t).Retry)
@@ -523,7 +515,7 @@ func TestStreamAll_ContextCancelUnsubscribes(t *testing.T) {
 	srv := newStreamTestServer(t, hub, nil, shortStreamConfig())
 
 	ctx, cancel := context.WithCancel(t.Context())
-	_, sr := openAndSkipRetry(t, ctx, srv.URL+"/api/v1/stream")
+	_, sr := openAndSkipRetry(ctx, t, srv.URL+"/api/v1/stream") //nolint:bodyclose // resp.Body is closed via t.Cleanup in openStream
 	_ = sr
 
 	waitForSubscribers(t, hub, 1)
@@ -572,7 +564,7 @@ func TestStreamAll_ShutdownFrameThenHandlerReturns(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	t.Cleanup(cancel)
-	resp, sr := openAndSkipRetry(t, ctx, srv.URL+"/api/v1/stream")
+	resp, sr := openAndSkipRetry(ctx, t, srv.URL+"/api/v1/stream") //nolint:bodyclose // resp.Body is closed via t.Cleanup in openStream
 
 	waitForSubscribers(t, hub, 1)
 
@@ -648,7 +640,7 @@ func TestStreamAll_BuildsFilterFromParams(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	t.Cleanup(cancel)
 	url := srv.URL + "/api/v1/stream?kinds=tool.result&kinds=tool.decision&project=argus&vendor=claude_code"
-	openAndSkipRetry(t, ctx, url)
+	openAndSkipRetry(ctx, t, url) //nolint:bodyclose // resp.Body is closed via t.Cleanup in openStream
 
 	topic, filter := rec.last()
 	require.Equal(t, stream.AllTopic(), topic)
@@ -665,7 +657,7 @@ func TestStreamSession_TopicScopesToTheIDPathParam(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	t.Cleanup(cancel)
-	openAndSkipRetry(t, ctx, srv.URL+"/api/v1/sessions/sess-42/stream")
+	openAndSkipRetry(ctx, t, srv.URL+"/api/v1/sessions/sess-42/stream") //nolint:bodyclose // resp.Body is closed via t.Cleanup in openStream
 
 	topic, filter := rec.last()
 	require.Equal(t, stream.SessionTopic("sess-42"), topic)

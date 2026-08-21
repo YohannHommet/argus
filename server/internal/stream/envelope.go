@@ -84,6 +84,9 @@ type Stats struct {
 // publishes, so they have no Message representation.
 type MessageType uint8
 
+// MessageEvent is the SSE frame type for a single ingested event; the
+// remaining constants in this block enumerate the other Message-carried
+// frame kinds (session summary, stats, shutdown).
 const (
 	MessageEvent MessageType = iota + 1
 	MessageSession

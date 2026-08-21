@@ -183,7 +183,7 @@ func TestSend_DropOldest_CounterEqualsOverflowAndNewestSurvive(t *testing.T) {
 
 	const wantDropped = total - buffer
 	require.Equal(t, uint64(wantDropped), sub.Dropped())
-	require.Equal(t, float64(wantDropped), counterValue(t, reg, "argus_stream_dropped_total"))
+	require.InDelta(t, float64(wantDropped), counterValue(t, reg, "argus_stream_dropped_total"), 0.0001)
 
 	for i := 0; i < buffer; i++ {
 		msg := <-sub.C()
@@ -386,8 +386,8 @@ func TestSubscribe_ExceedsCap_ReturnsErrTooManySubscribers(t *testing.T) {
 	_, err = h.Subscribe(stream.AllTopic(), stream.Filter{})
 	require.ErrorIs(t, err, stream.ErrTooManySubscribers)
 	require.Equal(t, 2, h.Subscribers())
-	require.Equal(t, float64(1), gaugeValue(t, reg, "argus_stream_subscribers", "all"))
-	require.Equal(t, float64(1), gaugeValue(t, reg, "argus_stream_subscribers", "session"))
+	require.InDelta(t, float64(1), gaugeValue(t, reg, "argus_stream_subscribers", "all"), 0.0001)
+	require.InDelta(t, float64(1), gaugeValue(t, reg, "argus_stream_subscribers", "session"), 0.0001)
 }
 
 func TestSubscribe_InvalidTopicKind_ReturnsErrorAndRegistersNothing(t *testing.T) {
@@ -418,7 +418,7 @@ func TestPublishStats_ReachesEverySubscriberRegardlessOfFilterOrTopic(t *testing
 		require.Equal(t, stream.MessageStats, msg.Type)
 		require.InDelta(t, 42, msg.Stats.EventsPerSec, 0)
 	}
-	require.Equal(t, float64(1), labeledCounterValue(t, reg, "argus_stream_published_total", "stats"))
+	require.InDelta(t, float64(1), labeledCounterValue(t, reg, "argus_stream_published_total", "stats"), 0.0001)
 }
 
 // --- Subscription.TakeDropped/Dropped semantics. ---

@@ -6,6 +6,7 @@
 // replay a requested backlog -> run the live select loop -> tear down on
 // disconnect. See sseWriter's doc comment for the single most important
 // framing invariant this file enforces (id: only on `event: event` frames).
+
 package httpapi
 
 import (

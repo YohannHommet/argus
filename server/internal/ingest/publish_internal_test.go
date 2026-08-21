@@ -20,7 +20,7 @@ func TestProjectCache_EvictsOldestInsertedBeyondCap(t *testing.T) {
 	c.set("c", "proj-c")
 	c.set("d", "proj-d") // must evict "a", the oldest inserted
 
-	require.Equal(t, "", c.get("a"), "the oldest-inserted entry must be evicted once the cap is hit")
+	require.Empty(t, c.get("a"), "the oldest-inserted entry must be evicted once the cap is hit")
 	require.Equal(t, "proj-b", c.get("b"))
 	require.Equal(t, "proj-c", c.get("c"))
 	require.Equal(t, "proj-d", c.get("d"))
@@ -38,5 +38,5 @@ func TestProjectCache_UpdatingExistingKeyDoesNotConsumeCapacity(t *testing.T) {
 
 func TestProjectCache_MissReturnsEmptyString(t *testing.T) {
 	c := newProjectCache(10)
-	require.Equal(t, "", c.get("never-seen"))
+	require.Empty(t, c.get("never-seen"))
 }
