@@ -108,13 +108,18 @@ function onResume(): void {
       />
     </section>
 
-    <LiveFeed
-      :events="live.events"
-      :sessions="activeSessions"
-      :paused="live.paused"
-      :buffered-count="live.bufferedWhilePaused"
-      @pause="onPause"
-      @resume="onResume"
-    />
+    <section class="flex flex-col gap-2">
+      <h2 class="text-lg font-medium">
+        Event feed
+      </h2>
+      <LiveFeed
+        :events="live.events"
+        :sessions="activeSessions"
+        :paused="live.paused"
+        :buffered-count="live.bufferedWhilePaused"
+        @pause="onPause"
+        @resume="onResume"
+      />
+    </section>
   </section>
 </template>

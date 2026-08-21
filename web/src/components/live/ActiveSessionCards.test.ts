@@ -63,6 +63,35 @@ describe('ActiveSessionCards', () => {
     expect(cards[1]!.get('[data-testid="active-session-card-tool"]').text()).toBe('Edit')
   })
 
+  // Round-6 critic gap: "Cost"/"Current tool" used `justify-between` inside a
+  // card that can span the full row width, flinging label and value ~1100px
+  // apart. Each stat is now its own compact cell (label stacked directly
+  // above its value, `SessionKpiStrip.vue`'s "detail KPI strip" idiom) —
+  // asserted here by checking the label and value share the same immediate
+  // parent element, which a full-width `justify-between` row never gives up
+  // (there, the parent is the whole card-width flex row, not a tight cell).
+  it('keeps each stat\'s label and value inside the same compact cell, not flung across a full-width row', async () => {
+    const wrapper = await mountCards({ sessions: [firstSession], events: [] })
+
+    const costValue = wrapper.get('[data-testid="active-session-card-cost"]')
+    expect(costValue.element.parentElement?.textContent).toContain('Cost')
+
+    const toolValue = wrapper.get('[data-testid="active-session-card-tool"]')
+    expect(toolValue.element.parentElement?.textContent).toContain('Current tool')
+  })
+
+  // Round-6 critic gap: the same EM_DASH glyph rendered at three different
+  // visual weights across the live view (this `NullValue` usage was one of
+  // them — its default dotted-underline "hint text" styling, meant for a
+  // null value sitting among real text, reads as a glitch on a lone glyph).
+  it('renders "Current tool"\'s EM_DASH without NullValue\'s dotted-underline styling (plain)', async () => {
+    const wrapper = await mountCards({ sessions: [firstSession], events: [] })
+    const tool = wrapper.get('[data-testid="active-session-card-tool"]')
+
+    expect(tool.text()).toBe('—')
+    expect(tool.find('.underline').exists()).toBe(false)
+  })
+
   it('the "follow" link points at /sessions/:id?live=1', async () => {
     const wrapper = await mountCards({ sessions: [firstSession], events: [] })
     const link = wrapper.get('[data-testid="active-session-card-follow"]')

@@ -203,7 +203,11 @@ describe('LiveFeed', () => {
     expect(rows).toHaveLength(2)
 
     for (const row of rows) {
-      expect(row.find('[data-testid="event-row-offset"]').exists()).toBe(true)
+      // `event-row-time`, not `event-row-offset`: the live feed renders
+      // `EventRow` in `wallClockTime` mode (round-6 critic gap — see the
+      // "arrival time column" describe block below), so its leading numeric
+      // column is a different testid from the session-detail timeline's.
+      expect(row.find('[data-testid="event-row-time"]').exists()).toBe(true)
       expect(row.find('[data-testid="event-row-duration"]').exists()).toBe(true)
       expect(row.find('[data-testid="event-row-cost"]').exists()).toBe(true)
       expect(row.find('[data-testid="event-row-tokens"]').exists()).toBe(true)
@@ -215,6 +219,69 @@ describe('LiveFeed', () => {
     expect(noCostRow.get('[data-testid="event-row-duration"]').text()).toBe('3.4s')
     expect(noCostRow.get('[data-testid="event-row-cost"]').text()).toBe('—')
     expect(noCostRow.get('[data-testid="event-row-tokens"]').text()).toBe('—')
+  })
+
+  // Round-6 critic gap: "the event feed has no column header row (and no
+  // legend), leaving its four right-hand numeric tracks — mostly em-dashes —
+  // unnameable". A sticky header now names every column `EventRow` renders.
+  describe('column header row', () => {
+    it('labels every column EventRow renders, sticky above the list', () => {
+      const events = makeFrames(1)
+      const wrapper = mount(LiveFeed, { props: { events, paused: false, bufferedCount: 0 } })
+      const header = wrapper.get('[data-testid="live-feed-header"]')
+
+      expect(header.classes()).toContain('sticky')
+      expect(header.get('[data-testid="live-feed-header-session"]').text()).toBe('Session')
+      expect(header.get('[data-testid="live-feed-header-event"]').text()).toBe('Event')
+      expect(header.get('[data-testid="live-feed-header-time"]').text()).toBe('Time')
+      expect(header.get('[data-testid="live-feed-header-duration"]').text()).toBe('Duration')
+      expect(header.get('[data-testid="live-feed-header-cost"]').text()).toBe('Cost')
+      expect(header.get('[data-testid="live-feed-header-tokens"]').text()).toBe('Tokens')
+    })
+
+    it('renders no header when there are no events to label (EmptyState instead)', () => {
+      const wrapper = mount(LiveFeed, { props: { events: [], paused: false, bufferedCount: 0 } })
+      expect(wrapper.find('[data-testid="live-feed-header"]').exists()).toBe(false)
+    })
+  })
+
+  // Round-6 critic gap: the leading numeric column was `EM_DASH` on every
+  // single row (no `originTs` for a firehose to offset against) — an
+  // "unnameable" column because it never carried a real value to name.
+  describe('arrival time column', () => {
+    it('shows the event\'s own wall-clock time, never EM_DASH (every TimelineEvent carries a ts)', () => {
+      const events = [makeTimelineEvent({ ts: '2026-08-19T09:05:03.000Z' })]
+      const wrapper = mount(LiveFeed, { props: { events, paused: false, bufferedCount: 0 } })
+
+      const time = wrapper.get('[data-testid="event-row-time"]')
+      expect(time.text()).toMatch(/^\d{2}:\d{2}:\d{2}$/)
+      expect(time.text()).not.toBe('—')
+    })
+  })
+
+  it('shows a stream count near the pause control, counting every received frame regardless of the kind filter', async () => {
+    const events = makeFrames(3)
+    const wrapper = mount(LiveFeed, { props: { events, paused: false, bufferedCount: 0 } })
+    expect(wrapper.get('[data-testid="live-feed-event-count"]').text()).toBe('3 events this tab')
+
+    await wrapper.findComponent(Select).vm.$emit('update:modelValue', ['unknown'])
+    await nextTick()
+    // Filtering to a kind with zero matches still reports the true received count, not 0.
+    expect(wrapper.get('[data-testid="live-feed-event-count"]').text()).toBe('3 events this tab')
+  })
+
+  describe('duration-scale caption', () => {
+    it('shows the log-scale caption once a visible row has a measured duration', () => {
+      const events = [makeTimelineEvent({ duration_ms: 15800 })]
+      const wrapper = mount(LiveFeed, { props: { events, paused: false, bufferedCount: 0 } })
+      expect(wrapper.get('[data-testid="live-feed-duration-scale-note"]').text()).toBe('Duration bar: log scale, max 15.8s')
+    })
+
+    it('hides the caption when nothing on the feed has a measured duration', () => {
+      const events = [makeTimelineEvent({ duration_ms: null })]
+      const wrapper = mount(LiveFeed, { props: { events, paused: false, bufferedCount: 0 } })
+      expect(wrapper.find('[data-testid="live-feed-duration-scale-note"]').exists()).toBe(false)
+    })
   })
 })
 

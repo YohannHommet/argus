@@ -2,8 +2,12 @@
 /**
  * SPEC §6.2/§6.3's firehose feed: streaming rows reusing `EventRow`, a kind
  * filter, pause/resume with a buffered-count badge, auto-scroll with a
- * "jump to latest" affordance, and row-click → `EventDetailSheet`.
+ * "jump to latest" affordance, row-click → `EventDetailSheet`, and (round-6
+ * critic gap) a sticky labeled header naming its own columns — `EventRow`'s
+ * right-hand metrics are otherwise four unlabeled numeric tracks, mostly
+ * `EM_DASH` on any one row, with no way to tell which is which.
  *
+
  * Fully props-in/events-out (no store read of its own) — the ticket calls
  * this out explicitly as the easier-to-test shape for "100 fake frames
  * render correctly", and it is: every one of this file's tests mounts with
@@ -16,7 +20,7 @@ import { ArrowUp, Pause, Play } from '@lucide/vue'
 import type { SessionSummary, TimelineEvent } from '@/stores/live'
 import { collapseEvents, type TimelineItem } from '@/lib/collapseEvents'
 import { ALL_KINDS, eventKindMeta, type Kind } from '@/lib/eventKinds'
-import { formatCount } from '@/lib/format'
+import { formatCount, formatDuration } from '@/lib/format'
 import { maxDuration } from '@/lib/timelineDisplay'
 import EmptyState from '@/components/common/EmptyState.vue'
 import EventDetailSheet from '@/components/timeline/EventDetailSheet.vue'
@@ -148,6 +152,17 @@ const maxDurationMs = computed(() => maxDuration(displayItems.value))
 
 const isFiltered = computed(() => selectedKinds.value.length > 0)
 
+/**
+ * Round-6 critic ask: "a stream count near the Pause control" — the total
+ * frames this tab has seen on the firehose, unfiltered by the kind select
+ * (that's what "this tab" is honestly counting: what arrived, not what the
+ * reader currently has selected to look at). Reads `props.events`, not
+ * `frozenEvents`/`kindFilteredEvents`, deliberately: even while paused, the
+ * count should keep telling the truth about what this tab has received —
+ * only the *rendered rows* freeze on pause, per the doc comment above.
+ */
+const totalEventCount = computed(() => props.events.length)
+
 // --- Auto-scroll -----------------------------------------------------
 //
 // Inverted from the usual bottom-anchored chat-log pattern because this
@@ -231,7 +246,24 @@ function onRowOpen(eventRef: string): void {
         </Select>
       </div>
 
-      <div class="flex items-center gap-2">
+      <div class="flex items-center gap-3">
+        <span
+          class="text-muted-foreground text-xs"
+          data-testid="live-feed-event-count"
+        >{{ formatCount(totalEventCount) }} events this tab</span>
+
+        <!--
+          Labels the per-row duration bar's scale, same convention as
+          `Timeline.vue`'s own `timeline-duration-scale-note` — only shown
+          once something on the visible feed has a measured duration to
+          scale against.
+        -->
+        <span
+          v-if="maxDurationMs > 0"
+          class="text-muted-foreground text-xs"
+          data-testid="live-feed-duration-scale-note"
+        >Duration bar: log scale, max {{ formatDuration(maxDurationMs) }}</span>
+
         <Button
           v-if="!following"
           type="button"
@@ -288,10 +320,10 @@ function onRowOpen(eventRef: string): void {
            its existing element rather than destroying/recreating it.
            Without a stable key, every push would tear down and rebuild the
            entire visible list.
-        2. `EventRow` itself (reused, not edited) already fixes each row's
-           height (`h-8`/`h-7`) and right-aligns every numeric column in a
-           fixed-width `tabular-nums` cell, so neither a new row's height
-           nor an existing row's digit count ever reflows a neighbour.
+        2. `EventRow` itself already fixes each row's height (`h-8`/`h-7`)
+           and right-aligns every numeric column in a fixed-width
+           `tabular-nums` cell, so neither a new row's height nor an
+           existing row's digit count ever reflows a neighbour.
         3. `scrollTop` is only written from the `watch(displayItems, ...)`
            below when `following` is true — a paused/scrolled-up reader
            never has their scroll position fought over by an incoming
@@ -304,6 +336,56 @@ function onRowOpen(eventRef: string): void {
       data-testid="live-feed-scroll"
       @scroll="onScroll"
     >
+      <!--
+        Round-6 critic gap: the feed's four right-hand numeric columns had no
+        header at all, so a reader could not tell what "—" meant in any of
+        them. `sticky top-0` (the scroll container above is this row's own
+        scrolling ancestor) keeps it pinned while the newest-first list
+        scrolls underneath it — same shaded-row idiom `SessionTable.vue`'s
+        `TableHeader` uses (`bg-muted/40`, a bottom border), just as a plain
+        `div` rather than a `<table>` since this feed already isn't one
+        (fixed-width flex columns, not a `<table>`, per `EventRow` itself).
+        Column widths/gaps below are kept in lockstep with `EventRow`'s own
+        markup by hand — there is no single source of truth for them to
+        drift from without one, but the two are right next to each other in
+        every diff that touches either.
+      -->
+      <div
+        class="border-border bg-muted/40 text-muted-foreground sticky top-0 z-10 flex min-w-0 items-center gap-3 border-b px-3 text-xs font-medium"
+        data-testid="live-feed-header"
+      >
+        <span
+          class="size-4 shrink-0"
+          aria-hidden="true"
+        />
+        <span
+          class="w-28 shrink-0"
+          data-testid="live-feed-header-session"
+        >Session</span>
+        <span
+          class="min-w-0 flex-1"
+          data-testid="live-feed-header-event"
+        >Event</span>
+        <div class="flex shrink-0 items-center gap-3">
+          <span
+            class="w-16 text-right"
+            data-testid="live-feed-header-time"
+          >Time</span>
+          <span
+            class="w-16 text-right"
+            data-testid="live-feed-header-duration"
+          >Duration</span>
+          <span
+            class="w-14 text-right"
+            data-testid="live-feed-header-cost"
+          >Cost</span>
+          <span
+            class="w-14 text-right"
+            data-testid="live-feed-header-tokens"
+          >Tokens</span>
+        </div>
+      </div>
+
       <EventRow
         v-for="item in displayItems"
         :key="item.key"
@@ -311,6 +393,7 @@ function onRowOpen(eventRef: string): void {
         :selected="item.key === selectedEventRef"
         :max-duration-ms="maxDurationMs"
         :session-label="sessionLabel(item)"
+        wall-clock-time
         @open="onRowOpen"
       />
     </div>

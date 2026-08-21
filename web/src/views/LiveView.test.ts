@@ -98,6 +98,16 @@ describe('LiveView', () => {
     expect(wrapper.find('[data-testid="live-feed"]').exists()).toBe(true)
   })
 
+  // Round-6 critic gap: the feed had no section heading of its own, unlike
+  // "Active sessions" right above it on the same page.
+  it('gives the feed an "Event feed" heading, matching "Active sessions"\' heading discipline', async () => {
+    const wrapper = await mountLiveView()
+    const headings = wrapper.findAll('h2').map((h) => h.text())
+
+    expect(headings).toContain('Active sessions')
+    expect(headings).toContain('Event feed')
+  })
+
   it('does not flip data-capture-ready before the stream has opened and a frame has arrived', async () => {
     await mountLiveView()
     expect(document.documentElement.getAttribute('data-capture-ready')).not.toBe('true')

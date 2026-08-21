@@ -12,7 +12,7 @@ import { AlertTriangle } from '@lucide/vue'
 
 import type { TimelineItem } from '@/lib/collapseEvents'
 import { eventKindMeta } from '@/lib/eventKinds'
-import { EM_DASH, formatAbsoluteTime, formatCost, formatDuration, formatRelativeOffset, formatTokens } from '@/lib/format'
+import { EM_DASH, formatAbsoluteTime, formatCost, formatDuration, formatRelativeOffset, formatTokens, formatWallClockTime } from '@/lib/format'
 import { durationBarScale, rowDetail } from '@/lib/timelineDisplay'
 import { Badge } from '@/components/ui/badge'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -48,9 +48,29 @@ interface Props {
    * (the live firehose, `LiveFeed.vue`) supplies this.
    */
   sessionLabel?: string | null
+  /**
+   * Round-6 (live view) critic gap: the offset column reads `formatRelativeOffset`
+   * against `originTs` — meaningful on a timeline with a fixed anchor (the first
+   * loaded event), meaningless on a live firehose, which has no such anchor and
+   * so always rendered `EM_DASH` here regardless of row (`LiveFeed.vue` never had
+   * an `originTs` to pass). `true` swaps that column to the row's own wall-clock
+   * time (`formatWallClockTime(item.ts)`) instead — a real, always-present value.
+   * Default `false` (this column's original behaviour) so `Timeline.vue`/
+   * `TimelineGroup.vue`, which never pass this prop, render byte-for-byte as
+   * before.
+   */
+  wallClockTime?: boolean
 }
 
-const props = withDefaults(defineProps<Props>(), { correlation: null, selected: false, nested: false, originTs: null, maxDurationMs: 0, sessionLabel: null })
+const props = withDefaults(defineProps<Props>(), {
+  correlation: null,
+  selected: false,
+  nested: false,
+  originTs: null,
+  maxDurationMs: 0,
+  sessionLabel: null,
+  wallClockTime: false,
+})
 
 const emit = defineEmits<{
   /** The user wants the raw `attrs` for one event_ref — the primary event by default, or a specific source from the "N sources" list. */
@@ -156,9 +176,9 @@ function openEvent(eventRef: string) {
     <div class="text-muted-foreground flex shrink-0 items-center gap-3 text-xs">
       <span
         class="w-16 text-right tabular-nums"
-        data-testid="event-row-offset"
+        :data-testid="wallClockTime ? 'event-row-time' : 'event-row-offset'"
         :title="formatAbsoluteTime(item.ts)"
-      >{{ formatRelativeOffset(item.ts, originTs) }}</span>
+      >{{ wallClockTime ? formatWallClockTime(item.ts) : formatRelativeOffset(item.ts, originTs) }}</span>
 
       <!--
         Duration bar folded into the single line: a fixed-width inline track
@@ -184,8 +204,18 @@ function openEvent(eventRef: string) {
         >{{ formatDuration(item.duration_ms) }}</span>
       </span>
 
+      <!--
+        `text-cost` only when there is a real cost to show: `text-cost` resolves
+        to `--foreground` (theme.css), a bright/full-contrast color deliberately
+        chosen so a real dollar figure reads as emphasized data. Applying it
+        unconditionally made a *null* cost's EM_DASH render at that same
+        brightness — one of the round-6 critic's "three em-dash weights" in the
+        live feed, where cost is null far more often than in a single session's
+        timeline. A missing value should read as muted, not as emphasized data.
+      -->
       <span
-        class="text-cost w-14 text-right tabular-nums"
+        class="w-14 text-right tabular-nums"
+        :class="item.cost !== null ? 'text-cost' : ''"
         data-testid="event-row-cost"
       >{{ formatCost(item.cost) }}</span>
       <span

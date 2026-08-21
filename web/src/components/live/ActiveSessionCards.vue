@@ -173,29 +173,57 @@ function followTarget(sessionId: string) {
             <time :title="formatAbsoluteTime(session.last_event_at)">{{ formatRelativeTime(session.last_event_at) }}</time>
           </p>
         </CardHeader>
-        <CardContent class="flex flex-col gap-1.5">
-          <div class="flex items-center justify-between text-xs">
-            <span class="text-muted-foreground">Cost</span>
-            <span
-              class="text-cost font-semibold tabular-nums"
+        <!--
+          Round-6 critic gap: `justify-between` spread each label to the
+          card's left edge and its value to the right edge — harmless at a
+          KPI strip's narrow per-cell width, but this card can span the
+          entire row (a single active session gets a full-width, single-
+          column grid track), which flung "Cost"/"$1.90" ~1100px apart on a
+          wide viewport. Same idiom as `SessionKpiStrip.vue`'s "detail KPI
+          strip" instead: label stacked directly above its value in one
+          narrow cell, so the two stay visually paired regardless of how
+          wide the card itself grows.
+        -->
+        <CardContent class="flex flex-wrap gap-4">
+          <div class="min-w-0">
+            <p class="text-muted-foreground text-[0.6875rem]">
+              Cost
+            </p>
+            <p
+              class="text-cost text-sm leading-tight font-semibold tabular-nums"
               data-testid="active-session-card-cost"
-            >{{ formatCost(session.cost.usd) }}</span>
+            >
+              {{ formatCost(session.cost.usd) }}
+            </p>
           </div>
-          <div class="flex items-center justify-between gap-2 text-xs">
-            <span class="text-muted-foreground">Current tool</span>
+          <div class="min-w-0">
+            <p class="text-muted-foreground text-[0.6875rem]">
+              Current tool
+            </p>
             <!-- The reason tooltip lives on NullValue itself (below) when unknown — no separate info icon needed. -->
-            <span
-              class="truncate font-mono"
+            <p
+              class="truncate font-mono text-sm leading-tight"
               data-testid="active-session-card-tool"
             >
+              <!--
+                `plain`: this cell's whole value is one bare EM_DASH glyph
+                when no tool.* event has landed yet, the exact case
+                `NullValue`'s own doc calls out — its default dotted-
+                underline "hint text" styling reads as a rendering glitch
+                on a lone glyph with nothing beside it, and (round-6 critic)
+                was one of three different em-dash "weights" visible on this
+                view. `plain` drops the underline while keeping the same
+                title/aria-label reason on hover.
+              -->
               <NullValue
                 v-if="!currentToolName(session.id)"
+                plain
                 :reason="currentToolReason(session.id)"
               />
               <template v-else>
                 {{ currentToolName(session.id) }}
               </template>
-            </span>
+            </p>
           </div>
         </CardContent>
       </Card>

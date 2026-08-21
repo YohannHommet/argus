@@ -80,4 +80,44 @@ describe('EventRow', () => {
     expect(wrapper.get('[data-testid="event-row-cost"]').text()).toBe('—')
     expect(wrapper.get('[data-testid="event-row-tokens"]').text()).toBe('—')
   })
+
+  // Round-6 (live view) critic gap: a null cost rendered its EM_DASH via
+  // `text-cost` (== `--foreground`, a bright/full-contrast color meant for a
+  // real dollar figure), one visible "weight" out of three the critic found
+  // for the same glyph. A missing value must read as muted like every other
+  // missing value in the row, not emphasized like real data.
+  it('does not apply the cost color class to a null cost\'s EM_DASH, but does apply it to a real cost', () => {
+    const [nullCost] = collapseEvents([makeTimelineEvent({ cost: null })])
+    const [realCost] = collapseEvents([makeTimelineEvent({ cost: 0.02 })])
+
+    const nullWrapper = mount(EventRow, { props: { item: nullCost! } })
+    const realWrapper = mount(EventRow, { props: { item: realCost! } })
+
+    expect(nullWrapper.get('[data-testid="event-row-cost"]').classes()).not.toContain('text-cost')
+    expect(realWrapper.get('[data-testid="event-row-cost"]').classes()).toContain('text-cost')
+  })
+
+  // Round-6 (live view) critic gap: the offset column is `EM_DASH` on every
+  // single row of a live firehose (it has no fixed origin to offset against),
+  // which read as an unnameable, always-empty column. `wallClockTime` swaps
+  // it for the event's own real, always-present timestamp — and must not
+  // affect `Timeline.vue`'s existing callers, which never pass it.
+  describe('wallClockTime', () => {
+    it('defaults to false: renders the relative-offset column exactly as before', () => {
+      const [item] = collapseEvents([makeTimelineEvent()])
+      const wrapper = mount(EventRow, { props: { item: item!, originTs: item!.ts } })
+
+      expect(wrapper.find('[data-testid="event-row-offset"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="event-row-time"]').exists()).toBe(false)
+      expect(wrapper.get('[data-testid="event-row-offset"]').text()).toBe('+0.0s')
+    })
+
+    it('true: renders the event\'s own wall-clock time under a distinct testid, ignoring originTs entirely', () => {
+      const [item] = collapseEvents([makeTimelineEvent({ ts: '2026-08-19T09:05:03.000Z' })])
+      const wrapper = mount(EventRow, { props: { item: item!, wallClockTime: true } })
+
+      expect(wrapper.find('[data-testid="event-row-offset"]').exists()).toBe(false)
+      expect(wrapper.get('[data-testid="event-row-time"]').text()).toMatch(/^\d{2}:\d{2}:\d{2}$/)
+    })
+  })
 })

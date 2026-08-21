@@ -198,6 +198,23 @@ export function formatRelativeOffset(iso: string | null | undefined, originIso: 
   return `${sign}${formatElapsed(Math.abs(deltaMs))}`
 }
 
+/**
+ * `"14:23:07"` — 24-hour wall-clock time with seconds, no date. For a
+ * timeline with a fixed anchor, `formatRelativeOffset` (below) is the right
+ * column: an offset down a column of rows is scannable. A live firehose has
+ * no such anchor — it has no "first loaded event" to offset against, only a
+ * continuously-growing tail — so this is the honest alternative: the
+ * event's own timestamp, as a clock reading rather than an elapsed span.
+ * `EM_DASH` for a null/unparseable timestamp, same convention as every
+ * formatter here.
+ */
+export function formatWallClockTime(iso: string | null | undefined): string {
+  if (!iso) return EM_DASH
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return EM_DASH
+  return new Intl.DateTimeFormat('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(date)
+}
+
 /** `0.0412` -> `4.1%`. */
 export function formatPercent(fraction: Numeric, digits = 1): string {
   if (!isFiniteNumber(fraction)) return EM_DASH
