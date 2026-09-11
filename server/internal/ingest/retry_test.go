@@ -35,7 +35,7 @@ func TestClassifyError_Table(t *testing.T) {
 		// identically on every attempt. Regression guard for the integration
 		// bug where an empty Event.ID produced 22P02 and burned the transient
 		// retry budget before the batch was dropped.
-		{"invalid_text_representation", &pgconn.PgError{Code: "22P02"}, ingest.ClassPermanent},
+		{"invalid_text_representation", &pgconn.PgError{Code: "22P02"}, ingest.ClassPermanent}, // Class 22 (data exception) is permanent
 		{"numeric_value_out_of_range", &pgconn.PgError{Code: "22003"}, ingest.ClassPermanent},
 	}
 

@@ -1,23 +1,10 @@
 package sim
 
-// Hook payload builders. Field names mirror
-// internal/ingest/normalize/testdata/hooks/*.json exactly (the fixtures the
-// real HookNormalizer.FromHookPayload is tested against, SPEC §1.5.2) so
-// this package's output round-trips through the same normalizer with no
-// unknown fields silently dropped. Every payload is a plain
-// map[string]any: HookNormalizer decodes hook bodies as JSON objects, never
-// as typed Go structs, and this package's fidelity rule (doc.go) is about
-// which keys appear, not about a wire type.
-//
-// hookSessionStart/... functions are pure: given already-decided field
-// values, they return the payload map with no I/O and no RNG draws of
-// their own (session.go owns every distribution decision).
+// Hook payload builders: field names match testdata/hooks/*.json (SPEC §1.5.2).
+// Payloads are map[string]any; functions are pure (no I/O, no RNG draws).
 
-// hookCommon builds the three fields every hook payload carries
-// (SPEC §1.5.2: "Common payload fields: session_id → session_id, prompt_id
-// → prompt_id, hook_event_name → event_name"). promptID nil omits the key
-// entirely, matching how session-lifecycle hooks (SessionStart/SessionEnd)
-// have no prompt.
+// hookCommon builds common fields (SPEC §1.5.2): session_id, prompt_id (if
+// non-nil), hook_event_name.
 func hookCommon(sessionID string, promptID *string, hookEventName string) map[string]any {
 	m := map[string]any{
 		"session_id":      sessionID,

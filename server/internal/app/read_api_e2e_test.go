@@ -1,22 +1,10 @@
 //go:build e2e
 
-// Package app — read_api_e2e_test.go pins that the Phase-3 read API is
-// actually mounted on the server this package builds.
-//
-// It exists because it was missing, and its absence hid a defect that would
-// have shipped: httpapi/router.go mounts each read-API group only
-// `if d.Reader != nil` (a nil-safe default inherited from P1-05's
-// convention), and Serve did not set Reader or AnalyticsReader. Every one of
-// P3-07's and P3-08's handler tests passed, and so did P3-09's conformance
-// harness covering 100% of operationIds — all of them construct httpapi.New
-// directly with a fake reader and never go through Serve. The real binary
-// answered 404 on every read endpoint. `docker compose up` plus one curl was
-// enough to see it; no test was.
-//
-// So this test deliberately goes the long way round: it starts the real App
-// via New + Serve and speaks HTTP to the port it bound, exactly as an
-// operator would. A route-table regression fails here even though the
-// handlers themselves are fine.
+// Package app — read_api_e2e_test.go: pins Phase-3 read API is mounted on
+// the real server (not just available as handlers). Router.go mounts each
+// group only `if d.Reader != nil`, and Serve omitted setting this for a time
+// while all handler tests still passed (they construct httpapi.New directly).
+// This test goes through New + Serve to catch route-table regressions.
 package app
 
 import (

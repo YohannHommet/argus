@@ -13,24 +13,13 @@ import (
 	"github.com/YohannHommet/argus/server/internal/telemetry"
 )
 
-// metaResponse is GET /api/v1/meta's body (SPEC §4.2, §4.3's full
-// openapi.yaml Meta schema). P1-05 shipped only {version, commit,
-// retention_days}; P3-08 fills in the rest — vendors seen, the four
-// exporter/hook/tool-details observations (duplicated at top level and
-// inside DataQuality, exactly as openapi.yaml's schema and worked example
-// both do), estimated_cost_present, and feature_flags.
+// metaResponse is GET /api/v1/meta's body (SPEC §4.2, §4.3).
 type metaResponse struct {
 	Version       string `json:"version"`
 	Commit        string `json:"commit"`
 	RetentionDays int    `json:"retention_days"`
 
-	// FeatureFlags is an empty map, not a speculative guess: SPEC §3.7's
-	// config table ("complete and normative") defines no feature-flag keys
-	// today, so there is nothing truthful to report yet beyond an empty
-	// object. openapi.yaml's worked example shows `{estimated_cost: true}`,
-	// but that flag has no backing config key — adding one is out of this
-	// ticket's scope (extending internal/config/config.go is not among the
-	// files this ticket owns).
+	// FeatureFlags is an empty map (SPEC §3.7 defines no feature-flag keys today).
 	FeatureFlags map[string]bool `json:"feature_flags"`
 
 	Vendors              []string          `json:"vendors"`
@@ -42,20 +31,11 @@ type metaResponse struct {
 	DataQuality          model.DataQuality `json:"data_quality"`
 }
 
-// metaSinceEpoch is the lower bound estimatedCostPresent uses to ask "has
-// Argus EVER estimated a cost" rather than "in some arbitrary recent
-// window" — matching hooks_seen/tool_details_seen's own "ever" semantics
-// (ticket note). AnalyticsSummary reads only rollup_hourly/rollup_daily
-// (SPEC §2.5), which retention never prunes (retention.go: "rollups ...
-// are never deleted by raw retention"), so an all-time window here is a
-// bounded, cheap aggregate query, not an events scan.
+// metaSinceEpoch bounds estimatedCostPresent's "ever estimated" check;
+// rollups are never pruned by retention so all-time is cheap (SPEC §2.5).
 var metaSinceEpoch = time.Unix(0, 0).UTC()
 
-// estimatedCostPresent answers SPEC's "is any cost estimated rather than
-// reported" (ticket note) by checking both the event- and metric-sourced
-// rollups (SPEC §2.4: "never summed together", so both must be checked
-// independently) for a nonzero estimated-cost total across all of recorded
-// history.
+// estimatedCostPresent checks both event- and metric-sourced rollups for estimated cost (SPEC §2.4).
 func estimatedCostPresent(ctx context.Context, r query.AnalyticsReader) (bool, error) {
 	now := time.Now()
 	from := metaSinceEpoch
@@ -77,10 +57,7 @@ func metaHandler(cfg *config.Config, reader AnalyticsReader, logger *slog.Logger
 			Version:      telemetry.Version,
 			Commit:       telemetry.Commit,
 			FeatureFlags: map[string]bool{},
-			// Vendors defaults to an empty (never nil) slice: openapi.yaml's
-			// Meta.vendors schema is a plain (non-nullable) array, and a nil
-			// Go slice would otherwise marshal as JSON null when Analytics
-			// is nil or Facets reports no vendors yet.
+			// Vendors is empty slice (not nil) to marshal as JSON [] not null.
 			Vendors: []string{},
 		}
 		if cfg != nil {

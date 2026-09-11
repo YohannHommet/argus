@@ -117,9 +117,8 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, opts ...O
 		return nil, fmt.Errorf("app: connecting to database: %w", err)
 	}
 
-	// WithRollupSessionRemarkMax threads ARGUS_ROLLUP_SESSION_REMARK_MAX
-	// (SPEC §2.4, §3.7) into the store without postgres importing
-	// internal/config (depguard, SPEC §3.1) — see pool.go's Option doc.
+	// Thread ARGUS_ROLLUP_SESSION_REMARK_MAX into the store without postgres
+	// importing internal/config (depguard, SPEC §3.1).
 	st := postgres.New(pool, postgres.WithRollupSessionRemarkMax(cfg.RollupSessionRemarkMax))
 
 	if cfg.AutoMigrate {
@@ -129,27 +128,10 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, opts ...O
 		}
 	}
 
-	// Seed model_prices from the price table embedded in this binary
-	// (db/prices/*.json), immediately after migrations and for the same
-	// reason: without it the table is empty on every fresh deployment, and an
-	// empty table means pricing.Estimate can never resolve a price, so
-	// cost_estimated_usd and estimated_share are silently 0 forever — the
-	// exact silent zero SPEC §4.1 exists to forbid, on the one number the UI
-	// uses to flag that a cost is estimated rather than reported.
-	//
-	// `argusd prices import` (SPEC §3.8) stays as the operator-facing way to
-	// re-import or update, but it cannot be the only way: nothing in
-	// docker-compose or the quickstart runs it, and a `docker compose up`
-	// deployment reported estimated_usd = 0 with a populated events table
-	// until this call existed. The import is idempotent (ON CONFLICT with an
-	// IS DISTINCT FROM guard, so a re-run touches no rows) and only writes
-	// the repo-sourced rows, leaving operator-supplied ones alone.
-	//
-	// Not gated behind a new config key: SPEC §3.7's table is normative and
-	// complete, and adding an unlisted ARGUS_* key would be the larger
-	// deviation. A failure here is fatal for the same reason a failed
-	// migration is — starting up with prices missing produces wrong numbers
-	// rather than an obvious error.
+	// Seed model_prices from the embedded price table on startup: empty table
+	// means cost_estimated_usd silently stays 0 (SPEC §4.1 forbids this).
+	// Not gated behind a config key: SPEC §3.7's table is normative. Fatal
+	// on failure, like migrations.
 	priceSummary, priceErr := st.ImportPrices(ctx)
 	if priceErr != nil {
 		pool.Close()
@@ -176,16 +158,9 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, opts ...O
 	}
 	rollupJob := NewRollupJob(st, logger, rollupMetrics, cfg.RollupInterval, cfg.RollupMaxBuckets)
 
-	// P5-03: the hub must exist BEFORE the ingest pipeline, resolving the
-	// ordering problem the Publisher seam otherwise has (the pipeline needs
-	// a Publisher at construction time — New starts its workers immediately,
-	// its own doc comment — but a HubPublisher needs a hub to publish into,
-	// so the hub is built first and st, already constructed above, is what
-	// HubPublisher's debounce loop reads session projections through). Its
-	// own registerer follows the identical o.registerer plumbing as
-	// rollupMetrics/ingestOpts, for the identical reason: a test process
-	// constructing a second App must not panic registering
-	// argus_stream_* twice on the default registry.
+	// P5-03: the hub must exist BEFORE the ingest pipeline (HubPublisher needs
+	// it at construction time). Use dedicated registerer to avoid duplicate
+	// metric panic in multi-App tests.
 	hubOpts := []stream.Option{
 		stream.WithBuffer(cfg.StreamBuffer),
 		stream.WithMaxSubscribers(cfg.StreamMaxSubscribers),
@@ -216,14 +191,8 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, opts ...O
 	//nolint:contextcheck // the pipeline's lifetime is owned by Close, not by New's caller — see above
 	ing := ingest.New(st, ingestPipelineConfig(cfg), ingestOpts...)
 
-	// P2-11: the hooks webhook (SPEC §3.5). hookNormalizer is built here
-	// (not inside internal/ingest/hooks) because it needs
-	// ARGUS_RETENTION_RAW_DAYS/ARGUS_INGEST_HOOK_ALLOW_MESSAGE_DISPLAY —
-	// internal/ingest/hooks must not import internal/config (same
-	// config-free-at-the-leaf convention ing's construction above follows).
-	// ing satisfies hooks.Enqueuer structurally via EnqueueEvents; passing
-	// it here rather than *ingest.Pipeline directly would gain nothing
-	// since httpapi.RequireIngestToken already closes the httpapi seam.
+	// P2-11: the hooks webhook (SPEC §3.5). hookNormalizer built here because
+	// it needs config keys; internal/ingest/hooks stays config-free (depguard).
 	hookNormalizer := normalize.NewHookNormalizer(
 		time.Now,
 		time.Duration(cfg.RetentionRawDays)*24*time.Hour,
@@ -236,10 +205,8 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, opts ...O
 	hookHandler := hooks.NewHandler(ing, hookNormalizer, cfg.IngestMaxBodyBytes, hookHandlerOpts...)
 	hookMounter := hooks.NewMounter(hookHandler, httpapi.RequireIngestToken(cfg.IngestToken))
 
-	// P2-10: the OTLP/HTTP receiver (SPEC §3.4). otlpNormalizer is built
-	// here for the same config-free-at-the-leaf reason as hookNormalizer
-	// above (internal/ingest/otlp must not import internal/config); ing
-	// satisfies otlp.Enqueuer structurally via EnqueueEvents/EnqueueMetrics.
+	// P2-10: the OTLP/HTTP receiver (SPEC §3.4). otlpNormalizer built here;
+	// internal/ingest/otlp stays config-free (depguard).
 	otlpNormalizer := normalize.NewNormalizer(time.Now, time.Duration(cfg.RetentionRawDays)*24*time.Hour)
 	otlpHandler := otlp.New(ing, otlpNormalizer, cfg.IngestMaxBodyBytes, httpapi.RequireIngestToken(cfg.IngestToken), logger, o.registerer)
 

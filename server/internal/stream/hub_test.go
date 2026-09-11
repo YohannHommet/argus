@@ -15,20 +15,14 @@ import (
 	"github.com/YohannHommet/argus/server/internal/stream"
 )
 
-// event is a small fixture builder: id/session/kind are the only fields any
-// test here cares about, tagged onto EventName (a plain string field, never
-// nil) so a received message can be matched back to the event that
-// produced it without any comparison heavier than string equality.
+// event: small fixture builder. Tags id/session/kind onto EventName for
+// matching received messages back to original events via string equality.
 func event(sessionID, name string) model.Event {
 	return model.Event{SessionID: sessionID, EventName: name, Kind: model.KindToolResult}
 }
 
-// counterValue reads a single unlabeled Prometheus counter's current value
-// straight off a registry Gather() call. Written by hand against
-// client_model rather than importing prometheus/client_golang/prometheus/testutil,
-// mirroring internal/ingest/pipeline_test.go's metricValue helper and its
-// documented reason: testutil pulls in a transitive dependency this
-// module's go.mod does not declare.
+// counterValue: reads unlabeled Prometheus counter from registry Gather().
+// Written by hand, not testutil, because testutil pulls in undeclared transitive.
 func counterValue(t *testing.T, reg *prometheus.Registry, name string) float64 {
 	t.Helper()
 	families, err := reg.Gather()
@@ -92,12 +86,8 @@ func labeledCounterValue(t *testing.T, reg *prometheus.Registry, name, labelValu
 // within 1ms — the never-block guarantee, measured. ---
 
 func TestPublish_NeverBlocksOnUnreadSubscriber(t *testing.T) {
-	// Deliberately NOT t.Parallel(): this is a timing assertion, and
-	// letting it run alongside every other t.Parallel() test in this file
-	// makes CPU contention from noisy neighbors part of what it measures,
-	// which is not the property under test. Running alone (Go serializes
-	// non-parallel tests) keeps the measurement about the hub, not the
-	// scheduler.
+	// Not t.Parallel(): timing assertion. Noisy neighbors would become part
+	// of the measurement. Run alone so measurement is about hub, not scheduler.
 	h := stream.New(stream.WithBuffer(2), stream.WithRegisterer(prometheus.NewRegistry()))
 	sub, err := h.Subscribe(stream.AllTopic(), stream.Filter{})
 	require.NoError(t, err)

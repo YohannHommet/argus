@@ -7,23 +7,15 @@ import (
 	logspb "go.opentelemetry.io/proto/otlp/logs/v1"
 )
 
-// formatEventTimestamp renders ts in the exact shape the live capture's
-// `event.timestamp` attribute uses: ISO 8601 / RFC3339 with millisecond
-// precision and a literal "Z" (research doc: "event.timestamp ISO 8601";
-// fixture testdata/otel/api_request_sdk.json: "2026-08-11T21:53:02.761Z").
+// formatEventTimestamp renders event.timestamp in ISO 8601 with millisecond
+// precision and "Z" suffix (research doc, fixtures).
 func formatEventTimestamp(ts time.Time) string {
 	return ts.UTC().Format("2006-01-02T15:04:05.000Z")
 }
 
-// newLogRecord assembles one OTLP LogRecord with the common attribute
-// envelope every event.name in the live capture carries (research doc §2's
-// observed key list) plus the fidelity rule's required pair: the prefixed
-// `body` ("claude_code.<name>") and the unprefixed `event.name` attribute
-// (live capture finding 4.1, SPEC §1.5.1 step 1-3). It deliberately never
-// sets the structured OTLP 1.x LogRecord.EventName field: the capture's raw
-// fixtures (testdata/otel/*.json) show every record resolving its name via
-// body+attribute only, never via that field, so leaving it unset is the
-// literal capture shape, not merely a compatible one.
+// newLogRecord assembles one LogRecord with common attributes plus body
+// ("claude_code.<name>") and event.name (fidelity rule, SPEC §1.5.1).
+// EventName field deliberately unset (fixtures resolve via body+attribute).
 func newLogRecord(id sessionIdentity, ts time.Time, seq int64, unprefixedName string, promptID *string, extra ...*commonpb.KeyValue) *logspb.LogRecord {
 	attrs := id.commonRecordAttrs()
 	attrs = append(attrs,
@@ -43,11 +35,8 @@ func newLogRecord(id sessionIdentity, ts time.Time, seq int64, unprefixedName st
 	}
 }
 
-// buildUserPrompt implements SPEC §7.1 item 2's "user_prompt log event
-// with the same prompt_id [as UserPromptSubmit], the log event carrying
-// prompt_length + message.uuid" and the §1.5.1 mapping row. promptLength
-// and messageUUID attribute keys are live-capture-verified (research doc
-// 4.4: "user_prompt carries prompt_length and message.uuid").
+// buildUserPrompt implements user_prompt log event (SPEC §7.1 item 2):
+// prompt_id, prompt_length, message.uuid (live-capture-verified).
 func buildUserPrompt(id sessionIdentity, ts time.Time, seq int64, promptID string, promptLength int, messageUUID string) *logspb.LogRecord {
 	return newLogRecord(id, ts, seq, "user_prompt", &promptID,
 		kvInt("prompt_length", int64(promptLength)),

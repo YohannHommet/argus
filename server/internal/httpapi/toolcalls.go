@@ -12,21 +12,10 @@ import (
 	"github.com/YohannHommet/argus/server/internal/store"
 )
 
-// toolCallSortKey is the fixed cursor-binding tag both tool-call list
-// endpoints use, matching internal/store/postgres/read_toolcalls.go's own
-// `toolCallCursorKey` ("started_at"): neither endpoint exposes a `sort`/
-// `order` parameter (openapi.yaml), so there is exactly one order.
+// toolCallSortKey is the fixed cursor binding for both tool-call list endpoints.
 const toolCallSortKey = "started_at"
 
-// toolCall is the wire shape SPEC's ToolCall schema declares — openapi.yaml
-// documents its field names as "mirror[ing] internal/model.ToolCall's Go
-// fields snake_cased", but model.ToolCall itself carries no JSON tags at
-// all (unlike every other model type this ticket marshals directly), so a
-// bare json.Marshal(model.ToolCall) would emit exact-case Go field names
-// ("ID", "SessionID", "DurationMS", ...) instead of the contract's
-// snake_case. This adapter is what satisfies the contract in practice —
-// flagged as a P3-07 report item alongside timelineEvent's own version of
-// the same gap.
+// toolCall is SPEC's ToolCall wire shape with JSON tags (model.ToolCall lacks them).
 type toolCall struct {
 	ID              string            `json:"id"`
 	SessionID       string            `json:"session_id"`
@@ -52,9 +41,7 @@ type toolCall struct {
 	EventCount      int               `json:"event_count"`
 }
 
-// toolCallsListResponse is the shared body shape of GET
-// /api/v1/sessions/{id}/tool-calls and GET /api/v1/tool-calls
-// (openapi.yaml's ToolCallsListResponse).
+// toolCallsListResponse is the shared body for both tool-calls list endpoints.
 type toolCallsListResponse struct {
 	Data []toolCall `json:"data"`
 	Page pageInfo   `json:"page"`
@@ -95,9 +82,7 @@ func mapToolCalls(calls []model.ToolCall) []toolCall {
 	return out
 }
 
-// mountToolCallRoutes attaches both tool-call list routes: the
-// session-scoped drill-down and the cross-session one, sharing
-// query.ListToolCalls via store.ToolCallFilter.SessionID.
+// mountToolCallRoutes attaches both tool-call list routes.
 func mountToolCallRoutes(r chi.Router, reader Reader, logger *slog.Logger) {
 	r.Get("/sessions/{id}/tool-calls", listSessionToolCallsHandler(reader, logger))
 	r.Get("/tool-calls", listToolCallsHandler(reader, logger))
@@ -134,8 +119,7 @@ func listSessionToolCallsHandler(reader Reader, logger *slog.Logger) http.Handle
 	}
 }
 
-// listToolCallsHandler implements GET /api/v1/tool-calls (SPEC §4.2): the
-// cross-session decision-provenance drill-down.
+// listToolCallsHandler implements GET /api/v1/tool-calls (SPEC §4.2).
 func listToolCallsHandler(reader Reader, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		page, err := bindLimitAndCursor(r, toolCallSortKey)

@@ -76,32 +76,18 @@ type decodeErr struct {
 
 func (e *decodeErr) Error() string { return e.message }
 
-// readBody applies SPEC §3.4's full request-body contract, up to but not
-// including the OTLP-specific decode (that is decodeExportRequest's job,
-// below — kept separate because the envelope decode differs per signal
-// while the body-handling rules below do not):
-//
-//  1. Content-Type negotiation (415 on an unknown/missing type).
-//  2. An outer http.MaxBytesReader cap on the wire bytes — covers the
-//     uncompressed case directly, and bounds how much compressed data a
-//     client may even send.
-//  3. Content-Encoding: gzip support, with a *second*, independent cap: an
-//     io.LimitReader wrapping the gzip.Reader, sized maxBodyBytes+1. This is
-//     what makes the gzip-bomb AC's "bounded memory" half true — a payload
-//     that would decompress to gigabytes is rejected after io.ReadAll has
-//     materialized at most maxBodyBytes+1 bytes, never the claimed
-//     uncompressed size (lead note 2). The outer MaxBytesReader alone would
-//     not catch this: it only bounds the *compressed* bytes read off the
-//     wire, which a bomb keeps deliberately small.
+// readBody applies SPEC §3.4's full request-body contract: Content-Type
+// negotiation, MaxBytesReader cap on wire bytes, and gzip decompression with
+// a separate io.LimitReader cap (maxBodyBytes+1). The dual cap is load-bearing
+// for the gzip-bomb AC: the outer bound only limits compressed bytes; the inner
+// bound rejects payloads that decompress to gigabytes after at most maxBodyBytes+1
+// materialized bytes.
 func readBody(w http.ResponseWriter, r *http.Request, maxBodyBytes int64) (wireFormat, []byte, *decodeErr) {
 	format, ok := negotiateFormat(r.Header.Get("Content-Type"))
 	if !ok {
-		// The client's Content-Type is by definition not one we can answer
-		// in (that's the whole reason for the 415), so the response falls
-		// back to JSON — the one format guaranteed human-readable without a
-		// protobuf decoder — rather than the zero wireFormat value
-		// (wireProtobuf), which would hand a client that may not speak
-		// protobuf at all a binary diagnostic it cannot parse (m17 minor).
+		// Response falls back to JSON — the one format guaranteed human-readable
+		// without a protobuf decoder — so a client that doesn't speak protobuf
+		// gets a readable diagnostic instead of binary.
 		return wireJSON, nil, &decodeErr{
 			httpStatus: http.StatusUnsupportedMediaType,
 			grpcCode:   grpcCodeInvalidArgument,
@@ -122,10 +108,8 @@ func readBody(w http.ResponseWriter, r *http.Request, maxBodyBytes int64) (wireF
 			}
 		}
 		defer gz.Close() //nolint:errcheck // read-only decompressor on a request we're about to discard either way; a close error here carries no actionable information
-		// +1 lets the size check below tell "exactly maxBodyBytes" apart
-		// from "more than maxBodyBytes" without ever reading (and thus
-		// allocating) more than maxBodyBytes+1 bytes of decompressed data,
-		// no matter how large the compressed input claims to expand to.
+		// +1: lets the size check distinguish "exactly maxBodyBytes" from
+		// "more than maxBodyBytes" without materializing more than maxBodyBytes+1 bytes.
 		reader = io.LimitReader(gz, maxBodyBytes+1)
 	}
 
@@ -157,30 +141,16 @@ func readBody(w http.ResponseWriter, r *http.Request, maxBodyBytes int64) (wireF
 }
 
 // decodeExportRequest decodes one OTLP/HTTP Export*ServiceRequest body into
-// its resource-level elements (ResourceLogs, ResourceMetrics, or
-// ResourceSpans) — without ever importing
-// go.opentelemetry.io/proto/otlp/collector/.../v1.
+// its resource-level elements (ResourceLogs, ResourceMetrics, or ResourceSpans).
+// Implemented by hand (not via go.opentelemetry.io/proto/otlp/collector/.../v1)
+// to avoid importing gRPC dependencies not in go.sum. Every Export*ServiceRequest
+// has identical shape: one repeated field 1 (resource_logs / resource_metrics /
+// resource_spans). Decoding by hand in both wire formats reproduces the same
+// semantics using only data-model subpackages (logs/v1, metrics/v1, trace/v1)
+// that normalize already imports.
 //
-// That subpackage's protoc-gen-grpc-gateway output additionally imports
-// github.com/grpc-ecosystem/grpc-gateway/v2 and google.golang.org/grpc,
-// neither of which is anywhere in this module's go.sum (verified with
-// `grep -rn genproto\|grpc go.sum` before writing this, not assumed) —
-// go.mod pins go.opentelemetry.io/proto/otlp itself, but that pin does not
-// make its collector subpackage compilable without also vendoring an
-// unrelated gRPC stack this project otherwise has zero dependency on, and
-// this ticket may not run `go get`/`go mod tidy` to add one. Every OTLP/HTTP
-// Export*ServiceRequest message has the identical shape regardless: a
-// single repeated field 1 (resource_logs / resource_metrics /
-// resource_spans). Decoding that one field by hand, in both wire formats,
-// and handing the results to normalize.FromOTLPLogs/FromOTLPMetrics exactly
-// like a generated ExportLogsServiceRequest.GetResourceLogs() would,
-// reproduces the same bytes-on-the-wire semantics using only the
-// data-model subpackages (logs/v1, metrics/v1, trace/v1) that
-// internal/ingest/normalize already imports successfully with no such
-// dependency.
-//
-// jsonKey is the top-level field's camelCase JSON name (e.g.
-// "resourceLogs"); newElem constructs one empty element to unmarshal into.
+// jsonKey is the top-level field's camelCase JSON name (e.g. "resourceLogs");
+// newElem constructs one empty element to unmarshal into.
 func decodeExportRequest[T proto.Message](format wireFormat, body []byte, jsonKey string, newElem func() T) ([]T, error) {
 	if format == wireJSON {
 		return decodeExportRequestJSON(body, jsonKey, newElem)
@@ -188,15 +158,10 @@ func decodeExportRequest[T proto.Message](format wireFormat, body []byte, jsonKe
 	return decodeExportRequestProto(body, newElem)
 }
 
-// decodeExportRequestProto walks the top-level fields of an
-// Export*ServiceRequest message by hand: field 1 (LEN-encoded) is one
-// resource-level element, unmarshalled with the real generated type's
-// proto.Unmarshal (which, as usual for protobuf, silently tolerates any
-// unknown field *inside* that element — the "future OTLP version" AC).
-// Any other top-level field number is skipped the same way proto.Unmarshal
-// would skip it, rather than failing the request: this envelope only ever
-// carries field 1 today, but that mirrors real forward-compatible protobuf
-// decoding instead of assuming it always will.
+// decodeExportRequestProto walks Export*ServiceRequest fields by hand:
+// field 1 (LEN-encoded) is unmarshalled with proto.Unmarshal (which tolerates
+// unknown fields inside, the "future OTLP version" AC). Other fields are
+// skipped forward-compatibly rather than failing the request.
 func decodeExportRequestProto[T proto.Message](body []byte, newElem func() T) ([]T, error) {
 	var out []T
 	for len(body) > 0 {
@@ -231,12 +196,9 @@ func decodeExportRequestProto[T proto.Message](body []byte, newElem func() T) ([
 }
 
 // decodeExportRequestJSON is decodeExportRequestProto's JSON counterpart:
-// parse the envelope object ourselves (accepting both the canonical
-// camelCase key and the proto field's original snake_case spelling, the
-// same leniency protojson itself applies), then protojson.Unmarshal
-// (DiscardUnknown: true, SPEC §3.4) each element individually — DiscardUnknown
-// is exactly what lets an element carrying a field this pinned protobuf
-// version does not know about still decode instead of erroring.
+// parses the envelope (accepting both camelCase and snake_case keys, as
+// protojson does), then protojson.Unmarshal each element with DiscardUnknown
+// (SPEC §3.4), which lets elements with unknown fields still decode.
 func decodeExportRequestJSON[T proto.Message](body []byte, jsonKey string, newElem func() T) ([]T, error) {
 	var envelope map[string]json.RawMessage
 	if err := json.Unmarshal(body, &envelope); err != nil {
@@ -268,10 +230,8 @@ func decodeExportRequestJSON[T proto.Message](body []byte, jsonKey string, newEl
 	return out, nil
 }
 
-// snakeCase converts "resourceLogs" -> "resource_logs" — the only
-// transformation decodeExportRequestJSON needs, mirroring protojson's own
-// leniency about accepting either a message's JSON name or its original
-// proto field name.
+// snakeCase converts "resourceLogs" → "resource_logs", used by
+// decodeExportRequestJSON for leniency about proto field names.
 func snakeCase(camel string) string {
 	var b strings.Builder
 	for _, r := range camel {
@@ -285,18 +245,12 @@ func snakeCase(camel string) string {
 	return b.String()
 }
 
-// writeExportResult writes SPEC §3.4's OTLP/HTTP export response contract
-// in the request's wire format: an empty Export*ServiceResponse (zero bytes
-// of protobuf is a valid, fully-default message; "{}" is protojson's
-// equivalent) when rejectedCount is 0, or a partial_success otherwise.
-//
-// Every OTLP/HTTP Export*PartialSuccess message (ExportLogsPartialSuccess,
-// ExportMetricsPartialSuccess, ExportTracePartialSuccess) has the identical
-// wire shape — an int64 rejected-count at field 1, a string error_message
-// at field 2 — differing only in the JSON name of that count field
+// writeExportResult writes SPEC §3.4's OTLP/HTTP response: an empty
+// Export*ServiceResponse when rejectedCount is 0, or partial_success otherwise.
+// All Export*PartialSuccess messages have identical wire shape (field 1: int64
+// count, field 2: string error_message), differing only in JSON name
 // ("rejectedLogRecords" / "rejectedDataPoints" / "rejectedSpans"), so one
-// encoder serves all three call sites instead of tripling this logic (the
-// same collector-dependency reasoning as decodeExportRequest applies to why
+// encoder serves all three (same reasoning as decodeExportRequest's
 // there is no generated Go type to marshal here either).
 //
 // Wire-compatibility of this hand-encoding was verified empirically against

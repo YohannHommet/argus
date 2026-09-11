@@ -16,11 +16,8 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// sourceEvent and sourceMetric are rollup_dirty.source's two values (SPEC
-// §2.4). Deliberately plain constants, not a Go enum type: source is one of
-// Argus's own four closed taxonomies (SPEC §0), but rollup_dirty predates
-// this ticket introducing a dedicated type for it, and two string constants
-// used only inside this package need no more ceremony than that.
+// sourceEvent and sourceMetric are rollup_dirty.source's two values (SPEC §2.4).
+// Deliberately plain constants, not an enum: they predate a dedicated type.
 const (
 	sourceEvent  = "event"
 	sourceMetric = "metric"
@@ -34,11 +31,9 @@ func hourBucket(ts time.Time) time.Time {
 	return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), 0, 0, 0, time.UTC)
 }
 
-// hourBucketsBetween returns every hour bucket in [first, last], inclusive,
-// capped at max entries (SPEC §2.4's ARGUS_ROLLUP_SESSION_REMARK_MAX). If
-// the true range exceeds max, only the first max buckets (from `first`
-// forward) are returned and truncated is true, so the caller can log the
-// SPEC-required warning.
+// hourBucketsBetween returns every hour bucket in [first, last], capped at
+// max entries (SPEC §2.4's ARGUS_ROLLUP_SESSION_REMARK_MAX), or reports true
+// if truncated so the caller can log the required warning.
 func hourBucketsBetween(first, last time.Time, maxBuckets int) (buckets []time.Time, truncated bool) {
 	start := hourBucket(first)
 	end := hourBucket(last)
@@ -54,7 +49,7 @@ func hourBucketsBetween(first, last time.Time, maxBuckets int) (buckets []time.T
 	return buckets, false
 }
 
-// dirtyMark is one (bucket, source) pair to upsert into rollup_dirty.
+// dirtyMark represents one (bucket, source) pair for rollup_dirty.
 type dirtyMark struct {
 	Bucket time.Time
 	Source string
@@ -103,14 +98,11 @@ func markRollupDirty(ctx context.Context, tx pgx.Tx, marks []dirtyMark) error {
 	return nil
 }
 
-// projectChangeRemarks builds the SPEC §2.4 second dirty-marking rule: when
-// a session's project/cwd changed in this batch (the late-SessionStart
-// case), every hour bucket from the session's (post-merge) first_seen_at to
-// last_event_at is re-marked dirty, source='event', capped at
-// s.rollupSessionRemarkMax with a logged warning if the true range is
-// larger. changed reports, per session id, whether its stored cwd/project
-// value actually changed (comparing the upsert's before/after RETURNING),
-// and span reports each such session's merged [first_seen_at, last_event_at].
+// projectChangeRemarks implements the SPEC §2.4 second dirty-marking rule:
+// when a session's project/cwd changed in this batch (late-SessionStart case),
+// mark hour buckets [first_seen_at, last_event_at] dirty, capped with warning
+// if needed. changed[id] reports whether that session's cwd/project actually
+// changed; span[id] holds its merged [first_seen_at, last_event_at] bounds.
 func (s *Store) projectChangeRemarks(changed map[string]bool, span map[string][2]time.Time) []dirtyMark {
 	var marks []dirtyMark
 	for id, didChange := range changed {

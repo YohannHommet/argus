@@ -22,17 +22,7 @@ import (
 	"github.com/YohannHommet/argus/server/internal/stream"
 )
 
-// --- shared fixtures/helpers -------------------------------------------
-
-// shortStreamConfig is every test's ARGUS_STREAM_* config: short enough
-// that no test sleeps for real seconds (the ticket's own instruction), but
-// StreamReplayWindow is deliberately a few seconds, not milliseconds — a
-// "just inside the window" ref (e.g. TestStream_ReplayRaceDedupe's) is
-// built from time.Now() and only needs to survive test setup latency
-// (HTTP round trip, goroutine scheduling) before the handler evaluates it,
-// which a millisecond-scale window would make flaky for no benefit: only
-// TestStreamAll_OutOfWindowReplayYieldsResetFirst cares about the window
-// boundary itself, and it uses a ref an hour old regardless of window size.
+// shortStreamConfig returns test-friendly ARGUS_STREAM_* settings (heartbeat 50ms, window 5s).
 func shortStreamConfig() *config.Config {
 	return &config.Config{
 		StreamHeartbeat:    50 * time.Millisecond,
@@ -41,9 +31,7 @@ func shortStreamConfig() *config.Config {
 	}
 }
 
-// newStreamTestServer builds a real network server (httptest.NewServer, NOT
-// httptest.NewRecorder — the ticket note: a recorder cannot exercise
-// flushing/streaming) running httpapi.New wired with the given hub/replay.
+// newStreamTestServer builds a real network server with the given streamer/replayer.
 func newStreamTestServer(t *testing.T, streamer httpapi.Streamer, replay httpapi.Replayer, cfg *config.Config) *httptest.Server {
 	t.Helper()
 	h := httpapi.New(httpapi.Deps{Stream: streamer, Replay: replay, Config: cfg, Assets: testAssets(t)})
@@ -52,17 +40,12 @@ func newStreamTestServer(t *testing.T, streamer httpapi.Streamer, replay httpapi
 	return srv
 }
 
-// newTestHub builds a *stream.Hub against a fresh, private Prometheus
-// registry (mirrors internal/stream/hub_test.go's own convention): New's
-// default registerer is process-global and panics on a duplicate metric
-// name if more than one Hub is ever constructed in the same test binary.
+// newTestHub builds a Hub with a private Prometheus registry (avoids duplicate metric panics).
 func newTestHub(opts ...stream.Option) *stream.Hub {
 	return stream.New(append([]stream.Option{stream.WithRegisterer(prometheus.NewRegistry())}, opts...)...)
 }
 
-// testEventAt builds a minimal, valid model.Event for one session at a
-// given (ts, seq) — every field newTimelineEvent/the wire format need a
-// concrete value for, nothing more.
+// testEventAt builds a minimal model.Event at a given (ts, seq).
 func testEventAt(sessionID string, ts time.Time, seq int64) model.Event {
 	return model.Event{
 		Seq:       seq,
@@ -92,9 +75,7 @@ type sseFrame struct {
 	ID, Event, Data, Comment, Retry string
 }
 
-// sseReader parses SPEC §5.1's wire grammar: `id:`/`event:`/`data:`/
-// `retry:` lines accumulate into one frame, a line starting with `:` is a
-// comment (the heartbeat), and a blank line ends the frame.
+// sseReader parses SPEC §5.1's wire grammar into sseFrame structs.
 type sseReader struct {
 	r *bufio.Reader
 }
@@ -128,14 +109,7 @@ func (s *sseReader) next(t *testing.T) sseFrame {
 	}
 }
 
-// nextNamed reads frames until one carries a non-empty Event name, silently
-// skipping `: heartbeat` comments along the way. shortStreamConfig's
-// heartbeat is short enough (50ms) to legitimately interleave with the
-// frames a test is asserting on when the suite runs under heavy parallel
-// load (observed in practice: a fixed-count read loop that did not skip
-// heartbeats flaked under `-race` with the full package running
-// concurrently) — every test except the heartbeat-specific one itself only
-// cares about named frames, so this is the one place that skip is decided.
+// nextNamed reads until a non-empty Event, skipping heartbeat comments (can interleave under load).
 func (s *sseReader) nextNamed(t *testing.T) sseFrame {
 	t.Helper()
 	for {
@@ -146,8 +120,7 @@ func (s *sseReader) nextNamed(t *testing.T) sseFrame {
 	}
 }
 
-// openStream issues a GET against url with ctx and returns the live
-// response — callers must close resp.Body (t.Cleanup does it here).
+// openStream issues a GET and returns the live response body.
 func openStream(ctx context.Context, t *testing.T, url string) *http.Response {
 	t.Helper()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -158,8 +131,7 @@ func openStream(ctx context.Context, t *testing.T, url string) *http.Response {
 	return resp
 }
 
-// openAndSkipRetry opens the stream and consumes the always-first retry
-// line, returning a reader positioned right after it.
+// openAndSkipRetry opens the stream and skips the first retry line.
 func openAndSkipRetry(ctx context.Context, t *testing.T, url string) (*http.Response, *sseReader) {
 	t.Helper()
 	resp := openStream(ctx, t, url)
@@ -175,19 +147,14 @@ func waitForSubscribers(t *testing.T, hub *stream.Hub, n int) {
 		"hub.Subscribers() never reached %d", n)
 }
 
-// erroringStreamer is a fixed-error httpapi.Streamer, for exercising
-// Subscribe's failure mapping without needing to actually exhaust a real
-// hub's subscriber cap.
+// erroringStreamer is a fixed-error Streamer for testing error mapping.
 type erroringStreamer struct{ err error }
 
 func (e erroringStreamer) Subscribe(stream.Topic, stream.Filter) (*stream.Subscription, error) {
 	return nil, e.err
 }
 
-// recordingStreamer wraps a real hub, recording the last topic/filter
-// Subscribe was called with — the clean way (per the ticket) to assert what
-// the firehose's param binding actually asked the hub to subscribe to,
-// while still behaving like a normal, working subscription.
+// recordingStreamer wraps a hub and records the last topic/filter for Subscribe.
 type recordingStreamer struct {
 	hub *stream.Hub
 

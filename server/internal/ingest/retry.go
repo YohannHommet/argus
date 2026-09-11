@@ -10,34 +10,21 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// RetryClass is SPEC §3.6's three-way classification of a
-// store.Writer.WriteBatch/WriteMetrics failure. It exists as its own type
-// (rather than just branching on the error inline) so retry.go's rules and
-// pipeline.go's retry-loop mechanics stay in separate, independently
-// testable files — see retry_test.go for the classification table.
+// RetryClass is SPEC §3.6's three-way failure classification (retry.go rules separate from pipeline logic).
 type RetryClass int
 
 const (
 	// ClassNone means err was nil: nothing to classify.
 	ClassNone RetryClass = iota
-	// ClassConflict is 40P01 (deadlock_detected) / 40001 (serialization_failure):
-	// expected under concurrency thanks to the lock-ordering invariant
-	// (SPEC §1.6), retried up to ARGUS_INGEST_RETRY_CONFLICT times because a
-	// flat low retry count would drop data on a routine deadlock.
+	// ClassConflict is 40P01/40001 (deadlock/serialization), expected under concurrency (SPEC §1.6).
 	ClassConflict
-	// ClassTransient is a connection-level failure (08xxx, 57P01, a context
-	// deadline) or anything Postgres-shaped SPEC §3.6 doesn't explicitly
-	// name — see ClassifyError's default case — retried up to
-	// ARGUS_INGEST_RETRY_TRANSIENT times.
+	// ClassTransient is connection failure (08xxx, 57P01, deadline) or unknown SPEC-unspecified.
 	ClassTransient
-	// ClassPermanent is a constraint or programming error (23xxx, 42xxx):
-	// retrying it would just fail the same way forever, so SPEC §3.6 says
-	// drop it immediately and log the batch's first event id at ERROR.
+	// ClassPermanent is constraint/programming error (23xxx, 42xxx) — drop immediately.
 	ClassPermanent
 )
 
-// String renders the class as the Prometheus label value SPEC §3.6 uses
-// ("class=\"permanent\"" etc.).
+// String renders as Prometheus label value (SPEC §3.6: "class=\"permanent\"" etc.).
 func (c RetryClass) String() string {
 	switch c {
 	case ClassConflict:
@@ -53,8 +40,7 @@ func (c RetryClass) String() string {
 	}
 }
 
-// conflictSQLSTATEs / transientSQLSTATEPrefix / permanentSQLSTATEPrefixes
-// encode SPEC §3.6's exact classification table.
+// conflictSQLSTATEs encode SPEC §3.6 classification table.
 var conflictSQLSTATEs = map[string]bool{
 	"40P01": true, // deadlock_detected
 	"40001": true, // serialization_failure
@@ -62,33 +48,11 @@ var conflictSQLSTATEs = map[string]bool{
 
 const transientAdminShutdown = "57P01"
 
-// permanentSQLSTATEPrefixes are the SQLSTATE classes a retry can never fix.
-// SPEC §3.6 names 23 (integrity constraint violation) and 42 (syntax
-// error / access rule violation). Class 22 (data exception: 22P02 invalid
-// text representation, 22003 numeric value out of range, 22001 string data
-// right truncation, ...) is added here as a deviation reported to the owner:
-// the spec's list does not mention it, so it fell through to the transient
-// default and a malformed value burned the full retry budget before being
-// dropped — and, worse, was counted as class="transient", telling an operator
-// to look for a flaky database instead of a bad payload. The same bytes fail
-// identically on every attempt, so retrying is provably pointless.
+// permanentSQLSTATEPrefixes: SQLSTATE classes retry cannot fix (SPEC §3.6: 23, 42; added: 22 deviation).
 var permanentSQLSTATEPrefixes = []string{"22", "23", "42"}
 
-// ClassifyError applies SPEC §3.6's retry classification to a
-// WriteBatch/WriteMetrics error. A non-pgconn error (including
-// context.DeadlineExceeded, which pgx does not wrap in a *pgconn.PgError)
-// and any SQLSTATE class the spec does not name both fall through to
-// ClassTransient: SPEC §3.6 only ever names three outcomes and the two data
-// -loss-averse ones (conflict, transient) are bounded retries, so an unknown
-// failure mode gets a bounded number of chances rather than either being
-// dropped on first sight (ruled out by SPEC §3.6's whole premise) or
-// retried forever like a genuine, expected deadlock. context.Canceled is
-// classified the same way for the same reason: internal/ingest's own Close
-// cancels its worker context on a drain-deadline timeout (see pipeline.go),
-// which surfaces here as a Canceled error on whatever batch was in flight —
-// treating it as transient means the batch gets exactly one more bounded
-// shot at the (already-expired) retry budget before being dropped and
-// counted, never silently discarded.
+// ClassifyError applies SPEC §3.6 classification. Unknown/unspecified errors default to
+// ClassTransient (bounded retry): preserves data-loss-averse policy vs. dropping on first sight.
 func ClassifyError(err error) RetryClass {
 	if err == nil {
 		return ClassNone
@@ -114,32 +78,24 @@ func ClassifyError(err error) RetryClass {
 	return ClassTransient
 }
 
-// conflictBackoffBase is SPEC §3.6's "jittered backoff from 5ms" starting
-// point for ClassConflict retries.
+// conflictBackoffBase is SPEC §3.6's starting point for jittered conflict backoff.
 const conflictBackoffBase = 5 * time.Millisecond
 
-// conflictBackoff returns the delay before conflict-retry attempt n
-// (1-based, i.e. the delay before the (n+1)th call to WriteBatch): a linear
-// ramp from the 5ms base, jittered by up to 50% so many workers retrying
-// the same deadlock don't re-collide in lockstep.
+// conflictBackoff returns delay before attempt n (1-based): linear ramp + jitter to avoid lockstep.
 func conflictBackoff(n int) time.Duration {
 	base := conflictBackoffBase * time.Duration(n)
 	jitter := time.Duration(rand.Float64() * float64(base) / 2) //nolint:gosec // backoff jitter, not security-sensitive
 	return base + jitter
 }
 
-// transientBackoffSchedule is SPEC §3.6's fixed schedule for
-// ClassTransient retries: 100ms, 400ms, 1.6s for attempts 1, 2, 3. A
-// transient budget higher than 3 repeats the last (longest) delay rather
-// than panicking or growing unbounded.
+// transientBackoffSchedule is SPEC §3.6's fixed schedule (100ms, 400ms, 1.6s).
 var transientBackoffSchedule = []time.Duration{
 	100 * time.Millisecond,
 	400 * time.Millisecond,
 	1600 * time.Millisecond,
 }
 
-// transientBackoff returns the delay before transient-retry attempt n
-// (1-based).
+// transientBackoff returns delay before attempt n (1-based).
 func transientBackoff(n int) time.Duration {
 	if n <= 0 {
 		return transientBackoffSchedule[0]

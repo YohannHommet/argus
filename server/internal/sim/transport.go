@@ -17,21 +17,16 @@ const (
 	contentTypeJSON     = "application/json"
 )
 
-// SendResult is what one Transport call reports back to runner.go for the
-// exit report (SPEC §7.2: "HTTP status histogram … and non-2xx bodies").
-// FileTransport always reports StatusCode 0 (there is no HTTP exchange);
-// runner.go only folds StatusCode into the histogram when Err == nil and
-// StatusCode != 0, i.e. only for HTTPTransport.
+// SendResult is one Transport call's result for the exit report (SPEC §7.2).
+// FileTransport reports StatusCode 0 (no HTTP); only HTTPTransport histograms.
 type SendResult struct {
 	StatusCode int
 	Body       []byte
 	Err        error
 }
 
-// Transport is the seam between pure generation and delivery (doc.go's
-// generator/transport split). Exactly two implementations exist:
-// HTTPTransport (POST to a live Argus) and FileTransport (--out, fixture
-// generation). runner.go is the only caller.
+// Transport is the seam between generation and delivery (doc.go split).
+// Implementations: HTTPTransport (live Argus), FileTransport (--out).
 type Transport interface {
 	SendLogs(ctx context.Context, body []byte, contentType string) SendResult
 	SendMetrics(ctx context.Context, body []byte, contentType string) SendResult
@@ -84,15 +79,10 @@ func (t *HTTPTransport) SendHooks(ctx context.Context, body []byte) SendResult {
 	return t.post(ctx, "/ingest/hook", contentTypeJSON, body)
 }
 
-// FileTransport implements SPEC §7.2's "--out=dir/ writes the same
-// payloads to files instead of POSTing (fixture generation)". Each session
-// gets its own subdirectory (session-NNNN/) so a run's whole output tree is
-// a deterministic function of --seed and --sessions alone: file names never
-// depend on wall-clock time, goroutine scheduling, or map iteration order
-// (SPEC §7.2's byte-identical-output AC, lead note 2). runner.go always
-// generates and writes sequentially when a FileTransport is in play
-// (concurrency only governs HTTPTransport load-mode pacing), so the
-// per-session counters below never race.
+// FileTransport implements --out fixture generation (SPEC §7.2). Each
+// session gets its own session-NNNN/ subdirectory (deterministic output tree,
+// no wall-clock/scheduling/map-order dependencies). Sequential generation
+// (concurrency only for HTTPTransport load mode).
 type FileTransport struct {
 	Dir string
 

@@ -2,11 +2,8 @@ package normalize
 
 import "strconv"
 
-// String returns the string at key in attrs, or nil if the key is absent or
-// holds a non-string value. Unlike Int64/Float64/Bool, String does not
-// coerce: a caller asking for a string wants exactly what the vendor sent as
-// text, and every OTel/JSON encoding already represents text as a native
-// string, so there is no plausible "string in disguise" to recover.
+// String returns the string at key, or nil if absent or non-string.
+// Unlike Int64/Float64/Bool, String does not coerce.
 func String(attrs map[string]any, key string) *string {
 	v, ok := attrs[key]
 	if !ok {
@@ -19,14 +16,9 @@ func String(attrs map[string]any, key string) *string {
 	return &s
 }
 
-// Int64 returns the integer at key, coercing from whatever numeric or
-// numeric-looking representation is actually present. This is required, not
-// defensive-programming paranoia: the live capture shows the same logical
-// field (e.g. tool_result.duration_ms) emitted as a native OTel int in one
-// event and an OTel *string* in another ("12"), and encoding/json decodes
-// every JSON number as float64 regardless of the hook payload's intent. A
-// nil return means "absent", never "zero" — a caller must not conflate the
-// two (SPEC §1.3's promoted-column nullability depends on this).
+// Int64 returns the integer at key, coercing from numeric representations.
+// Coercion is required: live capture shows same field emitted as native int and
+// as string (encoding/json decodes numbers as float64). Nil means absent, not zero.
 func Int64(attrs map[string]any, key string) *int64 {
 	v, ok := attrs[key]
 	if !ok {
@@ -57,9 +49,7 @@ func Int64(attrs map[string]any, key string) *int64 {
 	}
 }
 
-// Float64 returns the float at key, coercing across the same set of
-// representations Int64 does (see Int64's doc for why coercion is
-// necessary, not optional).
+// Float64 returns the float at key, coercing like Int64 does.
 func Float64(attrs map[string]any, key string) *float64 {
 	v, ok := attrs[key]
 	if !ok {
@@ -84,10 +74,8 @@ func Float64(attrs map[string]any, key string) *float64 {
 	}
 }
 
-// Bool returns the boolean at key. The capture shows booleans emitted both
-// as native OTel bools (`is_plugin: false`) and as OTel strings
-// (`safe_mode: "false"`, `success: "false"`), so a string is parsed with
-// strconv.ParseBool rather than only accepted as a native bool.
+// Bool returns the boolean at key, coercing from bool or string.
+// Live capture shows both as native bool and as string.
 func Bool(attrs map[string]any, key string) *bool {
 	v, ok := attrs[key]
 	if !ok {
@@ -106,11 +94,8 @@ func Bool(attrs map[string]any, key string) *bool {
 	}
 }
 
-// Map returns the nested map at key. It reports absence via the second
-// return value rather than a nil map, because a present-but-empty map
-// ({}) and an absent key are both legitimately expressible in JSON/OTLP
-// kvlist attributes and callers (e.g. tool_result's tool_parameters lookup)
-// need to tell them apart.
+// Map returns the nested map at key. Reports absence via bool since {}
+// and absent key are both valid and callers must distinguish them.
 func Map(attrs map[string]any, key string) (map[string]any, bool) {
 	v, ok := attrs[key]
 	if !ok {
@@ -120,23 +105,14 @@ func Map(attrs map[string]any, key string) (map[string]any, bool) {
 	return m, ok
 }
 
-// StringLike stringifies whichever scalar representation is present at key
-// — string, then int64, then float64, then bool, in that order — for text
-// columns whose vendor attribute has no fixed type (e.g. api_error's
-// `status_code` fallback for `error_type`, which the capture never observed
-// but SPEC §1.5.1 documents as an int-typed HTTP status). Returns nil only
-// when the key is wholly absent or holds an unrepresentable type (a nested
-// map or array).
+// StringLike stringifies whichever scalar is present at key
+// (string, int64, float64, bool in order), for columns with no fixed type.
+// Returns nil only when key is absent or unrepresentable.
 func StringLike(attrs map[string]any, key string) *string {
 	if s := String(attrs, key); s != nil {
 		return s
 	}
-	// Float64 is tried before Int64 deliberately: Int64 truncates a native
-	// float64 (2.5 → 2) so a genuine floating-point attribute value would
-	// otherwise silently lose its fractional part when stringified here.
-	// Float64.FormatFloat with precision -1 still renders a whole number
-	// without a trailing ".0" (e.g. int64(42) → "42"), so trying Float64
-	// first costs nothing for integer-valued attributes.
+	// Try Float64 before Int64: preserves fractional part for floats.
 	if f := Float64(attrs, key); f != nil {
 		s := strconv.FormatFloat(*f, 'f', -1, 64)
 		return &s

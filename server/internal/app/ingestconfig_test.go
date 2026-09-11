@@ -11,18 +11,9 @@ import (
 )
 
 // TestIngestPipelineConfig_MapsEveryConfigKey guards the config -> pipeline
-// seam. Both sides of ARGUS_INGEST_WRITE_TIMEOUT were individually tested
-// (config_test's TestLoadIngestWriteTimeout parses it; internal/ingest's
-// TestRetry_WriteTimeoutBoundsEachAttempt proves the pipeline honours it)
-// while the single assignment joining them was covered by nothing — and an
-// omitted assignment here does not fail, it silently substitutes the
-// pipeline's own default, so the server would quietly ignore the operator's
-// configured value. That is the same shape as the two integration defects
-// Phase 3 shipped.
-//
-// The distinct non-default values matter: mapping a field to the wrong
-// source key would still produce a fully-populated struct, so the assertion
-// is per-field equality, not merely non-zeroness.
+// seam. Both sides were individually tested; an omitted assignment silently
+// substitutes the pipeline's default (same integration-defect shape Phase 3
+// shipped). Assertion is per-field equality, not merely non-zeroness.
 func TestIngestPipelineConfig_MapsEveryConfigKey(t *testing.T) {
 	t.Parallel()
 

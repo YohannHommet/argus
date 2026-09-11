@@ -1,9 +1,4 @@
-// read_events_test.go is a black-box (package postgres_test) integration
-// suite for ListEvents/GetEvent (P3-03), following read_sessions_test.go's
-// convention (external test package; seeding helpers insert directly via
-// SQL for precise control over ts/vendor_seq/seq/attrs that the write path
-// would be awkward to steer). Reuses newStore/ensureRange/nextTestSessionID
-// from write_test.go/read_sessions_test.go rather than redefining them.
+// read_events_test.go is a black-box integration suite for ListEvents/GetEvent (P3-03); see read_sessions_test.go for conventions.
 package postgres_test
 
 import (
@@ -134,8 +129,6 @@ func seedFullEvent(t *testing.T, pool *pgxpool.Pool, seed eventSeed) {
 	require.NoError(t, err)
 }
 
-// --- ordering ACs ---------------------------------------------------------
-
 func TestListEvents_IdenticalTS_OrdersByVendorSeqNotSeq(t *testing.T) {
 	st, pool := newStore(t)
 	sessionID := nextTestSessionID("tie")
@@ -197,8 +190,6 @@ func TestListEvents_OrderDescIsExactReverseOfAsc(t *testing.T) {
 	}
 }
 
-// --- fields=slim|full ------------------------------------------------------
-
 func TestListEvents_FieldsSlimOmitsAttrs_MeasurablySmaller(t *testing.T) {
 	st, pool := newStore(t)
 	sessionID := nextTestSessionID("fields")
@@ -229,8 +220,6 @@ func TestListEvents_FieldsSlimOmitsAttrs_MeasurablySmaller(t *testing.T) {
 	require.NoError(t, err)
 	require.Greaterf(t, len(fullJSON), len(slimJSON), "full JSON (%d bytes) must be measurably larger than slim (%d bytes)", len(fullJSON), len(slimJSON))
 }
-
-// --- cross-partition keyset pagination -------------------------------------
 
 func TestListEvents_KeysetAcrossPartitionBoundary_EveryRowExactlyOnce(t *testing.T) {
 	st, pool := newStore(t)
@@ -280,8 +269,6 @@ func TestListEvents_KeysetAcrossPartitionBoundary_EveryRowExactlyOnce(t *testing
 	}
 }
 
-// --- GetEvent ---------------------------------------------------------------
-
 func TestGetEvent_NotFound(t *testing.T) {
 	st, _ := newStore(t)
 	_, err := st.GetEvent(context.Background(), model.EventRef{TS: time.Now().UTC(), Seq: 999999})
@@ -310,12 +297,7 @@ func TestGetEvent_ReturnsRowWithAttrs(t *testing.T) {
 	require.Equal(t, "reject", got.Attrs["tool_decision.decision"])
 }
 
-// TestGetEvent_IndexScanOnSinglePartition verifies SPEC §2.5's AC: GetEvent's
-// (ts, seq) PK lookup shows an Index Scan touching exactly one partition
-// (review M2: there is no events.id index, so a uuid lookup would have been
-// a full scan of every partition). Asserted on EXPLAIN plan text per the
-// ticket note (P3-02's equivalent AC used pg_stat_user_indexes deltas
-// instead, but this AC explicitly names EXPLAIN and "one partition").
+// TestGetEvent_IndexScanOnSinglePartition verifies SPEC §2.5: an Index Scan on exactly one partition (not a full scan, since there is no events.id index).
 func TestGetEvent_IndexScanOnSinglePartition(t *testing.T) {
 	st, pool := newStore(t)
 	sessionID := nextTestSessionID("explain-getevent")
@@ -372,12 +354,7 @@ func TestGetEvent_IndexScanOnSinglePartition(t *testing.T) {
 	}
 }
 
-// TestListEvents_SessionTimeline_IndexScanWithPartitionPruning verifies SPEC
-// §2.5's AC for the session timeline: an index scan on
-// `events_*(session_id, ts, seq)` with partition pruning. Built from the
-// exact filter/page ListEvents itself uses (store.EventFilter.SessionID),
-// EXPLAINed directly rather than through the store method, since Store
-// exposes no EXPLAIN hook.
+// TestListEvents_SessionTimeline_IndexScanWithPartitionPruning verifies SPEC §2.5: an index scan on (session_id, ts, seq) with partition pruning.
 func TestListEvents_SessionTimeline_IndexScanWithPartitionPruning(t *testing.T) {
 	st, pool := newStore(t)
 	sessionID := nextTestSessionID("explain-timeline")
@@ -429,8 +406,6 @@ func TestListEvents_SessionTimeline_IndexScanWithPartitionPruning(t *testing.T) 
 	expectedIndex := fmt.Sprintf("events_%04d_%02d_session_ts_seq_idx", month.Year(), month.Month())
 	require.Contains(t, plan, expectedIndex, "the session timeline must ride the (session_id, ts, seq) index")
 }
-
-// --- cursor codec (verified through the exported API only) ----------------
 
 func TestListEvents_CursorRejectsWrongOrder(t *testing.T) {
 	st, pool := newStore(t)
@@ -503,8 +478,6 @@ func TestListEvents_KeysetPagination_DescOrder_ZeroDuplicatesZeroOmissions(t *te
 	}
 }
 
-// --- filter fields ----------------------------------------------------------
-
 func TestListEvents_EveryFilterField(t *testing.T) {
 	st, pool := newStore(t)
 	sessionID := nextTestSessionID("filters")
@@ -561,8 +534,6 @@ func TestListEvents_FromToBoundsTS(t *testing.T) {
 	require.Equal(t, int64(13002), got[0].Seq)
 }
 
-// --- GetEvent nullable-field round-trip -------------------------------------
-
 func TestGetEvent_NullableNumericAndBooleanFields(t *testing.T) {
 	st, pool := newStore(t)
 	sessionID := nextTestSessionID("getevent-numeric")
@@ -598,8 +569,6 @@ func TestGetEvent_NullableNumericAndBooleanFields(t *testing.T) {
 	require.Nil(t, got2.CostUSD)
 	require.Nil(t, got2.Success)
 }
-
-// --- EventsSince (P5-01a, SPEC §5.2: SSE Last-Event-ID replay's storage half) ---
 
 // TestEventsSince_StrictTSSeqOrdering_NoDupesNoGaps is the case a naive
 // `ts > $x` predicate gets wrong: two rows share the same ts and differ only
@@ -702,10 +671,7 @@ func TestEventsSince_EmptyResult_AtOrPastNewest(t *testing.T) {
 	require.Empty(t, gotPastNewest)
 }
 
-// TestEventsSince_SlimShape verifies EventsSince returns the same normalized
-// columns ListEvents' slim shape carries (SPEC §5.1: the SSE `event: event`
-// frame omits attrs; the UI fetches the full event by event_ref when the
-// drawer opens) and never populates Attrs.
+// TestEventsSince_SlimShape verifies EventsSince returns the slim shape (no attrs per SPEC §5.1).
 func TestEventsSince_SlimShape(t *testing.T) {
 	st, pool := newStore(t)
 	sessionID := nextTestSessionID("since-slim")

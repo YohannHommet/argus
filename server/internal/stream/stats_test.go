@@ -13,10 +13,8 @@ import (
 	"github.com/YohannHommet/argus/server/internal/stream"
 )
 
-// fakeStatsTarget is stream.StatsTarget's test double: it only ever records
-// what it was handed. StatsBroadcaster's derivation logic (EventsPerSec,
-// IngestLagMS) is exercised against this, never a real *Hub, so these tests
-// need no subscriber and no real wall-clock 2s interval.
+// fakeStatsTarget: test double for stream.StatsTarget. Records what it's
+// handed. StatsBroadcaster's derivation logic tested against this (not real Hub).
 type fakeStatsTarget struct {
 	mu    sync.Mutex
 	stats []stream.Stats
@@ -40,9 +38,8 @@ func (f *fakeStatsTarget) count() int {
 	return len(f.stats)
 }
 
-// scriptedSnapshotFunc returns snaps[0], snaps[1], ... in order, then keeps
-// returning the last one forever (so a broadcaster ticking a few extra
-// times after the script runs out doesn't panic the test).
+// scriptedSnapshotFunc: returns snaps in order, then last one forever
+// (broadcaster ticking after script runs out doesn't panic).
 func scriptedSnapshotFunc(snaps ...stream.Snapshot) stream.SnapshotFunc {
 	var mu sync.Mutex
 	i := 0

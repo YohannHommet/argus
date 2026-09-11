@@ -9,36 +9,21 @@ import (
 	"github.com/YohannHommet/argus/server/internal/model"
 )
 
-// resourceAttrPrefix is the namespace SPEC §3.4 reserves for resource
-// attributes once merged into an event's attrs: "keep resource attributes
-// … in attrs under a resource. prefix". Scope and record attributes are not
-// prefixed, and record wins over scope on a bare-key collision (SPEC §3.4:
-// "merge resource/scope attributes with record attributes (record wins)").
+// resourceAttrPrefix reserves namespace for resource attrs (SPEC §3.4: "resource.").
+// Scope/record unprefixed; record wins on collision.
 const resourceAttrPrefix = "resource."
 
-// clockSkewThreshold is SPEC §3.4's "disagreement > 5 s raises
-// clock_skewed" bound between LogRecord.TimeUnixNano and the event.timestamp
-// attribute.
+// clockSkewThreshold is SPEC §3.4's "disagreement > 5 s" bound.
 const clockSkewThreshold = 5 * time.Second
 
-// Normalizer holds the state FromOTLPLogs needs injected to be
-// deterministic in tests (ticket P2-02 rule 8): SPEC §1.2's clock clamp
-// needs "now", and its retention-tied lower bound is an operator-configured
-// duration. Both are fields here rather than package-level state so
-// normalize never imports internal/config (depguard, SPEC §3.1) and so a
-// test can freeze the clock instead of racing time.Now.
+// Normalizer holds injected state for deterministic tests (SPEC rule 8 ticket P2-02).
+// Fields here instead of package-level to avoid internal/config import (depguard) and
+// allow tests to freeze the clock.
 type Normalizer struct {
-	// Now returns the server clock used as both IngestedAt and the "now"
-	// SPEC §1.2's clamp measures agent-reported timestamps against. Callers
-	// must set this (NewNormalizer does); a nil Now is treated as time.Now
-	// defensively rather than panicking, since a zero-value Normalizer is a
-	// plausible mistake to make once, not a case worth crashing on.
+	// Now returns server clock (IngestedAt and "now" per SPEC §1.2). Nil → time.Now.
 	Now func() time.Time
 
-	// RetentionRaw is ARGUS_RETENTION_RAW_DAYS as a time.Duration — the
-	// lower bound of model.ClampTimestamp's clock-sanity window (SPEC
-	// §1.2: "tied to retention … so a legitimate backfill inside the
-	// retention window is never rewritten").
+	// RetentionRaw is ARGUS_RETENTION_RAW_DAYS, lower bound of ClampTimestamp window.
 	RetentionRaw time.Duration
 }
 
@@ -49,19 +34,10 @@ func NewNormalizer(now func() time.Time, retentionRaw time.Duration) *Normalizer
 	return &Normalizer{Now: now, RetentionRaw: retentionRaw}
 }
 
-// FromOTLPLogs implements SPEC §1.5.1 and §3.4 end to end for one decoded
-// OTLP LogsData payload: it walks ResourceLogs → ScopeLogs → LogRecord,
-// merges resource/scope/record attributes (record wins, resource attrs kept
-// under a "resource." prefix), resolves the event name (eventname.go),
-// applies the §1.5.1 per-event-name field mapping, and assigns a dedup key
-// and clamped/skew-flagged timestamp to every resulting Event.
-//
-// It never returns an error: the OTLP/HTTP receiver's partial_success
-// design (SPEC §3.4) means a record that cannot be interpreted still gets
-// stored as kind='unknown' rather than failing the request. The only record
-// this function declines to turn into an Event is one with no session.id at
-// all — nothing to key a stored row on — which is reported as a Rejection
-// instead, and a rejection never discards the rest of the batch.
+// FromOTLPLogs implements SPEC §1.5.1 and §3.4: walk ResourceLogs/ScopeLogs/LogRecord,
+// merge attrs (record wins, resource prefixed), resolve event name, apply per-event-name
+// mapping, assign dedup_key and clamped/skew-flagged ts. Never errors (partial_success
+// design); only rejection: missing session.id (no row key). Rejects entire batch.
 func (n *Normalizer) FromOTLPLogs(data *logspb.LogsData) ([]model.Event, []Rejection) {
 	var events []model.Event
 	var rejections []Rejection
@@ -93,14 +69,12 @@ func (n *Normalizer) FromOTLPLogs(data *logspb.LogsData) ([]model.Event, []Rejec
 					merged[k] = v
 				}
 				for k, v := range recordAttrs {
-					merged[k] = v // record wins over scope (and a same-keyed prefixed resource attr) on collision
+					merged[k] = v // record wins on collision
 				}
 
 				bodyStr, bodyIsString := otlpBodyString(rec.GetBody())
 				if bodyIsString {
-					// attrs carries "everything, verbatim" (SPEC §1.3); the
-					// body is part of the source record even once it has
-					// also been consumed for event-name resolution below.
+					// Body part of source record even after event-name resolution (SPEC §1.3).
 					merged["body"] = bodyStr
 				}
 

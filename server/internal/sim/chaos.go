@@ -1,27 +1,10 @@
 package sim
 
-// Chaos modes (P2-13, SPEC §7.1's five --chaos-* flags). doc.go's "chaos
-// hooks" note lists the seams P2-12 deliberately left in place; this file is
-// what actually walks through them:
-//
-//   - --chaos-duplicates / --chaos-out-of-order decorate the Transport
-//     interface (chosen over decorating runner.go's send loop directly,
-//     which the doc comment describes but which would require editing
-//     runner.go for every chaos concern — wrapping Transport gets the same
-//     "every encoded payload passes through exactly one seam" property with
-//     zero change to runner.go: cli.go swaps the Transport before handing
-//     it to NewRunner).
-//   - --chaos-orphans is the post-generation slice transform on a session's
-//     own Hooks emissions that doc.go names; generateSession (session.go)
-//     applies it once a session's full emission set exists.
-//   - --chaos-clock-skew and --chaos-unknown are extra draws taken inside
-//     sessionBuilder alongside every other §7.1 distribution, using their
-//     own RNG stream (chaosRand) so enabling them never perturbs the
-//     ordinary event content or ordering a clean run with the same --seed
-//     would have produced.
-//
-// All five flags are independently switchable (Config's doc comment) and
-// off by default.
+// Chaos modes (P2-13, SPEC §7.1). See doc.go's "chaos hooks" for the
+// architectural seams: duplicates/out-of-order via Transport wrapper,
+// orphans via post-generation slice transform, clock-skew/unknown via
+// per-event RNG draws. All five flags are independently switchable and off
+// by default.
 
 import (
 	"context"
@@ -32,10 +15,8 @@ import (
 	logspb "go.opentelemetry.io/proto/otlp/logs/v1"
 )
 
-// Chaos probabilities and magnitudes, transcribed verbatim from SPEC §7.1's
-// chaos paragraph: "--chaos-duplicates (resend 3%) … --chaos-out-of-order
-// (hold 5% for 5-60s) … --chaos-clock-skew (2% ±1h, plus an opt-in
-// beyond-retention event)".
+// Chaos probabilities and magnitudes per SPEC §7.1: duplicates (resend 3%),
+// out-of-order (hold 5% for 5-60s), clock-skew (2% ±1h, plus beyond-retention).
 const (
 	pChaosDuplicate = 0.03
 	pChaosHold      = 0.05
@@ -53,24 +34,11 @@ const (
 	// clamps to the slice length when it does not).
 	chaosOrphanShift = 3
 
-	// chaosTooOldMonthsBack is how many calendar months before "now" the
-	// --chaos-clock-skew opt-in beyond-retention event is timestamped: far
-	// enough back to be in a different monthly partition than "now", while
-	// staying comfortably inside the default 90-day
-	// ARGUS_RETENTION_RAW_DAYS window so §1.2's clamp leaves the timestamp
-	// alone (a clamped timestamp becomes "now" and can never reach a
-	// missing partition — see buildChaosTooOldEvent).
-	//
-	// Until P3-12 this alone produced argus_ingest_too_old_total, because
-	// the partition manager only ever created partitions for the current
-	// month and two ahead. P3-12 (SPEC §2.4 "Backward creation") now also
-	// creates them back to the retention horizon, so this month exists by
-	// default and the event lands normally. The fault therefore has to be
-	// injected on the storage side instead: internal/app's end-to-end test
-	// drops this month's `events` partition before the run, reproducing the
-	// only state in which rule 3 can still fire (a partition the manager
-	// has not created, or an operator dropped). The generator's job stays
-	// unchanged — emit an in-retention event in a different month.
+	// chaosTooOldMonthsBack is how many calendar months back the beyond-retention
+	// event is timestamped: different partition than "now", within retention window
+	// (SPEC §1.2's clamp leaves it alone). P3-12's backward partition creation
+	// means the test injects the fault on storage side (drops the month's partition).
+	// Generator's job: emit an in-retention event in a different month.
 	chaosTooOldMonthsBack = 2
 )
 
@@ -86,23 +54,10 @@ func chaosRand(seed uint64, sessionOrdinal int) *rand.Rand {
 	return rand.New(rand.NewPCG(seed^chosSalt, uint64(sessionOrdinal))) //nolint:gosec // sessionOrdinal is always >=0 by construction (loop counter)
 }
 
-// applyChaosOrphans implements --chaos-orphans (SPEC §7.1: "turn events
-// before SessionStart -> stub-on-reference and the late-project rollup
-// re-mark"). It is a pure post-generation transform on the already-fully-
-// generated per-session Hooks slice (doc.go's chaos-hooks note): it moves
-// the SessionStart hook payload past this session's next chaosOrphanShift
-// hooks, without changing SessionStart's own timestamp — it genuinely
-// happened first, it is merely *delivered* late, exactly like a real slow
-// hook subprocess would.
-//
-// Every event ingested before the delayed SessionStart lands stub-creates
-// the session via rule 1 (status='unknown', started_at NULL) with
-// project="" (only SessionStart's cwd feeds the project projection,
-// upsert_session.go). When SessionStart finally lands it both fills
-// started_at (healing the stub) and changes project from "" to a real
-// value, which is exactly the SPEC §2.4 second dirty-marking rule's
-// trigger: "when a session's project or cwd changes … the session upsert
-// marks every hour bucket from first_seen_at to last_event_at dirty".
+// applyChaosOrphans implements --chaos-orphans (SPEC §7.1): moves SessionStart
+// past next chaosOrphanShift hooks without changing its timestamp, simulating
+// late delivery. Early events stub-create the session (rule 1); SessionStart
+// arrival triggers dirty-marking per SPEC §2.4 (project/cwd change rule).
 func applyChaosOrphans(result sessionResult) sessionResult {
 	startIdx := -1
 	for i, h := range result.Hooks {
@@ -158,22 +113,10 @@ func buildChaosUnknownEvent(id sessionIdentity, ts time.Time, seq int64, promptI
 	return newLogRecord(id, ts, seq, "chaos_invented_event", promptID)
 }
 
-// buildChaosTooOldEvent implements --chaos-clock-skew's opt-in
-// beyond-retention event (SPEC §7.1). It is an ordinary api_request record
-// (same builder, same attribute set every other api_request in this package
-// emits) whose event.timestamp/TimeUnixNano is set chaosTooOldMonthsBack
-// calendar months before ts.
-//
-// A timestamp chosen to be *literally* beyond retention cannot reach rule 3
-// (§1.7: "no DEFAULT partition") at all (P2-13's live-run finding): §1.2's
-// clamp rewrites any ts outside [now-retention, now+1h] to ingested_at
-// before storage ever sees it, so such an event lands in a partition that
-// certainly exists and is merely flagged clock_skewed. The only state that
-// reaches rule 3 is an event genuinely inside the retention window (clamp
-// leaves it alone) whose calendar month has no partition — which since
-// P3-12's backward creation no longer happens by itself, so the missing
-// partition is injected by the test that asserts the counter (see
-// chaosTooOldMonthsBack).
+// buildChaosTooOldEvent implements --chaos-clock-skew's beyond-retention
+// event (SPEC §7.1): an api_request timestamped chaosTooOldMonthsBack before
+// now. SPEC §1.2's clamp keeps it in-retention unless beyond-retention,
+// reaching rule 3 only if its partition is missing (injected by test).
 func buildChaosTooOldEvent(id sessionIdentity, ts time.Time, seq int64) *logspb.LogRecord {
 	tooOld := ts.AddDate(0, -chaosTooOldMonthsBack, 0)
 	return buildAPIRequest(id, tooOld, seq, nil, apiRequestFields{
@@ -188,23 +131,10 @@ func buildChaosTooOldEvent(id sessionIdentity, ts time.Time, seq int64) *logspb.
 	})
 }
 
-// chaosTransport decorates a Transport with --chaos-duplicates (resend
-// ~pChaosDuplicate of sends, byte-identical) and --chaos-out-of-order (hold
-// ~pChaosHold of sends for a random real delay in [chaosHoldFloor,
-// chaosHoldCeil] before delivering them). Both act on the already-encoded
-// wire payload, after generation and immediately around the real
-// Transport.Send* call — doc.go's "runner.go's send loop is the single
-// place every encoded payload passes through before Transport.Send"; since
-// runner.go always calls through the Transport interface and never a
-// concrete type, wrapping that interface here is that single seam, with no
-// change to runner.go itself.
-//
-// Duplicate resends are synchronous (folded into the same Send* call the
-// caller made) so they are guaranteed to have landed by the time that call
-// returns. Held sends are asynchronous (a goroutine tracked by wg) since
-// their entire point is to arrive *after* the caller has moved on; Wait
-// blocks until every held send has actually fired, for a caller (cli.go)
-// that needs the run's true end state before reporting or returning.
+// chaosTransport decorates Transport with --chaos-duplicates (resend ~3% of
+// sends) and --chaos-out-of-order (hold ~5% for random delay before sending).
+// Duplicates are synchronous; held sends are async (goroutines) tracked by wg.
+// Wait blocks until all held sends have fired.
 type chaosTransport struct {
 	Transport
 	cfg   Config
@@ -214,12 +144,8 @@ type chaosTransport struct {
 	sleep func(time.Duration)
 }
 
-// newChaosTransport wraps inner with --chaos-duplicates/--chaos-out-of-order
-// per cfg. Its RNG stream is seeded from cfg.Seed the same way chaosRand
-// derives per-session streams, so a given --seed's chaos decisions are
-// themselves reproducible even though the *content* being duplicated/held
-// is a live HTTP exchange and therefore not byte-for-byte deterministic in
-// wall-clock terms.
+// newChaosTransport wraps inner with chaos flags. RNG is seeded from cfg.Seed
+// like chaosRand (per-session), so chaos decisions are reproducible.
 func newChaosTransport(cfg Config, inner Transport) *chaosTransport {
 	const chosSalt = 0x43484f53 // "CHOS", matching chaosRand's fold
 	return &chaosTransport{

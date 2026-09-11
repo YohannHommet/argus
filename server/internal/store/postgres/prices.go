@@ -48,7 +48,7 @@ type PriceRow struct {
 // model_prices.effective_from is `date`, not `timestamptz` (SPEC §2.4).
 const dateLayout = "2006-01-02"
 
-// seedPrice mirrors one row of server/db/prices/*.json.
+// seedPrice represents one row of server/db/prices/*.json.
 type seedPrice struct {
 	Model             string  `json:"model"`
 	EffectiveFrom     string  `json:"effective_from"`
@@ -60,9 +60,7 @@ type seedPrice struct {
 	Source            string  `json:"source"`
 }
 
-// PriceImportSummary reports what ImportPrices did, per row, so
-// `argusd prices import` can print an honest summary and its integration
-// test can assert a second run changes nothing.
+// PriceImportSummary reports inserted/updated/unchanged rows from ImportPrices.
 type PriceImportSummary struct {
 	Inserted  int
 	Updated   int
@@ -92,8 +90,7 @@ func (s *Store) ImportPrices(ctx context.Context) (PriceImportSummary, error) {
 		inserted, err := q.UpsertModelPrice(ctx, params)
 		switch {
 		case errors.Is(err, pgx.ErrNoRows):
-			// The DO UPDATE's WHERE clause found every column already
-			// matching, so Postgres skipped the write and returned nothing.
+			// DO UPDATE's WHERE clause matched all columns; no change.
 			summary.Unchanged++
 		case err != nil:
 			return summary, fmt.Errorf("postgres: import prices: %s: %w", r.Model, err)
@@ -129,8 +126,7 @@ func (s *Store) ListModelPrices(ctx context.Context) ([]PriceRow, error) {
 	return out, nil
 }
 
-// loadSeedPrices reads and concatenates every *.json file under prices/ in
-// fsys (argusdb.PricesFS in production; a caller-built fs.FS in tests).
+// loadSeedPrices reads and concatenates every prices/*.json file in fsys.
 func loadSeedPrices(fsys fs.FS) ([]seedPrice, error) {
 	matches, err := fs.Glob(fsys, "prices/*.json")
 	if err != nil {
@@ -152,8 +148,7 @@ func loadSeedPrices(fsys fs.FS) ([]seedPrice, error) {
 	return out, nil
 }
 
-// toParams converts one seed row into gen.UpsertModelPriceParams,
-// including the numeric/date pgtype conversions.
+// toParams converts one seed row to gen.UpsertModelPriceParams with pgtype conversions.
 func (r seedPrice) toParams() (gen.UpsertModelPriceParams, error) {
 	effectiveFrom, err := time.Parse(dateLayout, r.EffectiveFrom)
 	if err != nil {
@@ -198,7 +193,6 @@ func (r seedPrice) toParams() (gen.UpsertModelPriceParams, error) {
 	}, nil
 }
 
-// fromModelPrice converts one gen.ModelPrice row back into a PriceRow.
 func fromModelPrice(r gen.ModelPrice) (PriceRow, error) {
 	if !r.EffectiveFrom.Valid {
 		return PriceRow{}, errors.New("effective_from is NULL")

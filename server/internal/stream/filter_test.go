@@ -9,11 +9,8 @@ import (
 	"github.com/YohannHommet/argus/server/internal/stream"
 )
 
-// TestFilter_MatchEvent covers Filter's event-side semantics in isolation
-// from the Hub: Kinds ORs within the field, the three fields AND across
-// each other, and the "" project/vendor rules SPEC §5.3 spells out
-// (ticket AC: "?project= filter matches on Envelope.Project and an
-// envelope with "" matches no project filter").
+// TestFilter_MatchEvent: Kinds OR within field, fields AND across each other,
+// "" project/vendor rules (SPEC §5.3). Envelope.Project="" matches no filter.
 func TestFilter_MatchEvent(t *testing.T) {
 	t.Parallel()
 
@@ -93,10 +90,8 @@ func TestFilter_MatchEvent(t *testing.T) {
 	}
 }
 
-// TestFilter_MatchSession covers the session-frame side: per the
-// prescribed API's doc comment, Kinds does not apply (a SessionSummary has
-// no Kind), only Project/Vendor do, matched directly off the summary
-// (SessionSummary carries both fields itself, no Envelope wrapper needed).
+// TestFilter_MatchSession: session-frame side. Kinds doesn't apply
+// (SessionSummary has no Kind). Only Project/Vendor filter (matched directly).
 func TestFilter_MatchSession(t *testing.T) {
 	t.Parallel()
 

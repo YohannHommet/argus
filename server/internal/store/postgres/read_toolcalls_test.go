@@ -1,7 +1,5 @@
-// read_toolcalls_test.go is a black-box (package postgres_test) integration
-// suite for ListToolCalls (P3-03), reusing read_sessions_test.go's
-// toolCallSeed/seedToolCall and newStore/nextTestSessionID helpers rather
-// than redefining them.
+// read_toolcalls_test.go: black-box integration suite for ListToolCalls (P3-03).
+// Reuses read_sessions_test.go's helpers (toolCallSeed, seedToolCall, newStore, etc.).
 package postgres_test
 
 import (

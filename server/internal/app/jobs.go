@@ -52,14 +52,9 @@ type PartitionJob struct {
 	running sync.Mutex // held for the duration of a tick; TryLock single-flights
 }
 
-// NewPartitionJob constructs a PartitionJob using the SPEC §2.4 defaults
-// (hourly, current month + 2 ahead, backward to retentionRawDays). store
-// must be non-nil; logger must be non-nil. retentionRawDays is
-// ARGUS_RETENTION_RAW_DAYS (config.Config.RetentionRawDays), passed as a
-// plain int rather than *config.Config so internal/app's caller (app.go)
-// keeps sole ownership of the config dependency, matching the
-// config-free-at-the-leaf convention the hook/OTLP normalizers already
-// follow (New's doc comment).
+// NewPartitionJob constructs a PartitionJob: hourly, current month + 2 ahead,
+// backward to retentionRawDays. Accepts plain int, not *config.Config, to
+// keep config dependency at app.go level (config-free-at-the-leaf).
 func NewPartitionJob(store *postgres.Store, logger *slog.Logger, retentionRawDays int) *PartitionJob {
 	return &PartitionJob{
 		store:     store,
@@ -136,10 +131,8 @@ type SweepJob struct {
 	running sync.Mutex // held for the duration of a tick; TryLock single-flights
 }
 
-// NewSweepJob constructs a SweepJob. store and logger must be non-nil.
-// interval is ARGUS_SWEEP_INTERVAL and idle is ARGUS_SESSION_IDLE_TIMEOUT
-// (config.Config), passed as plain values rather than *config.Config for the
-// same config-free-at-the-leaf reason NewPartitionJob's doc comment gives.
+// NewSweepJob constructs a SweepJob. Accepts plain values, not *config.Config,
+// for config-free-at-the-leaf (same reason as NewPartitionJob).
 func NewSweepJob(store *postgres.Store, logger *slog.Logger, interval, idle time.Duration) *SweepJob {
 	return &SweepJob{
 		store:    store,
@@ -276,13 +269,8 @@ type RollupJob struct {
 	running sync.Mutex // held for the duration of a tick; TryLock single-flights
 }
 
-// NewRollupJob constructs a RollupJob. store and logger must be non-nil; a
-// nil metrics uses NewRollupJobMetrics(nil) (production default), matching
-// New's o.registerer plumbing for the ingest pipeline/hooks handler.
-// interval is ARGUS_ROLLUP_INTERVAL and maxBuckets is
-// ARGUS_ROLLUP_MAX_BUCKETS (config.Config), passed as plain values rather
-// than *config.Config for the same config-free-at-the-leaf reason
-// NewPartitionJob's doc comment gives.
+// NewRollupJob constructs a RollupJob. Nil metrics uses NewRollupJobMetrics(nil).
+// Accepts plain values, not *config.Config, for config-free-at-the-leaf.
 func NewRollupJob(store *postgres.Store, logger *slog.Logger, metrics *RollupJobMetrics, interval time.Duration, maxBuckets int) *RollupJob {
 	if metrics == nil {
 		metrics = NewRollupJobMetrics(nil)
@@ -390,13 +378,9 @@ type RetentionJob struct {
 	running sync.Mutex // held for the duration of a tick; TryLock single-flights
 }
 
-// NewRetentionJob constructs a RetentionJob. store and logger must be
-// non-nil. retentionRawDays is ARGUS_RETENTION_RAW_DAYS, dedupWindow is
-// ARGUS_DEDUP_WINDOW, sessionRetentionDays is ARGUS_RETENTION_SESSION_DAYS
-// (0 = never delete sessions, SPEC §2.4/§3.7's documented meaning), and hour
-// is ARGUS_RETENTION_HOUR (config.Config), passed as plain values rather
-// than *config.Config for the same config-free-at-the-leaf reason
-// NewPartitionJob's doc comment gives.
+// NewRetentionJob constructs a RetentionJob. sessionRetentionDays=0 means
+// never delete sessions (SPEC §2.4/§3.7). Accepts plain values, not
+// *config.Config, for config-free-at-the-leaf.
 func NewRetentionJob(store *postgres.Store, logger *slog.Logger, retentionRawDays int, dedupWindow time.Duration, sessionRetentionDays, hour int) *RetentionJob {
 	return &RetentionJob{
 		store:            store,

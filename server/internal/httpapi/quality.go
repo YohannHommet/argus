@@ -12,8 +12,7 @@ import (
 	"github.com/YohannHommet/argus/server/internal/store"
 )
 
-// defaultUnknownKindsSince is openapi.yaml's documented default for
-// GET /api/v1/quality/unknown-kinds' `since` parameter.
+// defaultUnknownKindsSince is the documented default for the `since` parameter.
 const defaultUnknownKindsSince = "-24h"
 
 // unknownKindsListResponse is GET /api/v1/quality/unknown-kinds' body
@@ -30,11 +29,7 @@ func mountQualityRoutes(r chi.Router, reader AnalyticsReader, logger *slog.Logge
 	r.Get("/quality/hook-latency", getQualityHookLatencyHandler(reader, logger))
 }
 
-// getQualityUnknownKindsHandler implements GET /api/v1/quality/unknown-kinds
-// (SPEC §4.3): `since` (RFC 3339 or relative shorthand, default -24h) is the
-// only parameter openapi.yaml exposes — the row-count cap is Argus's own,
-// applied inside store.UnknownKinds (read_quality.go's maxUnknownKindGroups),
-// not a wire-visible limit param.
+// getQualityUnknownKindsHandler implements GET /api/v1/quality/unknown-kinds (SPEC §4.3).
 func getQualityUnknownKindsHandler(reader query.QualityReader, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		raw := r.URL.Query().Get("since")

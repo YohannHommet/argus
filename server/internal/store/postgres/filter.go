@@ -51,7 +51,6 @@ func newClauseBuilder() *clauseBuilder {
 	return &clauseBuilder{}
 }
 
-// placeholder appends v to args and returns its `$n` reference.
 func (b *clauseBuilder) placeholder(v any) string {
 	b.args = append(b.args, v)
 	return fmt.Sprintf("$%d", len(b.args))
@@ -77,8 +76,6 @@ func (b *clauseBuilder) overlapsAny(column string, values []string) string {
 	return fmt.Sprintf("%s && %s", column, b.placeholder(values))
 }
 
-// timeRange renders `column >= $n` / `column <= $n` for whichever of
-// from/to is non-nil, joined with AND if both are set; "" if neither is.
 func (b *clauseBuilder) timeRange(column string, from, to *time.Time) string {
 	var parts []string
 	if from != nil {

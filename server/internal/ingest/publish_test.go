@@ -17,11 +17,9 @@ import (
 	"github.com/YohannHommet/argus/server/internal/stream"
 )
 
-// fakeHubTarget is ingest.HubTarget's test double: it only ever records what
-// it was handed, with no subscriber fan-out at all — HubPublisher's own
-// contract (fast, non-blocking, no I/O) is exercised against this, not a
-// real *stream.Hub, so these tests stay deterministic and need no
-// goroutine/channel teardown of their own.
+// fakeHubTarget is ingest.HubTarget's test double: records what it was handed
+// with no subscriber fan-out, testing HubPublisher's contract (fast,
+// non-blocking, no I/O) deterministically.
 type fakeHubTarget struct {
 	mu    sync.Mutex
 	calls int
@@ -67,10 +65,8 @@ func (f *fakeHubTarget) sessionFrameCount(sessionID string) int {
 	return n
 }
 
-// lastEventProject returns the Project carried by the most recently
-// recorded envelope for sessionID, or "" if none has been recorded — used
-// by the self-correcting-project AC, which cares about the most recent
-// envelope's project, not the whole history.
+// lastEventProject returns the most recent envelope's Project for sessionID,
+// or "" if none recorded — used by the self-correcting-project AC.
 func (f *fakeHubTarget) lastEventProject(sessionID string) string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -83,9 +79,8 @@ func (f *fakeHubTarget) lastEventProject(sessionID string) string {
 }
 
 // fakeSessionReader is ingest.SessionReader's test double: a settable map of
-// session id -> either a *model.SessionSummary or a scripted error, so a
-// test can simulate "SessionStart hasn't landed yet" (an error) followed by
-// "resolved" (a summary) with no database involved at all.
+// session id → *model.SessionSummary or error, simulating resolution or delay
+// with no database.
 type fakeSessionReader struct {
 	mu        sync.Mutex
 	summaries map[string]*model.SessionSummary
@@ -122,7 +117,7 @@ func (f *fakeSessionReader) SessionSummary(_ context.Context, id string) (*model
 	return nil, fmt.Errorf("fakeSessionReader: no summary stubbed for %q", id)
 }
 
-// --- Publish's own contract (hot path, no debounce loop involved) --------
+// Publish's own contract (hot path, no debounce loop involved)
 
 func TestHubPublisher_Publish_CallsHubExactlyOncePerBatch(t *testing.T) {
 	hub := &fakeHubTarget{}
@@ -161,7 +156,7 @@ func TestHubPublisher_Publish_PreservesOrderAndUsesCachedProject(t *testing.T) {
 	pub.Publish(events)
 
 	got := hub.events()
-	require.Len(t, got, 4) // "warm" + a, b, c
+	require.Len(t, got, 4)
 	last3 := got[len(got)-3:]
 	for i, env := range last3 {
 		require.Equal(t, events[i].ID, env.Event.ID, "envelope order must match Publish's input order")
@@ -169,9 +164,7 @@ func TestHubPublisher_Publish_PreservesOrderAndUsesCachedProject(t *testing.T) {
 	}
 }
 
-// --- AC: an envelope for a session whose project is unknown carries "",
-// and self-corrects once the debounce loop reads the resolved projection
-// (SPEC §5.3) ---
+// AC: unknown session projects start "", self-correct after debounce reads resolution (SPEC §5.3)
 
 func TestHubPublisher_ProjectSelfCorrects_AfterDebounceTick(t *testing.T) {
 	hub := &fakeHubTarget{}
@@ -196,8 +189,7 @@ func TestHubPublisher_ProjectSelfCorrects_AfterDebounceTick(t *testing.T) {
 		"once the debounce loop has read the resolved projection, later envelopes must carry the real project")
 }
 
-// --- AC: a session receiving 50 events in 500ms produces at most 2
-// `session` frames ---
+// AC: 50 events in 500ms produces at most 2 session frames
 
 func TestHubPublisher_Debounce_BurstOfFiftyEventsProducesAtMostTwoSessionFrames(t *testing.T) {
 	hub := &fakeHubTarget{}
@@ -225,10 +217,7 @@ func TestHubPublisher_Debounce_BurstOfFiftyEventsProducesAtMostTwoSessionFrames(
 	require.LessOrEqual(t, frames, 2, "50 events landing inside one 500ms window must not produce more than 2 session frames")
 }
 
-// --- AC: a failing transaction publishes zero frames (the UI must never
-// show an event that isn't stored) — pinned end to end through the real
-// Pipeline + HubPublisher, not just through matchPersisted's own unit tests
-// in pipeline_test.go ---
+// AC: failing transaction publishes zero frames (UI must never show unstored events)
 
 func TestHubPublisher_FailingWriteTransactionPublishesZeroEventFrames(t *testing.T) {
 	fw := &fakeWriter{writeBatchFunc: func(_ context.Context, _ []model.Event) (store.BatchResult, error) {

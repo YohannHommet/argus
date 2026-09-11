@@ -12,11 +12,7 @@ import (
 	"github.com/YohannHommet/argus/server/internal/httpapi"
 )
 
-// spaFixtureAssets is a minimal fake SPA build for the m24 audit finding's
-// regression tests: an index.html (the SPA shell) plus one real root static
-// file (robots.txt) — deliberately not favicon.svg, since assets.go's half
-// of m24 must not depend on that file existing (another ticket adds it to
-// web/public/).
+// spaFixtureAssets provides a minimal SPA build: index.html, robots.txt, and a hashed asset.
 func spaFixtureAssets() fstest.MapFS {
 	return fstest.MapFS{
 		"index.html":  &fstest.MapFile{Data: []byte("<html><body>argus spa</body></html>")},
@@ -25,11 +21,7 @@ func spaFixtureAssets() fstest.MapFS {
 	}
 }
 
-// TestMountSPA_MissingRootStaticFile_404NotIndex is m24's core regression
-// test: before the fix, any path that missed the /assets/* mount —
-// including a genuinely missing root file like /favicon.svg — fell through
-// to serveIndex and came back 200 text/html with the whole SPA document, so
-// a client fetching a phantom asset never learned it was missing.
+// TestMountSPA_MissingRootStaticFile_404NotIndex verifies missing static assets 404 (not serve index.html).
 func TestMountSPA_MissingRootStaticFile_404NotIndex(t *testing.T) {
 	t.Parallel()
 
@@ -43,10 +35,7 @@ func TestMountSPA_MissingRootStaticFile_404NotIndex(t *testing.T) {
 	require.NotContains(t, rec.Body.String(), "argus spa", "a missing static asset must not fall back to index.html")
 }
 
-// TestMountSPA_ExistingRootStaticFile_ServedWithRealContentType asserts the
-// other half of m24's fix: a root static file that DOES exist in the
-// assets FS is served through the FileServer (correct content, correct
-// content-type) instead of being swallowed by the SPA fallback.
+// TestMountSPA_ExistingRootStaticFile_ServedWithRealContentType verifies existing static files are served correctly.
 func TestMountSPA_ExistingRootStaticFile_ServedWithRealContentType(t *testing.T) {
 	t.Parallel()
 
@@ -61,10 +50,7 @@ func TestMountSPA_ExistingRootStaticFile_ServedWithRealContentType(t *testing.T)
 	require.Equal(t, "User-agent: *\nDisallow:\n", rec.Body.String())
 }
 
-// TestMountSPA_ClientSideRoute_StillServesIndex guards against the
-// obvious overcorrection: a client-side route with no file extension (the
-// SPA's own URL space) must keep falling through to index.html exactly as
-// before, even though it also misses the /assets/* mount.
+// TestMountSPA_ClientSideRoute_StillServesIndex verifies client-side routes still serve index.html.
 func TestMountSPA_ClientSideRoute_StillServesIndex(t *testing.T) {
 	t.Parallel()
 

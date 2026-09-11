@@ -1,16 +1,9 @@
 //go:build e2e
 
-// stream_e2e_test.go pins P5-03's two ACs that only the real, running
-// server can prove:
-//
-//   - the SSE routes are actually mounted (TestServe_StreamRoutesAreMounted
-//     is TestServe_ReadAPIRoutesAreMounted's P5-03 sibling — same defect
-//     class: router.go mounts them `if d.Stream != nil`, and every
-//     httpapi-level SSE handler test constructs httpapi.New directly, so
-//     none of them can see Serve leaving Deps.Stream nil);
-//   - shutdown actually delivers the `event: shutdown` frame promptly,
-//     pinning the App.shutdown ordering fix documented in serve.go (hub
-//     shutdown before http.Server.Shutdown).
+// stream_e2e_test.go: P5-03 ACs only the real server can prove. (1) SSE
+// routes mounted (router.go mounts `if d.Stream != nil`, handler tests miss
+// this). (2) Shutdown delivers `event: shutdown` promptly (proves
+// App.shutdown's hub-before-server ordering, serve.go).
 package app
 
 import (
@@ -45,11 +38,8 @@ func TestServe_StreamRoutesAreMounted(t *testing.T) {
 	require.Equal(t, "text/event-stream", resp.Header.Get("Content-Type"))
 }
 
-// readUntilEvent scans raw SSE lines off r until one names wantEvent (an
-// "event: <name>" line), then returns. It has no timeout of its own —
-// callers bound it externally (a select against time.After, mirroring
-// internal/httpapi/sse_test.go's own sseReader convention of leaving the
-// timeout to the caller's context/select rather than baking one in here).
+// readUntilEvent: scans SSE lines until "event: <name>" found. No timeout;
+// callers bound externally (select against time.After).
 func readUntilEvent(t *testing.T, r *bufio.Reader, wantEvent string) {
 	t.Helper()
 	want := "event: " + wantEvent

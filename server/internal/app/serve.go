@@ -84,17 +84,9 @@ func (a *App) Serve(ctx context.Context) error {
 		OTLPMounter: a.otlp,
 	})
 
-	// The listener is bound synchronously, before Addr()/Listening() has any
-	// meaning to a caller, and before the accept loop's own goroutine
-	// starts — net.Listen is fast and this keeps "Serve has bound its
-	// listener" an unambiguous, race-free signal rather than something a
-	// caller has to poll for. Binding this way (rather than
-	// http.Server.ListenAndServe, which opens its own listener internally
-	// with no way to read back the resolved address) is what lets a caller
-	// pass HTTPAddr="127.0.0.1:0" and discover the OS-assigned port via
-	// Addr() instead of guessing a free one ahead of time and racing this
-	// bind (P2-13's end-to-end test needs exactly that: an ephemeral port,
-	// never a hardcoded one).
+	// Bind synchronously before accept loop: keeps "listener bound" an
+	// unambiguous, race-free signal. Also lets caller pass :0 and discover
+	// OS-assigned port via Addr() instead of guessing (P2-13's e2e test).
 	var lc net.ListenConfig
 	ln, err := lc.Listen(ctx, "tcp", a.cfg.HTTPAddr)
 	if err != nil {
@@ -107,23 +99,10 @@ func (a *App) Serve(ctx context.Context) error {
 	a.server = &http.Server{
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
-		// ReadTimeout/WriteTimeout bound the whole request/response
-		// lifecycle, not just the headers: chi's mw.Timeout (router.go, 30s)
-		// only cancels the request's context, which io.ReadAll(r.Body) in
-		// the hooks/OTLP handlers never observes, so a client that finishes
-		// headers and then trickles its body would otherwise hold the
-		// connection (and a goroutine) open indefinitely — on endpoints
-		// unauthenticated by default (ARGUS_INGEST_TOKEN's empty default).
-		// 30s matches chi's own request-context timeout so neither layer is
-		// the effectively-looser one.
-		//
-		// NOTE for whoever adds the Phase 5 SSE endpoint
-		// (/api/v1/sessions/{id}/stream): a fixed WriteTimeout is
-		// incompatible with a connection that must legitimately stay open
-		// far longer than 30s. Do not raise this global value for that —
-		// use http.ResponseController.SetWriteDeadline (or reset it
-		// per-write) on the SSE handler alone once it exists; every other
-		// handler should keep the bound this comment describes.
+		// ReadTimeout/WriteTimeout bound whole lifecycle: chi's mw.Timeout
+		// only cancels ctx, which io.ReadAll(r.Body) doesn't observe (M11 fix).
+		// SSE endpoints: use http.ResponseController.SetWriteDeadline per-write,
+		// don't raise global 30s for streaming connections.
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 30 * time.Second,
 		IdleTimeout:  60 * time.Second,

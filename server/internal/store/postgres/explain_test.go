@@ -14,38 +14,15 @@ import (
 	"github.com/YohannHommet/argus/server/internal/store/postgres"
 )
 
-// explainCase names one read_analytics.go-backed query (SPEC §2.5's "every
-// analytics read hits rollup_hourly/rollup_daily ... no v1 endpoint
-// aggregates over events at request time") plus the literal parameter
-// values EXPLAIN needs to plan it. SQL is copied verbatim from
-// internal/store/postgres/gen/read_analytics.sql.go's generated $N-form
-// constants (sqlc v1.31.1's compiled output of db/queries/read_analytics.sql
-// — see that file's own `-- name: X` queries for the human-authored
-// source), NOT re-derived from the `sqlc.arg(...)` source form, because
-// Postgres has no idea what `sqlc.arg` means: only sqlc's compiled $N SQL is
-// valid to EXPLAIN directly. This file cannot import gen's unexported
-// consts (different package, and P3-10's file ownership does not extend to
-// touching gen/*.go or refactoring read_analytics.go to expose them), so the
-// ten queries are copied here as literal strings instead — a deliberate,
-// documented duplication kept in exact sync with gen/read_analytics.sql.go
-// by naming which sqlc query each one mirrors.
+// explainCase holds one analytics query plus parameter values for EXPLAIN.
+// SQL is copied verbatim from gen/read_analytics.sql.go's $N-form constants (not sqlc.arg source form, since EXPLAIN needs raw SQL).
 type explainCase struct {
 	name string
 	sql  string
 	args []any
 }
 
-// analyticsExplainCases enumerates EVERY query read_analytics.go's
-// AnalyticsSummary/AnalyticsSeries/AnalyticsBreakdown/AnalyticsDecisions
-// issue (SPEC §3.3, §4.3) — SummaryAttributable/SummaryNonAttributable/
-// MetricsOnlyProjects/SeriesHourly/SeriesDaily/BreakdownRollup/
-// BreakdownToolCalls/BreakdownQuerySource/DecisionCounts/DecisionBySource.
-// Argument values are arbitrary but well-typed placeholders (EXPLAIN plans a
-// query the same way regardless of which values are bound, since these
-// statements have no value-dependent partial index or CHECK-constraint
-// exclusion to trigger) — a fixed one-hour window, a non-empty enum value
-// for the group_by/dimension CASE arguments, and empty filter arrays (SPEC
-// §4.1's "empty means no restriction").
+// analyticsExplainCases enumerates all analytics queries read_analytics.go issues; args are arbitrary but well-typed placeholders.
 func analyticsExplainCases(now time.Time) []explainCase {
 	from, to := now.Add(-time.Hour), now
 	empty := []string{}
@@ -278,27 +255,13 @@ func explainPlanText(t *testing.T, pool *pgxpool.Pool, sql string, args []any) s
 	return sb.String()
 }
 
-// planMentionsEvents reports whether an EXPLAIN plan references the events
-// relation. A plain substring check is safe here: none of Argus's other
-// table/index names (rollup_hourly, rollup_daily, tool_calls, sessions,
-// subagents, metric_samples, metric_series_state, ingest_dedup, job_state,
-// model_prices, rollup_dirty) contain "events" as a substring, so this
-// cannot false-positive on an unrelated relation name, and a monthly
-// `events_YYYY_MM` partition name (were one ever to leak into a plan
-// despite this test never touching that table) would trip it too.
+// planMentionsEvents reports whether an EXPLAIN plan references the events relation (safe substring check; no other table names contain "events").
 func planMentionsEvents(plan string) bool {
 	return strings.Contains(plan, "events")
 }
 
-// --- The permanent architectural gate (SPEC §2.5, P3-10). ------------------
-//
-// Enumerates every query read_analytics.go issues and fails if any plan
-// mentions `events`. The allow-list below covers the SPEC §2.5-exempted
-// data-quality and hook-latency queries (events(kind, ts DESC), bounded to
-// the requested window): UnknownKinds.UnknownKindGroups and HookLatency's
-// hand-written statement (P3-08, internal/store/postgres/read_quality.go).
-// DataQuality is intentionally absent — it never touches `events` at all
-// (see read_quality.go's package doc), so it has no query to allow-list.
+// The permanent architectural gate (SPEC §2.5, P3-10): analytics queries must not touch events.
+// Allow-list below covers SPEC §2.5-exempted data-quality queries (UnknownKindGroups, HookLatency).
 var dataQualityAllowList = []explainCase{
 	{"UnknownKindGroups", `
 		SELECT
@@ -343,22 +306,7 @@ func TestExplainGuard_AnalyticsQueriesNeverTouchEvents(t *testing.T) {
 	}
 }
 
-// TestExplainGuard_DataQualityAllowList asserts the two conditions SPEC §2.5
-// attaches to its exemption, rather than merely printing the plans.
-//
-// The exemption is conditional — those queries "are exempt and explicitly
-// listed in that test's allow-list, **bounded to their windows**" — so an
-// allow-listed entry that stopped being window-bounded would be exactly the
-// unbounded scan over `events` the gate exists to prevent, while sitting on
-// the list that excuses it. Two things are therefore checked per entry:
-//
-//  1. the plan really does touch `events` — an entry that does not belong on
-//     this list at all should be caught, not silently carried; and
-//  2. the plan applies a `ts` bound, which is what keeps the scan
-//     proportional to the requested window instead of to all of retention.
-//
-// This test was log-only when first written (t.Logf and no assertion), which
-// made a populated allow-list indistinguishable from an empty one.
+// TestExplainGuard_DataQualityAllowList asserts the two SPEC §2.5 exemption conditions: allows-listed entries must (1) actually touch events, and (2) apply a ts bound.
 func TestExplainGuard_DataQualityAllowList(t *testing.T) {
 	st, pool := newStore(t)
 	require.NotEmpty(t, dataQualityAllowList,
@@ -386,12 +334,7 @@ func TestExplainGuard_DataQualityAllowList(t *testing.T) {
 	}
 }
 
-// planBoundsTS reports whether an EXPLAIN plan constrains `ts`, whether the
-// bound shows up as an index condition, a filter, or partition pruning. It
-// deliberately looks for the column in a comparison rather than for a
-// specific plan node: which of those forms Postgres picks depends on row
-// counts and available indexes, and this assertion is about the query being
-// window-bounded at all, not about how the planner chose to apply it.
+// planBoundsTS reports whether a plan constrains ts (in any form: index condition, filter, or pruning).
 func planBoundsTS(plan string) bool {
 	for _, form := range []string{"ts >=", "ts >", "ts <=", "ts <", "ts = "} {
 		if strings.Contains(plan, form) {
@@ -401,31 +344,9 @@ func planBoundsTS(plan string) bool {
 	return false
 }
 
-// TestExplainGuard_DetectsEventsInPlan is the guard's own regression test:
-// it proves planMentionsEvents actually catches a plan that touches events,
-// using a synthetic query (never one of read_analytics.go's real
-// statements) that deliberately scans the events table. This is the
-// permanent, always-run form of the ticket's "prove it FAILS when pointed
-// at a deliberately events-touching query" ask — during implementation this
-// was additionally verified by hand against a real analytics query (see
-// this ticket's report): BreakdownRollup's `FROM rollup_hourly` was
-// temporarily changed to read from `events` directly, which made
-// TestExplainGuard_AnalyticsQueriesNeverTouchEvents fail exactly as
-// expected, then reverted. That manual check is not repeatable as a
-// standing test (it would require mutating read_analytics.go's real SQL),
-// so this synthetic canary is what stays in the suite to catch a future
-// regression in planMentionsEvents itself.
-// --- M9 (pre-Phase-4 audit wave, ticket W3): AggregateEventRollup's new
-// [from_ts, to_ts) range predicate must let the planner prune partitions
-// outside the claimed bucket window, instead of Append-scanning every
-// retained `events` partition on every 60s rollup tick. ------------------
+// TestExplainGuard_DetectsEventsInPlan is a regression test proving planMentionsEvents catches events-touching plans using a synthetic query.
 
-// aggregateEventRollupSQL is copied verbatim from sqlc's compiled
-// aggregateEventRollup const (internal/store/postgres/gen/rollups.sql.go),
-// for the same reason analyticsExplainCases above copies read_analytics.go's
-// compiled queries: Postgres can only EXPLAIN sqlc's compiled $N-form SQL,
-// not the sqlc.arg(...) source form, and this package cannot import gen's
-// unexported consts from a different (_test) package.
+// aggregateEventRollupSQL is copied verbatim from gen/rollups.sql.go's compiled $N-form SQL (same reason as analyticsExplainCases).
 const aggregateEventRollupSQL = `
 	SELECT
 	    date_trunc('hour', e.ts, 'UTC')::timestamptz                        AS bucket,
@@ -468,21 +389,7 @@ const fetchMetricRowsForRollupSQL = `
 	  AND date_trunc('hour', ms.ts, 'UTC') = ANY($3::timestamptz[])
 	ORDER BY ms.series_hash, ms.ts`
 
-// prunedToSinglePartition reports whether an EXPLAIN plan shows structural
-// evidence that the planner eliminated every candidate partition but the
-// ones named in want, given the full universe of partition names present
-// (all). This covers both shapes Postgres's planner can produce for a
-// range predicate narrow enough to match only some partitions: an Append
-// node listing "Subplans Removed: N" (when it still considers pruning worth
-// showing explicitly), or — for a range this narrow, matching exactly one
-// partition — collapsing the Append away entirely and planning directly
-// against that partition, which is a *stronger* pruning result than
-// "Subplans Removed" but leaves no such node to look for. Either shape is
-// valid proof the M9 range predicate is sargable against the partition key
-// (unlike the pre-fix STABLE `date_trunc(...) = ANY(...)` alone, which
-// cannot prune at all — the audit's own repro: "Append -> Seq Scan" on
-// every one of six partitions, no "Subplans Removed"): what matters is that
-// none of the excluded partitions' names appear in the plan at all.
+// prunedToSinglePartition reports whether a plan eliminates all partitions except those in want (either via "Subplans Removed" or direct plan collapse).
 func prunedToSinglePartition(t *testing.T, plan string, all, want []string) bool {
 	t.Helper()
 	if strings.Contains(plan, "Subplans Removed") {
@@ -502,14 +409,7 @@ func prunedToSinglePartition(t *testing.T, plan string, all, want []string) bool
 	return true
 }
 
-// seedMonthOfEvents writes n LLM-request events, one per minute starting at
-// month, into whatever `events` partition already covers that range
-// (EnsurePartitions must be called first) — enough real rows per partition
-// that ANALYZE gives the planner honest per-partition statistics, so the
-// Append plan this test measures is the same shape a production-sized
-// `events` table would produce, not the degenerate "Result / One-Time
-// Filter: false" plan explain_test.go's own doc comment on
-// TestExplainGuard_DataQualityAllowList warns an empty schema would give.
+// seedMonthOfEvents writes n LLM-request events one per minute to ensure the planner has honest per-partition statistics.
 func seedMonthOfEvents(t *testing.T, st *postgres.Store, month time.Time, n int, sessionIDPrefix string) {
 	t.Helper()
 	ctx := context.Background()
@@ -522,16 +422,7 @@ func seedMonthOfEvents(t *testing.T, st *postgres.Store, month time.Time, n int,
 	require.NoError(t, err)
 }
 
-// TestAggregateEventRollup_PrunesPartitions and
-// TestFetchMetricRowsForRollup_PrunesPartitions are M9's EXPLAIN proof: six
-// consecutive monthly `events`/`metric_samples` partitions, each with real
-// rows, ANALYZEd, then EXPLAIN on a single target hour's claimed bucket.
-// Before the fix (no range predicate, only the STABLE
-// `date_trunc(...) = ANY(buckets)` equality), every partition is Append-
-// scanned regardless of which single hour is claimed — this is the "fires
-// every 60s tick" defect. After the fix, the added [from_ts, to_ts) range
-// lets the planner eliminate every partition but the one the target hour
-// actually falls in.
+// TestAggregateEventRollup_PrunesPartitions and TestFetchMetricRowsForRollup_PrunesPartitions are M9's EXPLAIN proof: range predicate [from_ts, to_ts) enables partition pruning.
 func TestAggregateEventRollup_PrunesPartitions(t *testing.T) {
 	st, pool := newStore(t)
 	ctx := context.Background()
@@ -588,30 +479,7 @@ func TestFetchMetricRowsForRollup_PrunesPartitions(t *testing.T) {
 		monthsCovered, plan)
 }
 
-// TestEventsSince_IndexScanWithPartitionPruning is P5-01a's EXPLAIN AC (SPEC
-// §5.2): EventsSince's real predicate — `ts >= $windowStart AND (ts, seq) >
-// ($ts, $seq) ORDER BY ts, seq LIMIT $n` — must use an Index Scan on the
-// (ts, seq) primary key and prune partitions, not Append-scan every
-// retained `events` partition on every SSE reconnect (SPEC §5.2's own
-// stated failure mode for the bare `seq > $n` alternative it rejects).
-//
-// The SQL here is copied from read_events.go's unexported eventsSinceSQL
-// constant, trimmed to a minimal SELECT list (same convention
-// TestGetEvent_IndexScanOnSinglePartition and
-// TestListEvents_SessionTimeline_IndexScanWithPartitionPruning already use
-// in read_events_test.go): this package cannot import an unexported
-// identifier from the sibling postgres package, and which columns are
-// selected does not change the planner's choice between an Index Scan and
-// a Seq Scan — only WHERE/ORDER BY/LIMIT do.
-//
-// Four consecutive monthly partitions are seeded so pruning has something
-// to prove: windowStart falls inside the third month (December). The `ts >=
-// $windowStart` bound alone (no upper ts bound exists in this predicate) is
-// what SPEC §5.2 calls pruning "to at most two partitions" — December
-// (windowStart's own month) and January (nothing above bounds it) — while
-// October and November, both strictly before windowStart, must be excluded
-// entirely. This is a different case from GetEvent's own EXPLAIN AC
-// (equality on both ts and seq, pruning to exactly one partition).
+// TestEventsSince_IndexScanWithPartitionPruning is P5-01a's EXPLAIN AC: EventsSince's (ts,seq) row-comparison predicate must use an Index Scan and prune partitions (SPEC §5.2).
 func TestEventsSince_IndexScanWithPartitionPruning(t *testing.T) {
 	st, pool := newStore(t)
 	ctx := context.Background()

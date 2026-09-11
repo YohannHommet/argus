@@ -17,17 +17,14 @@ import (
 	"github.com/YohannHommet/argus/server/internal/httpapi"
 )
 
-// fakeStore is the minimal httpapi.HealthChecker fake used to exercise
-// /readyz's up/down branches without a real database (SPEC §3.5 / §3.8).
+// fakeStore is a test double for HealthChecker.
 type fakeStore struct {
 	err error
 }
 
 func (f fakeStore) Health(_ context.Context) error { return f.err }
 
-// mounterFunc lets a test satisfy httpapi.Mounter with a plain function,
-// exercising the ingest.Mounter-shaped seam the PLAN's file-ownership note
-// requires router.go to leave for P2.
+// mounterFunc is a function-based httpapi.Mounter for testing.
 type mounterFunc func(r chi.Router)
 
 func (f mounterFunc) Mount(r chi.Router) { f(r) }
@@ -136,12 +133,7 @@ func TestMeta_NoTokenConfigured_AlwaysOK(t *testing.T) {
 	require.Contains(t, rec.Body.String(), `"retention_days":90`)
 }
 
-// TestShutdown_InFlightRequestCompletes exercises the same http.Server.
-// Shutdown mechanism internal/app.Serve uses for the SPEC §3.8 shutdown
-// sequence: an in-flight request must complete, and Shutdown must return,
-// well before any reasonable grace deadline. It uses the HookMounter seam
-// to install a slow handler, which doubles as coverage that the seam is
-// wired correctly.
+// TestShutdown_InFlightRequestCompletes verifies graceful shutdown allows in-flight requests.
 func TestShutdown_InFlightRequestCompletes(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})

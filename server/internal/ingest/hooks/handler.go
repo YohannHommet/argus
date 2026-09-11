@@ -1,12 +1,5 @@
-// Package hooks implements ticket P2-11: the Claude Code hooks webhook,
-// `POST /ingest/hook` (docs/SPEC.md §3.5). It is a leaf receiver package
-// exactly like a future P2-10 OTLP receiver would be: it depends on
-// internal/ingest/normalize (pure, in-request decoding) and on a narrow,
-// consumer-owned Enqueuer port it declares itself, never on the concrete
-// internal/ingest.Pipeline type and never on internal/httpapi (depguard,
-// SPEC §3.1 — ingest may not import httpapi or query). internal/app wires
-// this package's Handler/Mounter into httpapi.Deps.HookMounter, the mount
-// seam router.go already exposes.
+// Package hooks implements P2-11: Claude Code hooks webhook POST /ingest/hook (SPEC §3.5).
+// Leaf receiver: depends on normalize and narrow Enqueuer port only (depguard: no httpapi).
 package hooks
 
 import (
@@ -25,27 +18,13 @@ import (
 	"github.com/YohannHommet/argus/server/internal/model"
 )
 
-// Metrics is this package's self-observability surface: just the one
-// histogram SPEC §3.5 names as the guard rail for the handler's <20ms p99
-// budget. It is its own type (rather than a field bolted onto
-// internal/ingest.Metrics) because that struct belongs to P2-09's file and
-// this ticket's file-ownership split keeps this package's Files list to
-// exactly {handler.go, mount.go, handler_test.go} — a fourth metrics.go
-// would need no reason to exist for one histogram.
+// Metrics guards the <20ms p99 budget (SPEC §3.5 guard rail for 1.5s shared).
 type Metrics struct {
-	// Duration observes ServeHTTP's total wall time for every request,
-	// success or error, so p99 reflects what a real SessionEnd hook call
-	// actually costs against its 1.5s shared budget (SPEC §3.5).
+	// Duration observes ServeHTTP wall time (SPEC §3.5).
 	Duration prometheus.Histogram
 }
 
-// NewMetrics registers Metrics against reg (nil = prometheus.
-// DefaultRegisterer), mirroring internal/ingest.NewMetrics's nil-safe
-// convention. Buckets are sub-millisecond-to-1s, an order of magnitude
-// finer than internal/ingest's write-path prometheus.DefBuckets, because
-// this histogram's entire purpose is resolving a <20ms target — DefBuckets'
-// coarsest low bucket (5ms) would leave almost every observation in one or
-// two buckets.
+// NewMetrics registers Metrics (sub-ms to 1s buckets for <20ms p99 resolution).
 func NewMetrics(reg prometheus.Registerer) *Metrics {
 	if reg == nil {
 		reg = prometheus.DefaultRegisterer
@@ -62,37 +41,18 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 	return m
 }
 
-// Enqueuer is the narrow, consumer-owned port this package needs from
-// internal/ingest.Pipeline (SPEC §3.1's dependency-inversion rule: the
-// receiver depends on an interface it declares, not the concrete type it
-// happens to be wired to today). *ingest.Pipeline satisfies this
-// structurally. Declaring it here — rather than depending on
-// ingest.Pipeline directly — is what let the AC's "fake pipeline" test
-// double exist at all, and it is also the reason the handler has no way to
-// reach a database: this is the *only* dependency the handler has besides a
-// normalizer and a logger, and it has no method that touches storage.
+// Enqueuer is the narrow port (*ingest.Pipeline satisfies structurally, SPEC §3.1).
+// This is the *only* dependency (besides normalizer/logger), no store access possible.
 type Enqueuer interface {
 	EnqueueEvents(batch []model.Event) error
 }
 
-// hookEventNameProbe extracts just the one field the 202 response body
-// echoes back (SPEC §3.5's `{"ok":true,"event":"<hook_event_name>"}`).
-// It is decoded separately from normalize.HookNormalizer.FromHookPayload
-// rather than reading EventName off the returned []model.Event, because a
-// `MessageDisplay` payload gated by ARGUS_INGEST_HOOK_ALLOW_MESSAGE_DISPLAY
-// (normalize/hooks.go) yields zero events on a perfectly valid, 202-worthy
-// request — the response must still be able to name the event that
-// happened. hook_event_name is unconstrained vendor text (SPEC §0): this
-// probe never validates or rejects it, only echoes it.
+// hookEventNameProbe extracts echo field for 202 response (SPEC §3.5).
 type hookEventNameProbe struct {
 	HookEventName string `json:"hook_event_name"`
 }
 
-// Handler is the `POST /ingest/hook` HTTP handler (SPEC §3.5). It holds no
-// store dependency of any kind — that absence is structural, not
-// incidental: the AC "handler makes zero store calls" is true because there
-// is no field here a store call could be made through, not because the
-// code merely happens not to call one.
+// Handler is POST /ingest/hook (SPEC §3.5). No store dependency by design (structural).
 type Handler struct {
 	enqueuer     Enqueuer
 	normalizer   *normalize.HookNormalizer
@@ -101,41 +61,26 @@ type Handler struct {
 	logger       *slog.Logger
 }
 
-// options collects Option values before Handler construction, mirroring
-// internal/ingest.options/Option — the established house pattern for
-// injectable Prometheus registerer + logger (internal/ingest/pipeline.go).
+// options collects Option values (standard pattern for Prometheus registerer + logger).
 type options struct {
 	registerer prometheus.Registerer
 	logger     *slog.Logger
 }
 
-// Option configures optional Handler dependencies. The zero value of every
-// option is production-safe: NewHandler defaults registerer to
-// prometheus.DefaultRegisterer and logger to slog.Default().
+// Option configures optional Handler dependencies (zero-value production-safe).
 type Option func(*options)
 
-// WithRegisterer overrides the Prometheus registerer Metrics registers
-// against (lead decision #3: two Handlers in one test binary must each get
-// a fresh prometheus.NewRegistry(), since the package default,
-// prometheus.DefaultRegisterer, is a process-global that panics on a
-// duplicate metric name).
+// WithRegisterer overrides the Prometheus registerer (tests must use fresh registry).
 func WithRegisterer(r prometheus.Registerer) Option {
 	return func(o *options) { o.registerer = r }
 }
 
-// WithLogger overrides the *slog.Logger used for 500-class internal errors
-// (an EnqueueEvents failure other than ingest.ErrQueueFull, which SPEC's
-// design says should never happen against the real Pipeline but which the
-// Enqueuer port cannot rule out for an arbitrary implementation).
+// WithLogger overrides the logger for 500-class internal errors (EnqueueEvents failure).
 func WithLogger(l *slog.Logger) Option {
 	return func(o *options) { o.logger = l }
 }
 
-// NewHandler builds a Handler. maxBodyBytes is ARGUS_INGEST_MAX_BODY_BYTES
-// (SPEC §3.7), injected rather than read from config directly (this
-// package must not import internal/config, matching every other ingest
-// receiver's config-free-at-the-leaf convention) — tests set it small so
-// the 413 AC doesn't need an 8 MiB payload (lead decision #5).
+// NewHandler builds a Handler (maxBodyBytes injected, not from config per ingest convention).
 func NewHandler(enqueuer Enqueuer, normalizer *normalize.HookNormalizer, maxBodyBytes int64, opts ...Option) *Handler {
 	var o options
 	for _, opt := range opts {

@@ -1,14 +1,9 @@
 //go:build e2e
 
-// Package app's sweep test (M2 fix) proves the abandoned-session sweep is
-// actually scheduled by a running server, not just unit-testable in
-// isolation: it starts a real App the same way e2e_ingest_test.go's
-// TestE2E_Phase2ExitCriteria does (New+Serve against a real Postgres), lets
-// a genuinely idle session cross ARGUS_SESSION_IDLE_TIMEOUT, and polls for
-// SweepJob (jobs.go) to flip its status to 'abandoned' on its own —
-// something no test reached before this fix, since Serve never started a
-// sweep job at all (M2's evidence: SweepAbandoned had zero non-test
-// callers).
+// Package app's sweep test (M2 fix): proves SweepJob is actually scheduled
+// by running server (not just unit-testable). Starts real App, lets session
+// cross idle timeout, polls for status='abandoned'. Pre-M2, Serve never
+// started the sweep job (SweepAbandoned had zero non-test callers).
 package app
 
 import (

@@ -15,10 +15,7 @@ import (
 	"github.com/YohannHommet/argus/server/internal/store"
 )
 
-// TestListToolCalls_StoreInvalidCursor_400 is M14's handler-level
-// regression test for GET /api/v1/tool-calls: a cursor valid at httpapi's
-// shallow check but rejected by the store's stricter decode must map onto
-// 400, not 500.
+// TestListToolCalls_StoreInvalidCursor_400 tests that store-level cursor rejection maps to 400.
 func TestListToolCalls_StoreInvalidCursor_400(t *testing.T) {
 	t.Parallel()
 
@@ -38,10 +35,7 @@ func TestListToolCalls_StoreInvalidCursor_400(t *testing.T) {
 	require.Contains(t, rec.Body.String(), `"type":"urn:argus:error:invalid-cursor"`)
 }
 
-// TestListSessionToolCalls_StoreInvalidCursor_400 is M14's regression test
-// for the session-scoped drill-down GET /api/v1/sessions/{id}/tool-calls,
-// sharing listSessionToolCallsHandler's error mapping with the
-// cross-session endpoint above.
+// TestListSessionToolCalls_StoreInvalidCursor_400 tests cursor validation in session scope.
 func TestListSessionToolCalls_StoreInvalidCursor_400(t *testing.T) {
 	t.Parallel()
 

@@ -30,17 +30,14 @@ const (
 	OTLPProtocolJSON     OTLPProtocol = "http/json"
 )
 
-// demoDefaultSessions/demoDefaultSpeed/demoDefaultBackfill are SPEC §7.2's
-// "--mode=demo (default --sessions=25 --speed=200 --backfill=14d …)".
+// Demo mode defaults per SPEC §7.2: sessions=25, speed=200, backfill=14d.
 const (
 	demoDefaultSessions = 25
 	demoDefaultSpeed    = 200.0
 	demoDefaultBackfill = 14 * 24 * time.Hour
 )
 
-// Config is every flag SPEC §7 names, parsed once by flags.go and shared by
-// cmd/argus-sim and argusd sim's `sim` subcommand (SPEC lead note 7: "two
-// binaries, one implementation").
+// Config holds all SPEC §7 flags, shared by cmd/argus-sim and argusd (SPEC lead note 7).
 type Config struct {
 	// Seed drives the single math/rand/v2.PCG every per-session RNG derives
 	// from (SPEC §7.2). Default 1.
@@ -97,11 +94,8 @@ type Config struct {
 	// true, SPEC §7.1: "live-capture-verified").
 	ToolUseIDInDecision bool
 
-	// Chaos* implement SPEC §7.1's five --chaos-* flags (chaos.go). All
-	// default false and are independently switchable (P2-13 lead note 1):
-	// the end-to-end test needs both a clean run (kind='unknown' = 0, no
-	// dedup-triggered surprises) and each chaos path assertable on its own,
-	// so no two flags may be entangled behind one knob.
+	// Chaos* implement SPEC §7.1's five --chaos-* flags. All default false and
+	// are independently switchable for isolated testing (P2-13 lead note 1).
 	//
 	// ChaosDuplicates resends ~3% of sends byte-identical (dedup ledger).
 	ChaosDuplicates bool
@@ -112,21 +106,16 @@ type Config struct {
 	// that session's own turn events (stub-on-reference + the late-project
 	// rollup re-mark, SPEC §2.4).
 	ChaosOrphans bool
-	// ChaosClockSkew skews ~2% of event timestamps by up to ±1h, and adds
-	// one opt-in event timestamped chaosTooOldMonthsBack calendar months
-	// back — legitimately inside default retention but in a month the
-	// partition manager never creates ahead of time (see chaos.go's doc
-	// comment for why this, not the §1.2 clamp, is the reachable path to
-	// argus_ingest_too_old_total).
+	// ChaosClockSkew skews ~2% of timestamps by ±1h, plus one event in
+	// a different month (within retention, see chaos.go for partition logic).
 	ChaosClockSkew bool
 	// ChaosUnknown emits one event per session whose event.name is not in
 	// the §1.5.1 mapping table, exercising the kind='unknown' fallback.
 	ChaosUnknown bool
 }
 
-// DefaultConfig returns Config with every SPEC §7.2 default applied except
-// mode-dependent ones (Sessions/Speed/Backfill), which ApplyModeDefaults
-// fills in once Mode is known — flags.go parses Mode first.
+// DefaultConfig returns Config with SPEC §7.2 defaults (mode-dependent ones
+// filled in by ApplyModeDefaults after Mode is known).
 func DefaultConfig() Config {
 	return Config{
 		Seed:                1,
@@ -140,10 +129,8 @@ func DefaultConfig() Config {
 	}
 }
 
-// ApplyModeDefaults fills in the fields SPEC §7.2 documents as mode-
-// dependent defaults, but only when the caller left them at the zero
-// value — an explicit --sessions=N (even N==0, though that is a
-// degenerate run) or --speed=N must never be silently overwritten.
+// ApplyModeDefaults fills in mode-dependent defaults only when unset
+// (never overwrites explicit flags, even if zero).
 func (c *Config) ApplyModeDefaults(sessionsSet, speedSet, backfillSet bool) {
 	if c.Mode != ModeDemo {
 		return

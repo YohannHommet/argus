@@ -20,8 +20,7 @@ import (
 	"github.com/YohannHommet/argus/server/internal/store"
 )
 
-// discardLogger swallows every log line so tests that intentionally trigger
-// ERROR-level drop paths don't spam `go test -v` output.
+// discardLogger swallows log lines for tests triggering ERROR-level drop paths.
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(discardWriter{}, nil))
 }
@@ -30,9 +29,7 @@ type discardWriter struct{}
 
 func (discardWriter) Write(p []byte) (int, error) { return len(p), nil }
 
-// instantSleep is the SleepFunc every test but the deadline test injects:
-// it never actually waits, but still honours ctx cancellation so
-// TestClose_NoGoroutineLeakWhenStoreBlocksForever remains meaningful.
+// instantSleep never waits but honours ctx cancellation (deadline test invariant).
 func instantSleep(ctx context.Context, _ time.Duration) error {
 	select {
 	case <-ctx.Done():
@@ -42,9 +39,7 @@ func instantSleep(ctx context.Context, _ time.Duration) error {
 	}
 }
 
-// fakeWriter is the "fake store" the AC requires: a store.Writer whose
-// WriteBatch/WriteMetrics behaviour is entirely test-controlled, with no
-// database involved.
+// fakeWriter is a test-controlled store.Writer with no database.
 type fakeWriter struct {
 	mu               sync.Mutex
 	batchCalls       int
@@ -82,11 +77,7 @@ func (f *fakeWriter) calls() (batches, metrics int) {
 	return f.batchCalls, f.metricsCalls
 }
 
-// defaultBatchResult reports every event as written and persisted, in
-// order, mirroring what a real WriteBatch does when nothing is deduped.
-// EventRefs carries each event's own DedupKey (M1: the identity
-// matchPersisted now matches on, since a real WriteBatch's refs are sorted
-// by (ts, seq), not returned in submission order).
+// defaultBatchResult mirrors WriteBatch with no dedup (refs by DedupKey, M1 identity).
 func defaultBatchResult(events []model.Event) store.BatchResult {
 	refs := make([]model.EventRef, len(events))
 	for i, e := range events {
@@ -95,11 +86,7 @@ func defaultBatchResult(events []model.Event) store.BatchResult {
 	return store.BatchResult{Written: len(events), EventRefs: refs}
 }
 
-// testEvent builds a fixture with a DedupKey derived from id, so id already
-// being unique per call site (the AC's convention throughout this file)
-// also makes DedupKey unique — matchPersisted (M1) matches on DedupKey, not
-// position, so tests that need two distinct events to stay distinguishable
-// through a fake WriteBatch rely on this.
+// testEvent builds a fixture with unique DedupKey from id (M1 identity).
 func testEvent(id string, source model.Source) model.Event {
 	return model.Event{
 		ID:         id,
@@ -114,8 +101,7 @@ func testEvent(id string, source model.Source) model.Event {
 	}
 }
 
-// pgErr builds a *pgconn.PgError with the given SQLSTATE, for exercising
-// ClassifyError/retryLoop without a real database.
+// pgErr builds a PgError for testing ClassifyError without a database.
 func pgErr(code string) error {
 	return &pgconn.PgError{Code: code, Message: "synthetic test error"}
 }

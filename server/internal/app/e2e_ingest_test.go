@@ -1,25 +1,10 @@
 //go:build e2e
 
-// Package app's end-to-end test (P2-13) starts the real App (this package's
-// New/Serve — the same construction cmd/argusd's `serve` subcommand uses,
-// not a hand-assembled subset of it) against a real Postgres, drives
-// argus-sim (internal/sim, P2-12/P2-13) against it over real HTTP exactly
-// as a live process would, and asserts every Phase-2 exit criterion
-// (docs/PLAN.md "Phase 2 — Ingestion … Exit criteria", numbered 1-9) plus
-// every chaos-flag AC this ticket names, as SQL assertions against the rows
-// that landed.
-//
-// Build-tagged (never runs in a plain `go test ./...`) because it needs
-// real Docker (or ARGUS_TEST_DATABASE_URL) and takes tens of seconds to
-// drive thousands of real HTTP requests through the pipeline; CI's
-// `go-test` job passes -tags=e2e explicitly (.github/workflows/ci.yml) so
-// it still runs on every push.
-//
-// The white-box `package app` (not `app_test`) is deliberate: this test
-// needs a.ingest.Metrics() to read the exact Prometheus counters SPEC §3.6
-// names (argus_ingest_events_total, _deduped_total, _too_old_total) without
-// re-parsing the /metrics text exposition format, which would just be
-// re-implementing promhttp's own decoder for no benefit.
+// Package app's end-to-end test (P2-13): starts real App against real
+// Postgres, drives argus-sim over HTTP, asserts every Phase-2 exit criterion
+// as SQL assertions. White-box (package app, not app_test) to read
+// a.ingest.Metrics() without re-parsing /metrics. Build-tagged e2e; runs in
+// CI with -tags=e2e.
 package app
 
 import (

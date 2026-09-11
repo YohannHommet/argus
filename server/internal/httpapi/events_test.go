@@ -15,9 +15,7 @@ import (
 	"github.com/YohannHommet/argus/server/internal/store"
 )
 
-// TestListEvents_UnknownOrder_400InvalidParameter is the m1 audit finding's
-// regression test for GET /api/v1/events' own `order` parameter (events.go
-// defines validSortOrders, shared with sessions.go's timeline handler).
+// TestListEvents_UnknownOrder_400InvalidParameter tests invalid order parameter.
 func TestListEvents_UnknownOrder_400InvalidParameter(t *testing.T) {
 	t.Parallel()
 
@@ -39,11 +37,7 @@ func TestListEvents_UnknownOrder_400InvalidParameter(t *testing.T) {
 	require.Contains(t, rec.Body.String(), "order must be one of")
 }
 
-// TestListEvents_StoreInvalidCursor_400 is M14's handler-level regression
-// test for GET /api/v1/events (the cross-session counterpart of
-// TestListSessions_StoreInvalidCursor_400 in sessions_test.go): a cursor
-// valid at httpapi's shallow check but rejected by the store's stricter
-// decode must map onto 400, not 500.
+// TestListEvents_StoreInvalidCursor_400 tests that store-level cursor rejection maps to 400.
 func TestListEvents_StoreInvalidCursor_400(t *testing.T) {
 	t.Parallel()
 

@@ -1,22 +1,6 @@
-// read_sessions_test.go is a black-box (package postgres_test) integration
-// suite for ListSessions/GetSession/ListTurns, matching this package's
-// existing convention (write_test.go, upsert_toolcall_test.go, ...) and
-// reusing their newStore/ensureRange/ptrString helpers. Every test exercises
-// the cursor codec, keyset pagination, filtering, and detail assembly
-// through the exported Store API only — including the cursor round-trip and
-// sort-key-binding ACs, verified indirectly via postgres.ErrInvalidCursor
-// and successive ListSessions calls rather than by importing read_sessions.go's
-// unexported codec: a white-box (package postgres) test file in this
-// package cannot import internal/store/testing at all (storetesting itself
-// imports postgres, so an internal test file importing storetesting would
-// be an import cycle — verified empirically, `go vet` rejects it), which is
-// why this file, like its siblings, stays external.
-//
-// Seeding helpers below insert sessions/tool_calls/events directly via SQL
-// rather than through WriteBatch/upsertToolCalls: these tests exercise the
-// READ side in isolation and need precise control over
-// last_event_at/started_at/cost_usd/event_count/decision/correlation values
-// that would be awkward to steer indirectly through the write path.
+// read_sessions_test.go: black-box integration suite for ListSessions/GetSession/ListTurns.
+// Tests exercise the cursor codec, keyset pagination, filtering, detail assembly via exported API.
+// Seeding inserts sessions/tool_calls/events directly via SQL for precise READ-side control.
 package postgres_test
 
 import (
@@ -34,9 +18,7 @@ import (
 	"github.com/YohannHommet/argus/server/internal/store/postgres"
 )
 
-// sessionSeed is the direct-SQL fixture seedSession inserts. Zero values are
-// filled with sane defaults (see seedSession) so a test only sets the
-// fields it cares about.
+// sessionSeed is the direct-SQL fixture seedSession inserts; zero values are auto-filled.
 type sessionSeed struct {
 	ID                string
 	Vendor            string
@@ -120,9 +102,7 @@ func seedToolCall(t *testing.T, pool *pgxpool.Pool, seed toolCallSeed) {
 	require.NoError(t, err)
 }
 
-// seedEvent inserts a minimal events row of kind `kind` for permission-mode
-// and hook-latency fixtures. dedupKey must be unique per row (events'
-// parent-level UNIQUE (ts, dedup_key) constraint, SPEC §2.2).
+// seedEvent inserts a minimal events row (dedupKey must be unique per row).
 func seedEvent(t *testing.T, pool *pgxpool.Pool, sessionID, kind string, ts time.Time, dedupKey string, permissionMode *string, durationMS *int, attrs map[string]any) {
 	t.Helper()
 	attrsJSON, err := json.Marshal(attrs)
@@ -143,8 +123,6 @@ func nextTestSessionID(prefix string) string {
 }
 
 func intPtr(n int) *int { return &n }
-
-// --- cursor codec (verified through the exported API only, see file doc) --
 
 func TestListSessions_CursorRejectsWrongSortKey(t *testing.T) {
 	st, pool := newStore(t)
@@ -170,8 +148,6 @@ func TestListSessions_CursorTamperRejection(t *testing.T) {
 	require.Error(t, err)
 	require.ErrorIs(t, err, postgres.ErrInvalidCursor)
 }
-
-// --- ListSessions: filtering, sorting, pagination -----------------------
 
 func TestListSessions_StatusFilterUsesStoredColumn(t *testing.T) {
 	st, pool := newStore(t)
@@ -360,16 +336,9 @@ func startedAtDescOK(a, b *time.Time) bool {
 	return !a.Before(*b)
 }
 
-// TestListSessions_UsesMatchingIndex verifies SPEC §2.5's AC ("EXPLAIN for
-// each of the 4 sorts uses the matching sessions_* index") through
-// pg_stat_user_indexes rather than parsing EXPLAIN text: idx_scan on the
-// expected index must increase after a real ListSessions call for that
-// sort, which proves actual execution used the index — strictly stronger
-// evidence than a planner's stated intent, and available without exposing
-// read_sessions.go's private query builder to this external test package
-// (see file doc for why this file cannot be package postgres).
-// pg_stat_force_next_flush (PG 14+) makes this backend's counters visible
-// immediately instead of waiting for the periodic stats flush.
+// TestListSessions_UsesMatchingIndex verifies SPEC §2.5's AC using pg_stat_user_indexes.
+// Actual idx_scan increase proves execution used the index (stronger than EXPLAIN's intent).
+// pg_stat_force_next_flush (PG 14+) makes counters visible immediately.
 func TestListSessions_UsesMatchingIndex(t *testing.T) {
 	st, pool := newStore(t)
 	base := time.Now().UTC().Add(-24 * time.Hour)
@@ -431,8 +400,6 @@ func indexScanCount(t *testing.T, pool *pgxpool.Pool, indexName string) int64 {
 	return n
 }
 
-// --- GetSession ----------------------------------------------------------
-
 func TestGetSession_NotFound(t *testing.T) {
 	st, _ := newStore(t)
 	_, err := st.GetSession(context.Background(), "does-not-exist")
@@ -492,9 +459,7 @@ func TestGetSession_DetailBlocks(t *testing.T) {
 
 	require.Equal(t, sessionID, detail.ID)
 	require.False(t, detail.Partial)
-	// Postgres timestamptz has microsecond precision; firstSeen (time.Now())
-	// has nanosecond precision, so compare with a small tolerance rather
-	// than exact equality.
+	// Postgres timestamptz is microsecond precision; time.Now() is nanosecond, so use tolerance.
 	require.WithinDuration(t, firstSeen, detail.FirstSeenAt, time.Microsecond)
 
 	require.Len(t, detail.PermissionModeHistory, 1)
@@ -518,12 +483,7 @@ func TestGetSession_DetailBlocks(t *testing.T) {
 
 	require.NotNil(t, detail.HookLatency)
 	require.Equal(t, int64(15), detail.HookLatency.P50MS)
-	// by_hook_event is the p50 latency per hook event, not the execution
-	// count: the block is named hook_latency, its siblings are p50_ms/p95_ms,
-	// and SPEC §4.3's example pairs p50_ms with an identical by_hook_event
-	// value for a session whose only hook event is PostToolUse. Both
-	// executions here are PostToolUse (10ms, 20ms), so its p50 is the
-	// overall p50 — 15, not the count 2.
+	// by_hook_event is p50 latency per hook event (not execution count).
 	require.Equal(t, int64(15), detail.HookLatency.ByHookEvent["PostToolUse"])
 
 	require.False(t, detail.RawEventsExpired)
@@ -543,8 +503,7 @@ func TestGetSession_RawEventsExpired(t *testing.T) {
 	st, pool := newStore(t)
 	ctx := context.Background()
 
-	// Ensure a partition exists starting at the current month only (not
-	// backward), then seed a session whose first_seen_at predates it.
+	// Seed a session whose first_seen_at predates the current month's partition.
 	now := time.Now().UTC()
 	require.NoError(t, st.EnsurePartitions(ctx, now, now))
 
@@ -564,13 +523,8 @@ func TestGetSession_RawEventsExpired(t *testing.T) {
 	require.False(t, newDetail.RawEventsExpired)
 }
 
-// --- SessionSummary (P5-03) -------------------------------------------------
-
-// TestSessionSummary_MatchesListSessions pins that SessionSummary and
-// ListSessions can never drift: both scan sessionListColumns into
-// sessionRowData and build the wire shape through the same toSummary()
-// call, so a session's cost/duration/partial fields must be byte-for-byte
-// identical whichever path read it.
+// TestSessionSummary_MatchesListSessions verifies SessionSummary and ListSessions never drift.
+// Both scan sessionListColumns into sessionRowData and build through toSummary().
 func TestSessionSummary_MatchesListSessions(t *testing.T) {
 	st, pool := newStore(t)
 	sessionID := nextTestSessionID("summary-match")
@@ -607,14 +561,7 @@ func TestSessionSummary_NotFound(t *testing.T) {
 	require.ErrorIs(t, err, postgres.ErrSessionNotFound)
 }
 
-// --- ActiveSessionCount (P5-03) ---------------------------------------------
-
-// TestActiveSessionCount_IgnoresNonActiveStatuses pins that the count reads
-// the stored status column (SPEC §1.7) exactly, not a re-derived heuristic:
-// only 'active' rows are counted, every other status is ignored. Each test
-// runs against its own freshly migrated, empty schema (newStore's own
-// convention, storetesting.NewPool/NewDSN), so an absolute count is exact
-// here, not a heuristic delta.
+// TestActiveSessionCount_IgnoresNonActiveStatuses verifies count reads stored status column exactly.
 func TestActiveSessionCount_IgnoresNonActiveStatuses(t *testing.T) {
 	st, pool := newStore(t)
 
@@ -628,8 +575,6 @@ func TestActiveSessionCount_IgnoresNonActiveStatuses(t *testing.T) {
 	require.NoError(t, err)
 	require.EqualValues(t, 2, n, "only the two 'active' rows must be counted; ended/abandoned/unknown must not")
 }
-
-// --- ListTurns -------------------------------------------------------------
 
 func TestListTurns_OrderedBySessionStartedAt(t *testing.T) {
 	st, pool := newStore(t)

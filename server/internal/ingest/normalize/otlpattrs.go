@@ -8,15 +8,9 @@ import (
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
 )
 
-// otlpAttrsToMap converts a slice of OTLP KeyValue pairs into a plain
-// map[string]any, decoding each AnyValue into its native Go representation
-// via otlpAnyValueToGo. This is the only place in the package that touches
-// protobuf types for attribute decoding (package doc comment): attrs.go's
-// typed accessors operate purely on the resulting map[string]any so they
-// stay reusable by a JSON-based hook normalizer. A later entry overwrites an
-// earlier one on a duplicate key; OTLP forbids duplicate keys within one
-// attribute set, so this only matters as a defensive default, never as
-// documented behaviour a caller should rely on.
+// otlpAttrsToMap converts OTLP KeyValue slice to map[string]any (only protobuf
+// touch-point per package doc; attrs.go's accessors reusable by JSON normalizers).
+// Later entry overwrites on duplicate key (OTLP forbids; defensive only).
 func otlpAttrsToMap(kvs []*commonpb.KeyValue) map[string]any {
 	out := make(map[string]any, len(kvs))
 	for _, kv := range kvs {
@@ -28,11 +22,9 @@ func otlpAttrsToMap(kvs []*commonpb.KeyValue) map[string]any {
 	return out
 }
 
-// otlpAnyValueToGo decodes one OTLP AnyValue into the native Go type its
-// populated oneof variant carries: string, bool, int64, float64, []byte, or
-// recursively []any (ArrayValue) / map[string]any (KvlistValue). A nil
-// AnyValue (an attribute key present with no value set) decodes to nil
-// rather than panicking, since the OTel SDK can legitimately emit one.
+// otlpAnyValueToGo decodes OTLP AnyValue to native Go type (string, bool, int64,
+// float64, []byte, recursively []any or map[string]any). Nil AnyValue → nil
+// (OTel SDK can legitimately emit; don't panic).
 func otlpAnyValueToGo(v *commonpb.AnyValue) any {
 	if v == nil {
 		return nil
@@ -62,10 +54,8 @@ func otlpAnyValueToGo(v *commonpb.AnyValue) any {
 	}
 }
 
-// otlpBodyString extracts a LogRecord's Body as a string, reporting ok=false
-// for a nil body or one whose oneof variant is not StringValue — SPEC
-// §1.5.1's event-name resolution step 3 ("the record body when it is a
-// string") only accepts this one shape.
+// otlpBodyString extracts LogRecord Body as string, ok=false for nil or
+// non-StringValue (SPEC §1.5.1 step 3 only accepts string body).
 func otlpBodyString(v *commonpb.AnyValue) (s string, ok bool) {
 	if v == nil {
 		return "", false
@@ -77,27 +67,14 @@ func otlpBodyString(v *commonpb.AnyValue) (s string, ok bool) {
 	return sanitizeAttrString(sv.StringValue), true
 }
 
-// sanitizeAttrString and sanitizeAttrFloat are the package's single
-// sanitisation point for vendor-controlled scalar values (audit finding
-// M5): every string/float64 attribute value, wherever it is decoded —
-// otlpAnyValueToGo above, otlpBodyString above, and hooks.go's decoded
-// JSON tree via sanitizeHookAttrs — passes through one of these before it
-// ever reaches a model.Event.Attrs map. Two independent failures converge
-// on the same fix:
-//
-//   - a NUL byte (or any other invalid-UTF-8 byte sequence) in a string
-//     attribute makes the `attrs jsonb` cast in the events INSERT raise
-//     SQLSTATE 22P05 (a *permanent* error per retry.go's classification);
-//   - a NaN/±Inf float64 attribute (an OTLP DoubleValue) makes
-//     json.Marshal itself fail before the row is even built (a
-//     *transient* error per retry.go's non-PgError default).
-//
-// Either failure currently takes out the entire WriteBatch — up to
-// ARGUS_INGEST_BATCH_SIZE events from unrelated sessions — because the
-// batch's INSERT is one statement and a 2xx has already gone out to every
-// client that contributed to it.
-//
-// Sanitisation is replacement, never drop: the key stays present so a
+// sanitizeAttrString and sanitizeAttrFloat are the package's single sanitization
+// point for vendor scalars (audit finding M5): every string/float64 attribute,
+// wherever decoded (otlpAnyValueToGo, otlpBodyString, hooks.go's sanitizeHookAttrs),
+// passes through before reaching model.Event.Attrs. Two independent failures:
+// - NUL byte in string → `attrs jsonb` cast raises SQLSTATE 22P05 (permanent).
+// - NaN/±Inf float → json.Marshal fails (transient per retry.go default).
+// Either takes out entire WriteBatch (one INSERT, 2xx already out to clients).
+// Sanitization is replacement never drop: key stays present so callers see
 // caller reading `attrs->>'…'` still gets a value, just not the poisoned
 // one.
 //   - sanitizeAttrString replaces a NUL byte and any invalid UTF-8 byte

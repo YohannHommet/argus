@@ -33,8 +33,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// retentionPartitionParents are the two SPEC §2.2/§2.3 RANGE-partitioned
-// tables the retention job drops expired partitions from.
+// retentionPartitionParents are the two RANGE-partitioned tables (SPEC §2.2/§2.3).
 var retentionPartitionParents = []string{"events", "metric_samples"}
 
 // pruneDedupBatchSize bounds each PruneDedup DELETE (SPEC §2.4: "in bounded

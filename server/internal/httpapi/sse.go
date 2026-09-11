@@ -1,11 +1,6 @@
-// sse.go implements P5-02: GET /api/v1/stream (the firehose) and GET
-// /api/v1/sessions/{id}/stream (SPEC §5.1-§5.3). Both handlers share one
-// core, serveStream, that follows the ticket's prescribed six-step sequence
-// verbatim: bind params -> attach to the hub before writing any response
-// byte (SPEC §5.2's attach-before-query ordering) -> write headers/retry ->
-// replay a requested backlog -> run the live select loop -> tear down on
-// disconnect. See sseWriter's doc comment for the single most important
-// framing invariant this file enforces (id: only on `event: event` frames).
+// sse.go implements P5-02: SSE routes for /stream and /sessions/{id}/stream (SPEC §5.1-§5.3).
+// serveStream implements the six-step sequence: bind params -> attach -> headers ->
+// replay backlog -> live select loop -> teardown. See sseWriter for the critical id-line invariant.
 
 package httpapi
 
@@ -27,25 +22,13 @@ import (
 	"github.com/YohannHommet/argus/server/internal/stream"
 )
 
-// defaultStreamHeartbeat/defaultStreamReplayWindow/defaultStreamReplayMax
-// mirror config.Config's own ARGUS_STREAM_* defaults (SPEC §3.7). They
-// exist here, distinct from config's zero value, because a nil
-// Deps.Config (Deps' own doc comment: "nil is treated as all-defaults") or
-// an unset duration/limit would otherwise leave a heartbeat ticker
-// constructed with a 0 period (time.NewTicker panics on that) or make every
-// replay request look out-of-window — see streamHeartbeat/
-// streamReplayWindow/streamReplayMax below.
+// Stream config defaults (SPEC §3.7): nil-safe fallbacks for ARGUS_STREAM_* settings.
 const (
 	defaultStreamHeartbeat    = 15 * time.Second
 	defaultStreamReplayWindow = 5 * time.Minute
 	defaultStreamReplayMax    = 2000
 
-	// minWriteDeadline floors the per-write deadline sseWriter refreshes
-	// before every frame (Trap 2, SPEC §5.3): a very short
-	// ARGUS_STREAM_HEARTBEAT (this ticket's own shortened test config
-	// included) must never shrink the deadline below the same 30s bound
-	// http.Server.WriteTimeout used to enforce for every handler, or a
-	// perfectly healthy connection could get reaped as if it were dead.
+	// minWriteDeadline: 30s floor (Trap 2, SPEC §5.3) to prevent reaping healthy SSE connections.
 	minWriteDeadline = 30 * time.Second
 
 	// sseRetryMS is SPEC §5.3's fixed reconnect backoff, sent once at open.
@@ -73,11 +56,7 @@ func streamReplayMax(cfg *config.Config) int {
 	return cfg.StreamReplayMax
 }
 
-// isStreamPath reports whether p is one of the two SSE routes this file
-// mounts. It lives here rather than in middleware.go (Trap 1's prescribed
-// fix) because the knowledge of what a stream path looks like belongs with
-// the handler that owns those routes, not with the generic timeout
-// middleware that merely needs a yes/no answer per request.
+// isStreamPath reports whether p is one of the two SSE routes (Trap 1: owned here, not in middleware).
 func isStreamPath(p string) bool {
 	if p == "/api/v1/stream" {
 		return true
@@ -90,11 +69,7 @@ func isStreamPath(p string) bool {
 	return ok && id != "" && suffix == "stream"
 }
 
-// mountStreamRoutes attaches the two SSE routes this ticket owns. Called
-// only when d.Stream != nil (router.go's nil-safe convention, matching
-// Reader/Analytics/Mounter): a nil Streamer means Phase 5 isn't wired in
-// yet (P5-03 does that in internal/app/serve.go), so neither route exists
-// rather than existing and 500ing on every request.
+// mountStreamRoutes attaches the two SSE routes (nil-safe: only called when Streamer is set).
 func mountStreamRoutes(r chi.Router, streamer Streamer, replay Replayer, cfg *config.Config, logger *slog.Logger) {
 	r.Get("/stream", streamAllHandler(streamer, replay, cfg, logger))
 	r.Get("/sessions/{id}/stream", streamSessionHandler(streamer, replay, cfg, logger))
@@ -122,10 +97,7 @@ func streamAllHandler(streamer Streamer, replay Replayer, cfg *config.Config, lo
 	}
 }
 
-// streamSessionHandler implements GET /api/v1/sessions/{id}/stream (SPEC
-// §5.1, §5.3). openapi.yaml declares no filter params on this operation
-// (unlike streamAll), so the topic itself — scoped to one session — is the
-// only filtering that applies; Filter{} matches everything within it.
+// streamSessionHandler implements GET /api/v1/sessions/{id}/stream (SPEC §5.1, §5.3).
 func streamSessionHandler(streamer Streamer, replay Replayer, cfg *config.Config, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
@@ -133,10 +105,7 @@ func streamSessionHandler(streamer Streamer, replay Replayer, cfg *config.Config
 	}
 }
 
-// serveStream is the six-step sequence the ticket prescribes, shared by
-// both routes. Every early return before step 2's Subscribe call produces a
-// normal problem+json response; every return after it goes through the
-// deferred sub.Close() teardown instead.
+// serveStream implements the six-step sequence (shared by both routes).
 func serveStream(
 	w http.ResponseWriter, r *http.Request,
 	streamer Streamer, replay Replayer, cfg *config.Config, logger *slog.Logger,
@@ -209,10 +178,7 @@ func serveStream(
 	// reached whichever way runLiveLoop returns.
 }
 
-// decodeReplayPosition implements the prescribed `?after=` precedence: an
-// explicit client request beats the browser's automatic `Last-Event-ID`
-// header when both are present. Absent both, hasAfter is false and the
-// connection just goes live with no backlog — not an error.
+// decodeReplayPosition implements `?after=` precedence: query param beats Last-Event-ID header.
 func decodeReplayPosition(r *http.Request) (ref model.EventRef, hasAfter bool, err error) {
 	raw := r.URL.Query().Get("after")
 	if raw == "" {
@@ -228,13 +194,7 @@ func decodeReplayPosition(r *http.Request) (ref model.EventRef, hasAfter bool, e
 	return ref, true, nil
 }
 
-// replayBacklog implements SPEC §5.2's reconnect replay. The hub is already
-// attached (serveStream's step 2 ran first), so any live event landing
-// while EventsSince runs is buffered on sub.C() rather than lost — that is
-// the whole race fix, and it is why this function only ever ADDS to dedupe,
-// never has to worry about missing something published concurrently.
-// Returns false if a frame write failed (the peer is gone) and the caller
-// must stop entirely.
+// replayBacklog implements SPEC §5.2's reconnect replay (hub already attached).
 func replayBacklog(
 	ctx context.Context, sw *sseWriter, replay Replayer, cfg *config.Config,
 	after model.EventRef, dedupe map[string]struct{}, logger *slog.Logger,
@@ -279,13 +239,7 @@ func emitReset(sw *sseWriter, from time.Time) error {
 	return sw.frame("reset", "", resetFramePayload{Reason: "replay_window_exceeded", From: from.UTC().Format(time.RFC3339)})
 }
 
-// runLiveLoop is prescribed design step 5: select on the subscription
-// channel, the heartbeat ticker, and ctx.Done(). It must use the two-value
-// receive on sub.C() (msg, ok := <-sub.C()): stream.Hub.Shutdown sends one
-// MessageShutdown and then CLOSES the channel, so a one-value receive would
-// yield a zero Message forever after that and spin this loop at 100% CPU —
-// see stream.Subscription.C's own doc comment for the same contract stated
-// from the sender's side.
+// runLiveLoop implements step 5: select on sub.C(), heartbeat, ctx.Done(); two-value receive required.
 func runLiveLoop(ctx context.Context, sw *sseWriter, sub *stream.Subscription, heartbeat time.Duration, dedupe map[string]struct{}, logger *slog.Logger) {
 	ticker := time.NewTicker(heartbeat)
 	defer ticker.Stop()
@@ -387,23 +341,11 @@ type sseWriter struct {
 	deadline time.Duration
 	logger   *slog.Logger
 
-	// dlUnsupported is set once SetWriteDeadline returns
-	// http.ErrNotSupported (Trap 2, SPEC §5.3): http.ResponseController
-	// requires the underlying writer to opt in via Unwrap(), and while
-	// chi's AccessLog wrapper does, a future middleware might not — so this
-	// is logged once and then the write path continues unbounded rather
-	// than failing an otherwise-healthy connection.
+	// dlUnsupported is set if SetWriteDeadline returns ErrNotSupported; continue unbounded.
 	dlUnsupported bool
 }
 
-// write sends one raw SSE frame's bytes end to end: refresh the per-write
-// deadline, write, then flush (prescribed design step 6). A non-nil return
-// means the peer is gone (or the connection cannot make progress); every
-// caller must stop looping immediately rather than retry — matching
-// http.Server.WriteTimeout's old global 30s bound at the per-connection
-// level instead of the whole-response level, which is what makes an SSE
-// connection that must legitimately outlive 30s compatible with still
-// reaping a genuinely dead TCP peer (Trap 2).
+// write sends SSE frame bytes: refresh deadline -> write -> flush (step 6, Trap 2).
 func (sw *sseWriter) write(raw string) error {
 	if !sw.dlUnsupported {
 		if err := sw.rc.SetWriteDeadline(time.Now().Add(sw.deadline)); err != nil {
@@ -425,16 +367,12 @@ func (sw *sseWriter) write(raw string) error {
 	return nil
 }
 
-// retry writes SPEC §5.3's one-time `retry: <ms>` line, sent right after
-// headers so a browser's automatic reconnect backs off by this much rather
-// than hammering a restarting server.
+// retry writes SPEC §5.3's reconnect backoff line.
 func (sw *sseWriter) retry(ms int) error {
 	return sw.write(fmt.Sprintf("retry: %d\n\n", ms))
 }
 
-// heartbeatFrame writes SPEC §5.1's `: heartbeat` keep-alive comment line —
-// deliberately not routed through frame, since a comment has no event name
-// or data field at all.
+// heartbeatFrame writes SPEC §5.1's `: heartbeat` keep-alive comment (bypass frame()).
 func (sw *sseWriter) heartbeatFrame() error {
 	return sw.write(": heartbeat\n\n")
 }

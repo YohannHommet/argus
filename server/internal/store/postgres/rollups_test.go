@@ -16,21 +16,12 @@ import (
 	storetesting "github.com/YohannHommet/argus/server/internal/store/testing"
 )
 
-// rollupLockKeyForTest mirrors rollups.go's unexported rollupLockKey
-// (0x41_52_47_55_53_30_32, "ARGUS02"): TestRunRollups_SecondConcurrentInvocationReturnsImmediately
-// holds this same key from a separate session to simulate a concurrent
-// rollup pass, so it must stay in sync with that constant.
+// rollupLockKeyForTest mirrors rollups.go's unexported rollupLockKey (must stay in sync).
 const rollupLockKeyForTest = int64(0x41_52_47_55_53_30_32)
 
 var metricIDCounter int
 
-// mkMetricSample builds a model.MetricSample fixture with a caller-chosen
-// temporality/series/attrs/session — unlike write_test.go's mkMetric
-// (fixed temporality="delta", no session, attrs limited to a uniqueness
-// discriminator), these tests need cumulative series, per-sample attrs
-// (type/model/decision), and session attribution. It does not run a real
-// dedup-key hasher: WriteMetrics only needs DedupKey to be unique per
-// logical sample.
+// mkMetricSample builds a MetricSample fixture with temporality/series/attrs/session.
 func mkMetricSample(t *testing.T, ts time.Time, name string, sessionID *string, value float64, temporality string, seriesHash []byte, attrs map[string]any) model.MetricSample {
 	t.Helper()
 	metricIDCounter++
@@ -47,8 +38,6 @@ func mkMetricSample(t *testing.T, ts time.Time, name string, sessionID *string, 
 		DedupKey:    fmt.Sprintf("test-metric-dedup-%d", metricIDCounter),
 	}
 }
-
-// --- AC: rollup totals equal direct events aggregates --------------------
 
 func TestRunRollups_EventTotalsMatchDirectAggregate(t *testing.T) {
 	st, pool := newStore(t)
@@ -93,8 +82,6 @@ func TestRunRollups_EventTotalsMatchDirectAggregate(t *testing.T) {
 	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM events WHERE session_id=$1 AND kind='llm.request'`, sessionID).Scan(&directCount))
 	require.Equal(t, apiRequests, directCount)
 }
-
-// --- AC: running twice changes nothing ------------------------------------
 
 func TestRunRollups_RunningTwiceChangesNothing(t *testing.T) {
 	st, pool := newStore(t)
@@ -164,9 +151,7 @@ func TestRunRollups_LateEventSelfCorrectsExactlyItsBucket(t *testing.T) {
 	require.Equal(t, 1, totalRows)
 }
 
-// --- AC: review blocker B4's concurrency test -----------------------------
-//
-// Two transactions insert into different hours and commit in the REVERSE
+// B4 concurrency test: two transactions insert in different hours and commit in REVERSE
 // order of their seq allocation: txA's INSERT runs first (lower seq) but
 // commits last; txB's INSERT runs second (higher seq) but commits first.
 // The rollup job runs between the two commits.
@@ -243,8 +228,6 @@ func TestRunRollups_B4_ReverseCommitOrderStillCorrectsEarlierBucket(t *testing.T
 	require.Equal(t, 1, apiRequestsX, "txA's bucket must self-correct once txA commits, regardless of its lower seq")
 }
 
-// --- AC: a rolled-back job leaves the dirty rows intact -------------------
-
 func TestRunRollups_RolledBackJobLeavesDirtyRowsIntact(t *testing.T) {
 	st, pool := newStore(t)
 	ctx := context.Background()
@@ -279,8 +262,6 @@ func TestRunRollups_RolledBackJobLeavesDirtyRowsIntact(t *testing.T) {
 	require.NoError(t, pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM rollup_hourly WHERE bucket=$1)`, base).Scan(&rowExists))
 	require.False(t, rowExists, "no partial rollup_hourly row must survive a rolled-back pass")
 }
-
-// --- AC: review M4's late-project test ------------------------------------
 
 func TestRunRollups_LateProjectMovesFromUnknownToRealProject(t *testing.T) {
 	st, pool := newStore(t)
@@ -370,8 +351,6 @@ func TestRunRollups_CumulativeMetricDeltasAndCounterReset(t *testing.T) {
 	require.NoError(t, rows.Err())
 	require.Equal(t, []float64{100, 50, 80}, got)
 }
-
-// --- AC: a second concurrent job invocation returns immediately ----------
 
 func TestRunRollups_SecondConcurrentInvocationReturnsImmediately(t *testing.T) {
 	st, pool := newStore(t)

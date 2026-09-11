@@ -15,40 +15,24 @@ import (
 	"github.com/YohannHommet/argus/server/internal/store"
 )
 
-// validSessionSorts is SPEC §4.3's closed `sort` vocabulary for GET
-// /api/v1/sessions ("sort ∈ last_event_at|started_at|cost_usd|
-// event_count"). Unlike `status`/`tool`/`decision_source` (SPEC's own
-// OR-set filter fields, permissive by design — see castSessionStatuses),
-// `sort` names a specific store column: an unrecognized value has no safe
-// permissive interpretation, so it is a 400 here rather than falling
-// through to the store's own plain-fmt.Errorf rejection (m1 audit finding
-// — see contains/joinStrings in analytics.go for the shared closed-
-// vocabulary validation this mirrors, analytics.go:139).
+// validSessionSorts is SPEC §4.3's closed sort vocabulary (validated here, m1 audit finding).
 var validSessionSorts = []store.SessionSort{
 	store.SessionSortLastEventAt, store.SessionSortStartedAt, store.SessionSortCostUSD, store.SessionSortEventCount,
 }
 
-// sessionsListResponse is GET /api/v1/sessions' body (SPEC §4.3,
-// openapi.yaml's SessionsListResponse): model.SessionSummary already
-// carries the exact wire shape (correct JSON tags, correct nesting), so it
-// is marshaled directly — no parallel wire struct needed here.
+// sessionsListResponse is GET /api/v1/sessions' body (SPEC §4.3).
 type sessionsListResponse struct {
 	Data []model.SessionSummary `json:"data"`
 	Page pageInfo               `json:"page"`
 }
 
-// turnsListResponse is GET /api/v1/sessions/{id}/turns' body
-// (openapi.yaml's TurnsListResponse): model.Turn already carries the exact
-// wire shape.
+// turnsListResponse is GET /api/v1/sessions/{id}/turns' body.
 type turnsListResponse struct {
 	Data []model.Turn `json:"data"`
 	Page pageInfo     `json:"page"`
 }
 
-// mountSessionRoutes attaches every `/sessions...` read route this ticket
-// owns except tool-calls (toolcalls.go's mountToolCallRoutes owns
-// `/sessions/{id}/tool-calls`, alongside the cross-session
-// `/tool-calls` it shares a query-layer function with).
+// mountSessionRoutes attaches /sessions read routes (tool-calls mounted elsewhere).
 func mountSessionRoutes(r chi.Router, reader Reader, logger *slog.Logger) {
 	r.Get("/sessions", listSessionsHandler(reader, logger))
 	r.Get("/sessions/{id}", getSessionHandler(reader, logger))
@@ -112,15 +96,7 @@ func listSessionsHandler(reader Reader, logger *slog.Logger) http.HandlerFunc {
 	}
 }
 
-// writeListStoreError maps a query.ListSessions/query.ListEvents/
-// query.ListToolCalls failure onto the right problem+json response
-// (shared by every store-paginated list handler in this package and in
-// events.go/toolcalls.go): store.ErrInvalidCursor means the cursor passed
-// httpapi's own shallow shape check but failed the backend's stricter
-// decode (M14 audit finding — SPEC §4.1 "opaque, validated, 400 on
-// tamper"); anything else is an unexpected store failure, routed through
-// writeInternalError so it never echoes err's own text to the client (m2
-// audit finding).
+// writeListStoreError maps list query failures to problem+json: M14 handles invalid cursors, m2 hides other errors.
 func writeListStoreError(w http.ResponseWriter, r *http.Request, logger *slog.Logger, err error) {
 	if errors.Is(err, store.ErrInvalidCursor) {
 		writeProblem(w, r, http.StatusBadRequest, "invalid-cursor", err.Error())
@@ -129,9 +105,7 @@ func writeListStoreError(w http.ResponseWriter, r *http.Request, logger *slog.Lo
 	writeInternalError(w, r, logger, err)
 }
 
-// getSessionHandler implements GET /api/v1/sessions/{id} (SPEC §4.3),
-// including the ETag/If-None-Match pair SPEC §4.1 requires on session
-// detail: a matching If-None-Match short-circuits to 304 with no body.
+// getSessionHandler implements GET /api/v1/sessions/{id} (SPEC §4.3) with ETag/If-None-Match.
 func getSessionHandler(reader Reader, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
@@ -152,15 +126,7 @@ func getSessionHandler(reader Reader, logger *slog.Logger) http.HandlerFunc {
 	}
 }
 
-// getSessionTimelineHandler implements GET /api/v1/sessions/{id}/timeline
-// (SPEC §4.3). It shares query.ListEvents/timelineEvent with the
-// cross-session listEventsHandler in events.go via
-// store.EventFilter.SessionID, matching store.Reader.ListEvents' own
-// design.
-//
-// `collapse` (openapi.yaml, default false) is bound nowhere: neither SPEC
-// nor store.EventFilter defines what a collapsed timeline row looks like,
-// so there is nothing here to implement against — see the P3-07 report.
+// getSessionTimelineHandler implements GET /api/v1/sessions/{id}/timeline (SPEC §4.3).
 func getSessionTimelineHandler(reader Reader, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
@@ -262,9 +228,7 @@ func listSessionTurnsHandler(reader Reader, logger *slog.Logger) http.HandlerFun
 	}
 }
 
-// getSessionSubagentsHandler implements GET /api/v1/sessions/{id}/subagents
-// (SPEC §4.3): model.SubagentTree already carries the exact wire shape
-// (data + cost_attribution), so it is marshaled directly.
+// getSessionSubagentsHandler implements GET /api/v1/sessions/{id}/subagents (SPEC §4.3).
 func getSessionSubagentsHandler(reader Reader, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
@@ -282,9 +246,7 @@ func getSessionSubagentsHandler(reader Reader, logger *slog.Logger) http.Handler
 	}
 }
 
-// turnsAfterFromCursor extracts the (first_seen_at, prompt_id) keyset
-// position from a cursor already structurally validated and sort-key-bound
-// by DecodeCursor(raw, query.TurnsSortKey).
+// turnsAfterFromCursor extracts keyset position from a validated cursor.
 func turnsAfterFromCursor(c Cursor) (query.TurnsAfter, error) {
 	if len(c.Values) != 2 {
 		return query.TurnsAfter{}, fmt.Errorf("%w: expected 2 values, got %d", ErrInvalidCursor, len(c.Values))

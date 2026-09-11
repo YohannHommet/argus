@@ -39,11 +39,8 @@ func (f Filter) MatchSession(s model.SessionSummary) bool {
 	return matchExact(f.Project, s.Project) && matchExact(f.Vendor, s.Vendor)
 }
 
-// matchExact implements the wildcard rule shared by Project and Vendor
-// filtering: an empty filter value means "no filter" and matches anything;
-// a non-empty one requires an exact match — see MatchEvent's doc for why an
-// empty actual value still fails a non-empty filter rather than matching
-// it.
+// matchExact: "" filter means "no filter"; non-empty filter requires exact
+// match. Empty actual fails non-empty filter (see MatchEvent doc).
 func matchExact(filter, actual string) bool {
 	return filter == "" || filter == actual
 }

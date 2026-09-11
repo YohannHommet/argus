@@ -1,21 +1,7 @@
-// publish_dedup_test.go pins P5-03's ticket AC "a batch of 10 new + 10
-// duplicate events publishes exactly 10 frames" against the REAL dedup
-// ledger — not a scripted fake store.Writer. internal/ingest/pipeline_test.go
-// already has a recordingPublisher (TestPublisher_SeesOnlyPersistedEvents)
-// that proves the pipeline's own contract ("Publish sees only what
-// matchPersisted reports as persisted") against a fakeWriter whose dedup
-// behavior is entirely hand-scripted; that test cannot also prove
-// internal/store/postgres's real ingest_dedup gate (dedup.go/write.go) is
-// what actually produces the right EventRefs in the first place. This file
-// picks internal/app's own real-Postgres harness (storetesting.NewPool,
-// following jobs_test.go's plain — not e2e-tagged — white-box convention:
-// it needs a real Store and a real Pipeline, but never boots the HTTP
-// server, so it does not need the e2e build tag jobs that go through
-// Serve/HTTP use) precisely because internal/app is the one package allowed
-// to import both internal/ingest and internal/store/postgres at once
-// (package doc comment) — internal/ingest's own test package must not
-// import internal/store/postgres (depguard: ingest may only import
-// internal/store + internal/model + stdlib + prometheus).
+// publish_dedup_test.go: P5-03 AC "10 new + 10 duplicates publishes 10 frames"
+// against real postgres dedup ledger. Pipeline tests use fakes; only
+// internal/app can import both ingest and postgres (package doc), proving the
+// real ingest_dedup gate (depguard: ingest must not import postgres directly).
 package app
 
 import (
@@ -34,10 +20,8 @@ import (
 	"github.com/YohannHommet/argus/server/internal/stream"
 )
 
-// recordingHubTarget is ingest.HubTarget's test double for this file: it
-// only ever records the envelopes it was handed, with no subscriber
-// fan-out — this test's subject is "how many envelopes reach the hub port",
-// not SSE delivery, which internal/stream's own suite already covers.
+// recordingHubTarget: test double for ingest.HubTarget. Records envelopes
+// without fan-out; this test's subject is dedup, not SSE delivery.
 type recordingHubTarget struct {
 	mu  sync.Mutex
 	evs []stream.Envelope
@@ -55,15 +39,9 @@ func (r *recordingHubTarget) eventCount() int {
 	return len(r.evs)
 }
 
-// dedupTestEvent builds a minimal, real-store-writable model.Event: enough
-// fields for WriteBatch's whole path (sessions/turns projections, the
-// ingest_dedup gate, the events insert) to succeed without error, with a
-// caller-controlled DedupKey so two fixtures can share one on purpose. ID is
-// deliberately left "": events.go's insertEventsSQL falls back to the
-// events.id column's own uuidv7() default for an empty id (see its doc
-// comment) — no normalizer ever mints one (SPEC §1.6), so a made-up
-// non-UUID string here would fail with "invalid input syntax for type
-// uuid" instead of exercising the real path.
+// dedupTestEvent: minimal real-store-writable model.Event. ID left empty;
+// events.go's insertEventsSQL uses uuidv7() default (no normalizer mints ID
+// per SPEC §1.6), so a non-UUID string would fail instead of exercising real path.
 func dedupTestEvent(dedupKey, sessionID string, ts time.Time) model.Event {
 	return model.Event{
 		DedupKey:   dedupKey,

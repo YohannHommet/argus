@@ -1,12 +1,6 @@
 package ingest
 
-// White-box tests: this file lives in package ingest (not ingest_test) so
-// it can reach unexported fields directly — specifically
-// Pipeline.testAfterClosingCheck, the hook m5's regression test uses to
-// force the check-then-send race deterministically instead of relying on a
-// real scheduler race that may or may not reproduce on any given run. See
-// that field's doc on Pipeline for why it exists and why production code
-// never sets it.
+// White-box tests: in package ingest to reach unexported Pipeline.testAfterClosingCheck (m5 hook).
 
 import (
 	"context"
@@ -22,8 +16,7 @@ import (
 	"github.com/YohannHommet/argus/server/internal/store"
 )
 
-// internalFakeWriter is pipeline_test.go's fakeWriter, trimmed to what this
-// file needs: a store.Writer whose WriteBatch records what it received.
+// internalFakeWriter records WriteBatch calls for testing.
 type internalFakeWriter struct {
 	mu       sync.Mutex
 	received [][]model.Event
@@ -67,21 +60,7 @@ func instantTestSleep(ctx context.Context, _ time.Duration) error {
 	}
 }
 
-// --- m5: a producer that passes the closing check must never land its ---
-// --- batch after every worker has already exited its final drain loop. ---
-//
-// Before the closeMu fix, EnqueueEvents checked p.closing and then sent on
-// the buffered channel as two unsynchronised steps. This test uses
-// testAfterClosingCheck to pause a producer goroutine *after* it has
-// observed closing==false but *before* it sends, then calls Close
-// concurrently. With the race unfixed, Close's drain would complete (there
-// is nothing else queued) and return nil while the paused producer is still
-// about to send — landing the batch on a channel nobody will ever read
-// again: never written, never counted, nil error returned to the caller,
-// Close having already returned nil. With the fix, Close must block until
-// the paused producer either finishes its send or the fix drops it — this
-// test asserts Close does not return while the producer is paused, and
-// that the batch it eventually sends is not lost.
+// m5: enqueue/drain race fix — batches passed to EnqueueEvents must never land after Close (closeMu RLock/WLock).
 func TestEnqueueEvents_CannotLandAfterClose(t *testing.T) {
 	fw := &internalFakeWriter{}
 	p := New(fw, PipelineConfig{QueueCap: 16, Workers: 1, BatchSize: 1, FlushInterval: time.Hour},

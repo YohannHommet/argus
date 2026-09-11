@@ -1,14 +1,5 @@
-// read_analytics_test.go is a black-box (package postgres_test) integration
-// suite for AnalyticsSummary/AnalyticsSeries/AnalyticsBreakdown/
-// AnalyticsDecisions (P3-06). Rollup rows are seeded directly via
-// seedRollupHourly/seedRollupDaily — these tests exercise read_analytics.go's
-// aggregation/attributability/dense-bucket logic, not the rollup job itself
-// (that is rollups_test.go's job), so bypassing WriteBatch+RunRollups gives
-// exact, deterministic control over the rollup rows each AC needs. Decision-
-// matrix and query_source tests reuse read_sessions_test.go's
-// seedSession/seedToolCall/nextTestSessionID/testUUID helpers, extended
-// locally where a column those helpers don't set (wait_ms, error_type) is
-// needed.
+// read_analytics_test.go: black-box integration suite for analytics reads (P3-06).
+// Rollup rows seeded directly to test aggregation/attributability/dense-bucket logic.
 package postgres_test
 
 import (
@@ -23,10 +14,7 @@ import (
 	"github.com/YohannHommet/argus/server/internal/store"
 )
 
-// --- rollup seeding ---------------------------------------------------
-
-// rollupSeed is one rollup_hourly/rollup_daily row (SPEC §2.4's column
-// set); zero-value fields keep the table's own DEFAULT 0/”.
+// rollupSeed is one rollup_hourly/rollup_daily row (SPEC §2.4); zero-value fields use table DEFAULTs.
 type rollupSeed struct {
 	Bucket                                                                 time.Time
 	Project, Vendor, Model, Source                                         string

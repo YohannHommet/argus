@@ -202,10 +202,7 @@ func eventKeysetPredicate(b *clauseBuilder, order store.SortOrder, tsCol, vendor
 	return "(" + strings.Join(clauses, " OR ") + ")"
 }
 
-// eventColumnsSlim is the column list (and order) both ListEvents' scan
-// destinations and eventColumnsFull (which appends ", e.attrs") agree on.
-// fields=slim never selects attrs at all (SPEC ticket note: "the point is
-// not transferring it"), not merely omitting it from the response.
+// eventColumnsSlim is the columns for fields=slim (never including attrs per SPEC).
 const eventColumnsSlim = `e.seq, e.id, e.ts, e.ingested_at, e.session_id, e.prompt_id, e.vendor, e.source, e.kind, e.event_name, e.vendor_seq,
 	e.tool_name, e.tool_use_id, e.decision, e.decision_source, e.tool_source, e.query_source, e.model,
 	e.input_tokens, e.output_tokens, e.cache_read_tokens, e.cache_creation_tokens,
@@ -215,8 +212,7 @@ const eventColumnsSlim = `e.seq, e.id, e.ts, e.ingested_at, e.session_id, e.prom
 
 const eventColumnsFull = eventColumnsSlim + `, e.attrs`
 
-// scanEvent scans one row produced by eventColumnsSlim (withAttrs=false) or
-// eventColumnsFull (withAttrs=true) into a model.Event.
+// scanEvent scans a row into model.Event.
 func scanEvent(rows pgx.Rows, withAttrs bool) (model.Event, error) {
 	var e model.Event
 	dest := []any{
@@ -236,10 +232,7 @@ func scanEvent(rows pgx.Rows, withAttrs bool) (model.Event, error) {
 	return e, nil
 }
 
-// listEventsQuery is what buildListEventsQuery returns: the full SQL text
-// plus its positional args, ready for s.pool.Query — and, prefixed with
-// "EXPLAIN ", for read_events_test.go's index-usage assertions. Matches
-// listSessionsQuery's shape/purpose.
+// listEventsQuery holds the SQL, args, and query parameters for buildListEventsQuery's EXPLAIN assertions in read_events_test.go.
 type listEventsQuery struct {
 	SQL       string
 	Args      []any
@@ -248,12 +241,7 @@ type listEventsQuery struct {
 	WithAttrs bool
 }
 
-// buildListEventsQuery renders ListEvents' full dynamic SQL: filter.go's
-// whitelist WHERE clause, the keyset predicate for an incoming cursor (if
-// any), and the ORDER BY/LIMIT for SPEC §1.2's (ts, vendor_seq NULLS LAST,
-// seq) sort — or its exact reverse. Factored out of ListEvents itself so
-// read_events_test.go's EXPLAIN assertions run against the EXACT query
-// ListEvents executes.
+// buildListEventsQuery renders the dynamic SQL for ListEvents with filter, keyset, and sort; factored out so read_events_test.go's EXPLAIN assertions test the exact query.
 func buildListEventsQuery(f store.EventFilter, p store.Page) (listEventsQuery, error) {
 	order := f.Order
 	if order == "" {
@@ -312,11 +300,7 @@ func buildListEventsQuery(f store.EventFilter, p store.Page) (listEventsQuery, e
 	return listEventsQuery{SQL: sql, Args: b.args, Order: order, Limit: limit, WithAttrs: withAttrs}, nil
 }
 
-// ListEvents implements store.Reader (SPEC §3.3, §4.3): filtered,
-// keyset-paginated events, serving both the session-scoped timeline and the
-// cross-session search through store.EventFilter.SessionID. Fetches limit+1
-// rows to learn has_more without a second COUNT query, trimming the extra
-// row before returning — same convention as ListSessions.
+// ListEvents implements store.Reader (SPEC §3.3, §4.3): filtered keyset-paginated events. Fetches limit+1 rows to detect has_more without a separate COUNT query.
 func (s *Store) ListEvents(ctx context.Context, f store.EventFilter, p store.Page) ([]model.Event, store.Cursor, error) {
 	q, err := buildListEventsQuery(f, p)
 	if err != nil {
@@ -359,13 +343,7 @@ func (s *Store) ListEvents(ctx context.Context, f store.EventFilter, p store.Pag
 	return events, nextCursor, nil
 }
 
-// GetEvent implements store.Reader (SPEC §1.2, §4.2): a PK lookup on (ts,
-// seq) — the event_ref's decoded form — always with attrs (SPEC's
-// EventDetail is TimelineEvent plus attrs, unconditionally). Fixed,
-// single-statement, no filter/sort, so it goes through sqlc
-// (db/queries/read_events.sql), matching GetSession's own reasoning. There
-// is no index on events.id (SPEC §1.2, §2.2), so ref is the only lookup key
-// this method accepts.
+// GetEvent implements store.Reader (SPEC §1.2, §4.2): PK lookup on (ts, seq). Uses sqlc (db/queries/read_events.sql) since ref is the only lookup key (no index on events.id per SPEC §2.2).
 func (s *Store) GetEvent(ctx context.Context, ref model.EventRef) (*model.Event, error) {
 	row, err := gen.New(s.pool).GetEventByRef(ctx, gen.GetEventByRefParams{
 		Ts:  pgtype.Timestamptz{Time: ref.TS, Valid: true},
@@ -431,28 +409,8 @@ func (s *Store) GetEvent(ctx context.Context, ref model.EventRef) (*model.Event,
 	return &e, nil
 }
 
-// eventsSinceSQL is the SSE `Last-Event-ID` replay query SPEC §5.2 specifies
-// verbatim: "`ts >= $windowStart AND (ts, seq) > ($ts, $seq) ORDER BY ts, seq
-// LIMIT $n`, which rides the `(ts, seq)` primary key and prunes to at most
-// two partitions — as opposed to a bare `seq > $n`, which has no usable
-// index and would scan 90 days of partitions on every reconnect." The row-
-// comparison form `(e.ts, e.seq) > ($2, $3)` is required, not
-// `e.ts > $2 OR (e.ts = $2 AND e.seq > $3)`: only the row-comparison form
-// lets Postgres plan the predicate directly against the composite PK.
-//
-// Hand-written pgx rather than a sqlc query, despite EventsSince being
-// exactly the kind of fixed, single-statement, no-dynamic-filter query
-// db/queries/read_events.sql otherwise holds (see GetEventByRef there):
-// sqlc v1.31.1 cannot type this predicate correctly. A draft
-// `-- name: EventsSince :many` query with this identical WHERE clause was
-// generated and inspected; sqlc inferred the row comparison's SECOND
-// parameter — `seq`, an int64 — as `pgtype.Timestamptz`, the type of the
-// tuple's FIRST element (`ts`), instead of inferring each tuple position
-// independently. Passing an int64 for that parameter would then be a type
-// error, and coercing it would bind the wrong wire type against a bigint
-// column. Reuses eventColumnsSlim/scanEvent (this file, ListEvents' own
-// column list and scan helper) rather than introducing a third column list
-// to work around sqlc.
+// eventsSinceSQL implements SPEC §5.2's SSE replay query: `ts >= $1 AND (ts, seq) > ($2, $3)` riding the composite PK (not `seq > $n`, which would scan 90 days of partitions).
+// Hand-written pgx because sqlc v1.31.1 mistyped the row comparison's second parameter as timestamptz instead of int64; see comments in code.
 const eventsSinceSQL = `
 	SELECT ` + eventColumnsSlim + `
 	FROM events e
@@ -460,26 +418,8 @@ const eventsSinceSQL = `
 	ORDER BY e.ts, e.seq
 	LIMIT $4`
 
-// EventsSince implements store.Reader (SPEC §5.2, P5-01a): the storage half
-// of SSE `Last-Event-ID`/`?after=` replay. Ordering is ascending (ts, seq)
-// only — NOT the (ts, vendor_seq NULLS LAST, seq) sort ListEvents/GetEvent's
-// package doc describes — because replay's contract is "apply these events
-// as if they arrived live" (SPEC §5.2), and live delivery order is
-// insertion order on the (ts, seq) PK, not the vendor_seq-aware display
-// order ListEvents renders for the timeline UI.
-//
-// Rows come back in the slim shape (SPEC §5.1: the SSE `event: event` frame
-// carries no attrs; the UI fetches the full event by event_ref when the
-// drawer opens), so every returned model.Event.Attrs is nil — callers must
-// not read a nil Attrs here as "this event has no attrs", only as "attrs
-// were not fetched".
-//
-// limit <= 0 is clamped to defaultEventsSinceLimit (SPEC §3.7's
-// ARGUS_STREAM_REPLAY_MAX default); limit above maxEventsSinceLimit is
-// capped to it. The return value is always a non-nil slice — including when
-// after is at or past the newest persisted event, in which case it is a
-// non-nil empty slice with a nil error, never a nil slice a caller could
-// misread as an error-adjacent state.
+// EventsSince implements store.Reader (SPEC §5.2): SSE `Last-Event-ID` replay in insertion order (ts,seq), not the vendor_seq-aware display order of ListEvents.
+// Rows are slim (no attrs per SPEC §5.1); limit is clamped to [defaultEventsSinceLimit, maxEventsSinceLimit]; always returns a non-nil slice.
 func (s *Store) EventsSince(ctx context.Context, after model.EventRef, windowStart time.Time, limit int) ([]model.Event, error) {
 	if limit <= 0 {
 		limit = defaultEventsSinceLimit

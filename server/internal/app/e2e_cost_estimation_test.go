@@ -1,23 +1,8 @@
 //go:build e2e
 
-// Package app — e2e_cost_estimation_test.go is D-30's end-to-end regression
-// test (docs/review/phase-4-gauntlet.md, candidate D-30, owner-ratified
-// 2026-08-18: "the sessions/turns projections report a measured $0.00 for
-// cost they cannot know"). It drives the real argus-sim CLI
-// (--cost-mode=omit, exactly the flag the gauntlet's own repro used) against
-// a real running App over real HTTP — never a hand-built batch of
-// model.Event — and reads the result back through the real GET
-// /api/v1/sessions endpoint, so it exercises the whole path the gauntlet's
-// captured screenshot came from: ingest -> normalize -> WriteBatch's
-// session/turn fold -> the read API -> the wire shape the UI renders.
-//
-// Before the fix, every session in a --cost-mode=omit run showed the exact
-// D-30 signature: cost.usd == 0 && cost.estimated_usd == 0 while the session
-// still burned real, non-zero tokens — a measured-looking zero for a cost
-// Argus simply never tried to estimate. This test fails on that signature
-// and passes once upsert_session.go/upsert_turn.go actually run the
-// estimator (internal/pricing, via the model_prices App.New imports at
-// startup — see read_api_e2e_test.go's comment on that startup import).
+// Package app — e2e_cost_estimation_test.go: D-30 regression test. Drives
+// argus-sim over HTTP and asserts every session burning real tokens gets
+// cost_estimated_usd > 0 (not the D-30 signature of 0 across both cost fields).
 package app
 
 import (

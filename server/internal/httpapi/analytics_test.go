@@ -1,10 +1,4 @@
-// analytics_test.go is httpapi's black-box (package httpapi_test) test
-// suite for the four analytics handlers, GET /api/v1/facets, GET
-// /api/v1/meta's P3-08 extension, and the two GET /api/v1/quality/*
-// handlers (P3-08), following events_test.go's convention: exercise
-// httpapi.New's real router end to end via httptest, using fakeReader (this
-// package's shared P3-07/P3-08 test double, sessions_test.go) rather than a
-// concrete store.
+// Package httpapi_test contains black-box tests for analytics and quality handlers.
 package httpapi_test
 
 import (
@@ -37,8 +31,6 @@ func getJSON(t *testing.T, r http.Handler, path string, out any) *httptest.Respo
 	}
 	return rec
 }
-
-// --- AC: invalid metric=/bucket=/dimension= -> 400 listing allowed values --
 
 func TestGetAnalyticsTimeseries_InvalidMetric_400ListsAllowedValues(t *testing.T) {
 	t.Parallel()
@@ -95,8 +87,6 @@ func TestGetAnalyticsBreakdown_InvalidMetric_400ListsAllowedValues(t *testing.T)
 	}
 }
 
-// --- AC: source=metric returns metric-sourced rows, never mixed with event -
-
 func TestGetAnalyticsSummary_SourceMetric_NeverMixedWithEvent(t *testing.T) {
 	t.Parallel()
 
@@ -137,8 +127,6 @@ func TestGetAnalyticsSummary_SourceEvent_IsTheDefault(t *testing.T) {
 	require.Equal(t, model.Source("event"), got.Source)
 }
 
-// --- AC: store.ErrNotAttributable maps to 400 urn:argus:error:not-attributable
-
 func TestGetAnalyticsTimeseries_NotAttributable_400(t *testing.T) {
 	t.Parallel()
 	reader := &fakeReader{
@@ -170,11 +158,7 @@ func TestGetAnalyticsBreakdown_NotAttributable_400(t *testing.T) {
 	require.Contains(t, rec.Body.String(), `"type":"urn:argus:error:not-attributable"`)
 }
 
-// TestGetAnalyticsSummary_ModelFiltered_NullCountersPassThrough is the
-// ticket note's AC: AnalyticsSummary does NOT error under a model filter —
-// httpapi must pass the null counters and not_attributable[] through
-// faithfully, a `null` counter serialising as JSON null, never 0 or
-// omitted.
+// TestGetAnalyticsSummary_ModelFiltered_NullCountersPassThrough verifies null counters pass through as JSON null.
 func TestGetAnalyticsSummary_ModelFiltered_NullCountersPassThrough(t *testing.T) {
 	t.Parallel()
 	reader := &fakeReader{
@@ -202,8 +186,6 @@ func TestGetAnalyticsSummary_ModelFiltered_NullCountersPassThrough(t *testing.T)
 	require.ElementsMatch(t, []string{"sessions", "turns", "tool_calls", "tool_rejects", "reject_rate", "loc", "active_seconds"}, got.NotAttributable)
 }
 
-// --- AC: /facets served from cache on the second call ----------------------
-
 func TestGetFacets_ServedFromCacheOnSecondCall(t *testing.T) {
 	t.Parallel()
 
@@ -226,9 +208,7 @@ func TestGetFacets_ServedFromCacheOnSecondCall(t *testing.T) {
 	require.Equal(t, first, second)
 }
 
-// TestGetFacets_StoreErrorNotCached is the ticket note's AC: an error must
-// not be cached as a success — the very next call must retry the store, not
-// serve a stuck zero value.
+// TestGetFacets_StoreErrorNotCached verifies errors are not cached.
 func TestGetFacets_StoreErrorNotCached(t *testing.T) {
 	t.Parallel()
 
@@ -254,8 +234,6 @@ func TestGetFacets_StoreErrorNotCached(t *testing.T) {
 	require.Equal(t, []string{"argus"}, second.Projects)
 }
 
-// --- AC: /meta reports hooks_seen=false / tool_details_seen=false ----------
-
 func TestGetMeta_ExtendedFields_ReportsHonestFalseFlags(t *testing.T) {
 	t.Parallel()
 
@@ -264,8 +242,7 @@ func TestGetMeta_ExtendedFields_ReportsHonestFalseFlags(t *testing.T) {
 			return model.Facets{Projects: []string{}, Models: []string{}, Vendors: []string{"claude_code"}, Tools: []string{}, DecisionSources: []string{}, QuerySources: []string{}}, nil
 		},
 		DataQualityFunc: func(context.Context) (model.DataQuality, error) {
-			// A database that received only OTLP: logs/metrics seen, hooks
-			// and tool_parameters detail never seen.
+			// Only OTLP received; logs/metrics seen, hooks/tool details not.
 			return model.DataQuality{LogsExporterSeen: true, MetricsExporterSeen: false, HooksSeen: false, ToolDetailsSeen: false}, nil
 		},
 		AnalyticsSummaryFunc: func(context.Context, store.AnalyticsFilter) (model.Summary, error) {
@@ -301,8 +278,6 @@ func TestGetMeta_NilAnalytics_StillServesBaseFields(t *testing.T) {
 	require.Contains(t, got, "version")
 	require.False(t, got["hooks_seen"].(bool))
 }
-
-// --- AC: /quality/unknown-kinds groups by event_name, bounded to window ----
 
 func TestGetQualityUnknownKinds_PassesSinceThrough(t *testing.T) {
 	t.Parallel()
@@ -347,8 +322,6 @@ func TestGetQualityUnknownKinds_DefaultSinceIsMinus24h(t *testing.T) {
 	require.WithinDuration(t, time.Now().Add(-24*time.Hour), gotSince, 5*time.Second)
 }
 
-// --- AC: /quality/hook-latency returns percentiles per hook_event ----------
-
 func TestGetQualityHookLatency_ReturnsRowsPerHookEvent(t *testing.T) {
 	t.Parallel()
 
@@ -370,8 +343,6 @@ func TestGetQualityHookLatency_ReturnsRowsPerHookEvent(t *testing.T) {
 	require.Equal(t, int64(9), got.Rows[0].P50MS)
 }
 
-// --- AC: decisions endpoint (from/to/project only) --------------------------
-
 func TestGetAnalyticsDecisions_ReturnsMatrix(t *testing.T) {
 	t.Parallel()
 
@@ -391,8 +362,6 @@ func TestGetAnalyticsDecisions_ReturnsMatrix(t *testing.T) {
 	require.Len(t, got.Rows, 1)
 	require.Equal(t, "Edit", got.Rows[0].ToolName)
 }
-
-// --- AC: breakdown happy path -----------------------------------------------
 
 func TestGetAnalyticsBreakdown_ReturnsRows(t *testing.T) {
 	t.Parallel()

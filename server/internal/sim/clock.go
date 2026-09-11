@@ -2,17 +2,12 @@ package sim
 
 import "time"
 
-// FixedEpoch is the deterministic clock origin SPEC §7.2 mandates whenever
-// --out is used or --deterministic is passed: "defaulting to the fixed
-// epoch 2026-01-01T00:00:00Z … Without a fixed origin, 'identical seed ⇒
-// byte-identical payloads' is false (timestamps move with the wall clock)".
+// FixedEpoch is the deterministic clock origin for --out/--deterministic
+// (SPEC §7.2: ensures identical seed ⇒ byte-identical payloads).
 var FixedEpoch = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
-// ResolveClockOrigin implements SPEC §7.2's --clock-origin default logic.
-// explicit is the --clock-origin flag value (empty means "not passed").
-// useOut and deterministic are --out being set and --deterministic being
-// passed, respectively; nowFn/backfill implement the "now - backfill"
-// branch for live (non-fixture) runs.
+// ResolveClockOrigin implements SPEC §7.2's --clock-origin defaults:
+// explicit flag, FixedEpoch if --out/--deterministic, else now - backfill.
 func ResolveClockOrigin(explicit string, useOut, deterministic bool, nowFn func() time.Time, backfill time.Duration) (time.Time, error) {
 	if explicit != "" {
 		return time.Parse(time.RFC3339, explicit)
@@ -23,15 +18,10 @@ func ResolveClockOrigin(explicit string, useOut, deterministic bool, nowFn func(
 	return nowFn().Add(-backfill), nil
 }
 
-// Clock is the single time source every generated event's timestamp goes
-// through (doc.go's chaos-hooks note: chaos-clock-skew wraps this). It maps
-// a monotonically increasing "simulated seconds since origin" cursor to a
-// wall timestamp, compressed by --speed (SPEC §7.2: "--speed=X compresses
-// simulated time, so a 14-day backfill lands in seconds" — speed only
-// matters for how fast a *live* run's real POSTs are paced; the timestamps
-// stamped onto events are always Origin + cursor, uncompressed, so a
-// backfilled event's ts is genuinely 14 days old regardless of how fast the
-// process producing it runs).
+// Clock is the single time source for all event timestamps (wrapped by
+// chaos-clock-skew). Maps cursor (simulated seconds since origin) to wall
+// timestamp. Speed only affects pacing of live POSTs, not event timestamps
+// (always Origin + uncompressed cursor, per SPEC §7.2).
 type Clock struct {
 	Origin time.Time
 }

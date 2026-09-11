@@ -11,17 +11,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestLoadMode_ThroughputWithinTolerance is the ticket's load-mode AC:
-// "--mode=load --rate=200 --duration=10s reports throughput within 15% of
-// target" — implemented with exactly those numbers.
-//
-// It measures against a local httptest server that does nothing but return
-// 200 OK (never a live Argus: P2-10/P2-11's OTLP and hook receivers land
-// after this ticket), so the only thing under test is this package's own
-// rate-control code in runner.go, not ingestion latency. Measured 200.0
-// events/s against the 200 target on three consecutive runs, so the AC's
-// 15% tolerance is honoured verbatim rather than widened; a genuine
-// regression in the pacing code fails loudly here.
+// TestLoadMode_ThroughputWithinTolerance asserts load-mode AC: --rate=200
+// --duration=10s reports throughput within 15% of target (measures rate
+// control against httptest, not ingestion latency).
 func TestLoadMode_ThroughputWithinTolerance(t *testing.T) {
 	if testing.Short() {
 		t.Skip("short mode: skipping timing-sensitive load test")

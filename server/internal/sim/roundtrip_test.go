@@ -13,14 +13,9 @@ import (
 	"github.com/YohannHommet/argus/server/internal/model"
 )
 
-// TestGenerator_RoundTripsThroughNormalizers is the AC2 test: "the emitted
-// payloads round-trip through the P2-02/P2-04 normalizers with zero
-// `unknown` kinds and zero rejections (a unit test wiring generator ->
-// normalizer, no server)". It calls generateSession directly (pure,
-// doc.go's generator/transport split) and feeds the resulting protobuf
-// messages and hook payloads straight into the real normalizers — no
-// encoding, no HTTP, no file I/O, so this stays a cheap, deterministic unit
-// test.
+// TestGenerator_RoundTripsThroughNormalizers asserts AC2: emitted payloads
+// round-trip through normalizers with zero unknown kinds and zero rejections
+// (unit test: generator → normalizer, no encoding/HTTP/I/O).
 func TestGenerator_RoundTripsThroughNormalizers(t *testing.T) {
 	t.Parallel()
 

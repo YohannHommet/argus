@@ -13,15 +13,7 @@ import (
 	"github.com/YohannHommet/argus/server/internal/httpapi"
 )
 
-// TestStreamAwareTimeout_BypassesOnlyTheTwoSSERoutes is Trap 1's regression
-// test (P5-02): chi's root Timeout middleware used to apply to every route,
-// including the two SSE ones, so a live stream would be killed at exactly
-// `requestTimeout` while every fast unit test stayed green and hid the bug.
-// A 30s reproduction is not practical in a unit test, so this drives
-// StreamAwareTimeout directly with a 1ms timeout and asserts the two
-// directions the ticket calls out: the SSE routes reach the inner handler
-// with an undeadlined context (bypassed), while an ordinary route still
-// gets chi's own bounded context (and it actually fires).
+// TestStreamAwareTimeout_BypassesOnlyTheTwoSSERoutes verifies SSE routes bypass timeout.
 func TestStreamAwareTimeout_BypassesOnlyTheTwoSSERoutes(t *testing.T) {
 	t.Parallel()
 	const timeout = time.Millisecond

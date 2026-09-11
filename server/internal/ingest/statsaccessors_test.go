@@ -15,14 +15,10 @@ import (
 	"github.com/YohannHommet/argus/server/internal/store"
 )
 
-// The four accessors below exist so internal/app can build a
-// stream.Snapshot (SPEC §5.1's `stats` frame) without importing
-// prometheus/client_golang's testutil. They are the operator-facing numbers
-// on the live view's health strip — events/sec, ingest lag, queue depth,
-// dropped total — so a silent arithmetic mistake in one of them is a wrong
-// number on a screen whose whole purpose is being trustworthy, with nothing
-// else in the system to contradict it. Hence direct tests rather than relying
-// on the broadcaster's own coverage.
+// The four accessors build stream.Snapshot's `stats` frame (SPEC §5.1) without
+// importing prometheus testutil. They are operator-facing numbers (events/sec,
+// lag, queue depth, dropped) on the health strip — a silent arithmetic mistake
+// is a wrong number on screen, so they have direct tests.
 
 func TestMetrics_EventsTotal_SumsEverySourceLabel(t *testing.T) {
 	t.Parallel()
@@ -66,13 +62,11 @@ func TestMetrics_LagObservations_ReportsCumulativeSumAndCount(t *testing.T) {
 	sum, count = m.LagObservations()
 	require.InDelta(t, 2.0, sum, 1e-9)
 	require.Equal(t, uint64(3), count)
-	// The broadcaster divides one delta by the other to get a mean; the pair
-	// must therefore come from the same histogram read.
+
 	require.InDelta(t, 2.0/3.0, sum/float64(count), 1e-9)
 }
 
-// blockingWriter parks inside WriteBatch until released, so batches pile up in
-// the pipeline's own channel and QueueDepth has something non-zero to report.
+// blockingWriter blocks in WriteBatch, letting QueueDepth report buffered batches.
 type blockingWriter struct{ release chan struct{} }
 
 func (b *blockingWriter) WriteBatch(ctx context.Context, evs []model.Event) (store.BatchResult, error) {
@@ -96,8 +90,6 @@ func TestPipeline_QueueDepth_ReportsBufferedBatches(t *testing.T) {
 
 	require.Zero(t, p.QueueDepth(), "nothing enqueued yet")
 
-	// The single worker parks in WriteBatch on the first batch; everything
-	// after it stays in the channel, which is exactly what queue_depth means.
 	for i := 0; i < 6; i++ {
 		require.NoError(t, p.EnqueueEvents([]model.Event{testEvent("q", model.SourceHook)}))
 	}
@@ -109,12 +101,9 @@ func TestPipeline_QueueDepth_ReportsBufferedBatches(t *testing.T) {
 	require.Zero(t, p.QueueDepth(), "a fully drained pipeline reports an empty queue")
 }
 
-// TestHubPublisher_WithLogger_ReportsAFailedSessionRead covers the option and,
-// more usefully, the tick's own error branch: a session can be swept or
-// retention-deleted between Publish marking it dirty and the debounce tick
-// reading it, so a failed read must be logged and skipped rather than
-// abandoning the whole tick or (worse) publishing a zero-valued frame that a
-// browser would render as a real projection snapshot.
+// TestHubPublisher_WithLogger_ReportsAFailedSessionRead tests error handling:
+// a session can be deleted between marking dirty and reading, so a failed read
+// must be logged and skipped, never abandoning the tick or publishing a stale frame.
 func TestHubPublisher_WithLogger_ReportsAFailedSessionRead(t *testing.T) {
 	t.Parallel()
 	h := &capturingHandler{}
@@ -137,8 +126,6 @@ func TestHubPublisher_WithLogger_ReportsAFailedSessionRead(t *testing.T) {
 		return ok
 	}, 2*time.Second, 5*time.Millisecond, "a failed session read must be logged, never silently swallowed")
 
-	// The event frame still went out — a projection read failing must not cost
-	// the browser the events themselves, which are already committed.
 	require.Positive(t, hub.eventCount())
 	require.Zero(t, hub.sessionFrameCount("gone"), "no session frame may be invented from a failed read")
 }

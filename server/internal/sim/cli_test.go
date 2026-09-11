@@ -7,10 +7,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestRunCLI_OutModeExitsZero is a smoke test for the `sim` subcommand's
-// flag surface (SPEC §7.2's whole flag list): a --out run with a handful
-// of the ticket-named flags set should parse cleanly and exit 0, since
-// --out never touches the exit-code-from-HTTP-histogram path.
+// TestRunCLI_OutModeExitsZero smoke-tests the sim subcommand's flag surface
+// (SPEC §7.2): --out run should exit 0 (no HTTP histogram path).
 func TestRunCLI_OutModeExitsZero(t *testing.T) {
 	t.Parallel()
 
@@ -30,9 +28,8 @@ func TestRunCLI_OutModeExitsZero(t *testing.T) {
 	require.Contains(t, stdout.String(), "sessions")
 }
 
-// TestRunCLI_RejectsUnknownMode covers the flag-validation branch (SPEC
-// §7.2's --mode=demo|load — anything else must be a usage error, not a
-// silent fallback to demo).
+// TestRunCLI_RejectsUnknownMode covers flag validation (SPEC §7.2): unknown
+// --mode must be usage error, not silent fallback.
 func TestRunCLI_RejectsUnknownMode(t *testing.T) {
 	t.Parallel()
 

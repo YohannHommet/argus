@@ -12,9 +12,7 @@ import (
 	"github.com/YohannHommet/argus/server/internal/httpapi"
 )
 
-// fakeMigrations is the httpapi.MigrationsChecker fake used to exercise
-// /readyz's migrations-pending/failed branches, wired in by P2-09 to close
-// Phase-1 deviation D-5.
+// fakeMigrations is a test double for MigrationsChecker.
 type fakeMigrations struct {
 	current bool
 	err     error
@@ -22,8 +20,7 @@ type fakeMigrations struct {
 
 func (f fakeMigrations) MigrationsCurrent(_ context.Context) (bool, error) { return f.current, f.err }
 
-// fakeQueue is the httpapi.QueueSaturationChecker fake used to exercise
-// /readyz's third SPEC §3.8 condition.
+// fakeQueue is a test double for QueueSaturationChecker.
 type fakeQueue struct {
 	saturated bool
 }
@@ -99,10 +96,7 @@ func TestReadyz_QueueNotSaturated_OK(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 }
 
-// TestReadyz_NilMigrationsAndQueue_PreservesPhase1Behaviour is the
-// nil-safety AC: neither port set (Deps zero value for both) must behave
-// exactly like Phase 1 — "migrations":"current" asserted, no queue check —
-// so router_test.go's pre-existing TestReadyz_UpDB keeps passing unchanged.
+// TestReadyz_NilMigrationsAndQueue_PreservesPhase1Behaviour verifies nil-safety.
 func TestReadyz_NilMigrationsAndQueue_PreservesPhase1Behaviour(t *testing.T) {
 	r := httpapi.New(httpapi.Deps{Store: fakeStore{}, Assets: testAssets(t)})
 

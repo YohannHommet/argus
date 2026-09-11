@@ -10,10 +10,8 @@ import (
 	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
 )
 
-// Distribution constants transcribed verbatim from SPEC §7.1. Each is used
-// exactly once, at its call site below, with a comment repeating the exact
-// SPEC clause it implements — kept as named constants rather than inline
-// literals so a future SPEC amendment is a one-line diff.
+// Distribution constants from SPEC §7.1 (kept as named constants for
+// future SPEC amendments to be one-line diffs).
 const (
 	turnsMean, turnsMin, turnsMax = 6.0, 1, 20 // "1-20 turns (geometric, mean 6)"
 
@@ -53,11 +51,8 @@ const (
 	metricExportPeriod = 60 * time.Second // "Every 60s of simulated time"
 )
 
-// sessionResult is one fully-generated session: every log record, hook
-// payload, and metric point it produced, each still carrying its own
-// simulated timestamp so batch.go can group them by flush interval without
-// re-deriving timing. Pure data — no protobuf encoding happens here (that
-// is encode.go's job) and no I/O happens here (transport.go's job).
+// sessionResult holds one session's logs, hooks, metrics (timestamps for
+// batching). Pure data (no encoding, no I/O).
 type sessionResult struct {
 	SessionID string
 	Identity  sessionIdentity
@@ -81,10 +76,8 @@ type metricEmission struct {
 	M  *metricspb.Metric
 }
 
-// sessionBuilder accumulates one session's emissions while walking SPEC
-// §7.1's per-turn recipe. cursor is simulated-seconds-since-origin, always
-// non-decreasing, so every timestamp this builder stamps is reproducible
-// from (seed, sessionOrdinal, startOffset) alone.
+// sessionBuilder accumulates session emissions (SPEC §7.1). Cursor is
+// simulated-seconds-since-origin (reproducible from seed/ordinal/startOffset).
 type sessionBuilder struct {
 	cfg    Config
 	clock  Clock
@@ -94,11 +87,8 @@ type sessionBuilder struct {
 	cursor time.Duration
 	logSeq int64
 
-	// chaosR is chaos.go's own RNG stream for this session (--chaos-*
-	// per-event draws: clock skew), kept separate from r so enabling a
-	// chaos flag never perturbs the ordinary content generation a clean
-	// run with the same --seed would have produced (chaosRand's doc
-	// comment). Built lazily only when a chaos flag needing it is on.
+	// chaosR is chaos.go's separate RNG stream (--chaos-* per-event draws).
+	// Never perturbs content generation (see chaosRand). Built lazily.
 	chaosR *rand.Rand
 }
 
