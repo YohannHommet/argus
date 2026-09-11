@@ -29,4 +29,4 @@ export const NOT_EXPOSED_BY_API = "Not exposed by Argus's read API yet"
  * not a wiring bug, so it gets a reason rather than blank space.
  */
 export const NO_PROJECT_SIGNAL_YET =
-  'No session.start or workspace.cwd_changed hook event has been observed yet for this session (SPEC §1.5.3) — project is not yet known'
+  'No session.start or workspace.cwd_changed hook event has been observed yet for this session — project is not yet known'

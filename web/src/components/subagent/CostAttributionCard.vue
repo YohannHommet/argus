@@ -87,7 +87,7 @@ const estimatedNoticeText = computed(() => {
 })
 
 const PER_QUERY_SOURCE_ESTIMATED_CAVEAT_HINT =
-  'The per-query-source split above only ever covers vendor-reported cost (SPEC §2.1) — it has no estimated figures to attribute.'
+  'The per-query-source split above only ever covers vendor-reported cost — it has no estimated figures to attribute.'
 
 const PER_NODE_UNAVAILABLE_HINT =
   'Per-node cost is not available for this session — costs above are attributed by query source only, not by individual subagent.'

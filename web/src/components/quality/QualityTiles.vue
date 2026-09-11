@@ -222,7 +222,7 @@ const oldestRawEventSummary = computed(() =>
       :value="null"
       :reason="`${NOT_EXPOSED_BY_API}: partial is a per-session flag on /sessions, never an aggregate count.`"
       summary="Seen only via a later reference, no session.start event."
-      description="Sessions Argus only ever saw via a later reference, with no session.start event (SPEC §1.7) — usually a truncated export or a session that started before Argus's retention window began. Inspect individual sessions' &quot;Partial&quot; badge on the Sessions view to find them."
+      description="Sessions Argus only ever saw via a later reference, with no session.start event — usually a truncated export or a session that started before Argus's retention window began. Inspect individual sessions' &quot;Partial&quot; badge on the Sessions view to find them."
     />
 
     <!-- Clock-skewed (24h) — TimelineEvent.clock_skewed exists per-event, never as a count. -->
@@ -240,7 +240,7 @@ const oldestRawEventSummary = computed(() =>
       data-testid="quality-tile-heuristic-share"
       label="Heuristic tool-call share"
       :value="null"
-      :reason="`${NOT_EXPOSED_BY_API}: correlation is a per-tool-call field (SPEC §1.6), never aggregated into a share.`"
+      :reason="`${NOT_EXPOSED_BY_API}: correlation is a per-tool-call field, never aggregated into a share.`"
       summary="Share of tool-calls correlated by best-effort matching, not exact join."
       description="Share of tool-call correlations resolved by heuristic matching rather than exact hook/OTel correlation — the weakest confidence tier. A high share means tool-call attribution on this data is less trustworthy; check individual rows' correlation on the tool-calls endpoint if a number looks off."
     />
