@@ -93,19 +93,10 @@ const exporters = computed(() => [
 ])
 
 /**
- * Round-5 critic gap: every other tile in this strip leads with one
- * semibold `text-sm` value on its own baseline; this cell instead opened
- * straight into a wrapped row of 4 chips, breaking the strip's shared value
- * baseline. A "seen/total" count now fills that same slot.
- *
- * Round-7 critic gap: the per-exporter chip list (kept below the count as
- * the detail) still wrapped onto two rows at typical widths, ballooning
- * this one cell to 87px against the other five cells' 47px and leaving a
- * dead band under them. Every other cell in this strip that carries detail
- * beyond its headline value (Dropped (server)/Dropped (this tab)) puts that
- * detail in a `CircleHelp` info tooltip rather than inline — this cell now
- * follows the same idiom instead of being the one exception, which is what
- * restores the shared two-line cell height across the whole strip.
+ * A "seen/total" count is this cell's headline value, matching the one-semibold-value baseline
+ * every other tile in this strip shares. The per-exporter detail (which exporter, seen or not) lives
+ * in a `CircleHelp` info tooltip rather than inline — the same idiom every other cell with extra
+ * detail (Dropped (server)/(this tab)) already uses, keeping a shared two-line cell height.
  */
 const exportersSeenCount = computed(() => exporters.value.filter((e) => e.seen).length)
 

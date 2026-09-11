@@ -1,13 +1,9 @@
 <script setup lang="ts">
 /**
- * The wide-viewport counterpart to `EventDetailSheet.vue`: a persistent
- * right-side pane, always in the layout (not a modal/overlay), so the
- * timeline and the inspector are visible together — the Langfuse
- * span-tree + inspector idiom the round-3 critic asked for explicitly,
- * which an overlay `Sheet` can never give since it covers the tree it's
- * explaining. `EventInspector.vue` decides when to mount this vs. the
- * `Sheet`; this component itself has no open/closed state — "nothing
- * selected yet" is just another content state of `EventDetailContent`.
+ * The wide-viewport counterpart to `EventDetailSheet.vue`: a persistent right-side pane, always in
+ * the layout (not a modal/overlay), so the timeline and the inspector are visible together — an
+ * overlay `Sheet` can never give that since it covers the tree it's explaining. `EventInspector.vue`
+ * decides when to mount this vs. the `Sheet`; this component has no open/closed state of its own.
  */
 import EventDetailContent from './EventDetailContent.vue'
 

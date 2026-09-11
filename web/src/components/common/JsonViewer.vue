@@ -58,15 +58,10 @@ const serialized = computed(() => {
       />
     </div>
     <!--
-      Round-4 critic gap: this block hard-clipped mid-string, because a
-      `pre`'s default `white-space: pre` never wraps and its overflow
-      scrollbar isn't discoverable in a static capture (or even at a glance
-      in the live app). `whitespace-pre-wrap` + `break-all` wraps long
-      unbroken strings (a raw attrs value can be an arbitrarily long token/
-      path with no natural break points) at the container's own edge —
-      every character stays visible by growing the box's height, which
-      `overflow-auto`'s own vertical scroll (capped by `maxHeightRem`) still
-      bounds for a pathologically large payload.
+      `whitespace-pre-wrap` + `break-all` wraps long unbroken strings (a raw attrs value can be an
+      arbitrarily long token/path with no natural break points) at the container's edge — every
+      character stays visible by growing height, which `overflow-auto` (capped by `maxHeightRem`)
+      still bounds for a pathologically large payload.
     -->
     <pre
       class="bg-muted/40 border-border text-foreground overflow-auto rounded-md border p-3 font-mono text-xs leading-relaxed break-all whitespace-pre-wrap"

@@ -59,9 +59,8 @@ export const useMetaStore = defineStore('meta', () => {
     if (facetsResult.status === 'fulfilled') {
       facets.value = facetsResult.value
     } else {
-      // Last error wins when both fail — a single `error` ref can't carry
-      // two failures at once, and which one wins doesn't change what the
-      // caller should do (retry `load()`).
+      // Last error wins when both fail — a single `error` ref can't carry two failures at once, and
+      // which one wins doesn't change what the caller should do (retry `load()`).
       latestError = facetsResult.reason instanceof Error ? facetsResult.reason : new Error(String(facetsResult.reason))
     }
 
@@ -73,11 +72,8 @@ export const useMetaStore = defineStore('meta', () => {
   function startAutoRefresh(): void {
     stopAutoRefresh()
     refreshTimer = setInterval(() => {
-      // A background refresh has no retry button and no inline slot for a
-      // failure to land in — the view that started this a while ago is
-      // still showing the last-good meta/facets, and should keep doing
-      // so. A toast is the one place this failure can surface at all
-      // without silently swallowing it or tearing down a working screen.
+      // A background refresh has no retry button or inline failure slot — the view is still showing
+      // the last-good data, so a toast is the one place this can surface without tearing down the screen.
       void load({ force: true }).then(() => {
         if (error.value) notifyApiFailure(error.value, { title: 'Background refresh failed' })
       })

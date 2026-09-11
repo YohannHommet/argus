@@ -1,46 +1,19 @@
 <script setup lang="ts">
 /**
- * SPEC §6.2/§6.3's firehose feed: streaming rows reusing `EventRow`, a kind
- * filter, pause/resume with a buffered-count badge, auto-scroll with a
- * "jump to latest" affordance, row-click → `EventDetailSheet`, and (round-6
- * critic gap) a sticky labeled header naming its own columns — `EventRow`'s
- * right-hand metrics are otherwise four unlabeled numeric tracks, mostly
- * `EM_DASH` on any one row, with no way to tell which is which.
+ * SPEC §6.2/§6.3 firehose feed: streaming rows via `EventRow`, kind filter, pause/resume,
+ * auto-scroll, row-click → `EventDetailSheet`.
  *
- * Round-8 critic gap: the "Time" column rendered each row's own
- * vendor-emitted `ts` (SPEC's `ts`, not arrival order) down a list ordered
- * by *arrival* (newest-received-first) — out-of-order event clocks are real
- * (clock skew, multi-source fan-in) and this is the one view whose whole
- * point is showing stream truth, so the fix is not to re-sort the feed, it
- * is to stop mislabeling the column. The column is now "Received": each
- * row's client wall-clock the instant this tab's `EventSource` handler saw
- * the frame (`liveStore`'s `receivedAt`, stamped once as frames land —
- * monotonic by construction), which reads monotonically top-to-bottom by
- * the same construction that made the row order itself monotonic. The
- * event's own `ts` is not discarded — it rides along on the row's own hover
- * title (see the `title` fallthrough on `EventRow` below) and stays exactly
- * what `EventDetailSheet` shows in the inspector, since that fetches by
- * `event_ref` independently of anything this column displays.
+ * The "Received" column is each row's client wall-clock the instant this tab's `EventSource`
+ * handler saw the frame (`liveStore`'s `receivedAt`, monotonic by construction) — not the
+ * vendor-emitted `ts`, which can arrive out of order (clock skew, multi-source fan-in). `ts` is not
+ * discarded: it rides along on the row's hover title and is still what `EventDetailSheet` shows.
  *
- * Round-9 critic gap: `EventRow`'s identity cluster (label/detail/decision/
- * skew/file_path) rendered `flex-1`, so on a row whose own content was short
- * it stretched to soak up every pixel between it and the right-hand metric
- * cluster — a 460–630px dead void, up to half the table, versus ~95px on
- * `SessionTable.vue`'s tightest inter-column gap. The row below now passes
- * `compact-event-column` (see `EventRow.vue`'s own doc on that prop): the
- * identity cluster gets a fixed `w-96` instead of a growing one, so the
- * metric cluster sits immediately after it rather than floating to the
- * table's far edge. On a wide viewport that leaves trailing whitespace after
- * the row's content — an accepted trade for a left-weighted, Sessions-style
- * table rather than a full-bleed one.
+ * `compact-event-column` gives `EventRow`'s identity cluster a fixed `w-96` instead of a growing
+ * `flex-1`, so the metric cluster sits right after it instead of floating to the table's far edge.
  *
- * Fully props-in/events-out (no store read of its own) — the ticket calls
- * this out explicitly as the easier-to-test shape for "100 fake frames
- * render correctly", and it is: every one of this file's tests mounts with
- * a plain `TimelineEvent[]` fixture array, no Pinia store, no fake
- * `EventSource`. `receivedAt` is optional for exactly that reason — a
- * fixture that never went through `liveStore` still renders, falling back
- * to the event's own `ts`.
+ * Fully props-in/events-out (no store read of its own) — every test here mounts with a plain
+ * `TimelineEvent[]` fixture, no Pinia store, no fake `EventSource`. `receivedAt` is optional so a
+ * fixture that never went through `liveStore` still renders, falling back to the event's own `ts`.
  */
 import { computed, nextTick, ref, watch } from 'vue'
 import { ArrowUp, Pause, Play } from '@lucide/vue'
@@ -61,12 +34,10 @@ interface Props {
   /** Chronological (oldest-first) events to render — same convention as `liveStore.events`; never mutated here. */
   events: LiveTimelineEvent[]
   /**
-   * `liveStore.sessions.values()` — read only to resolve each row's compact
-   * "project · shortId" identity column (round-5 critic gap: "it's a
-   * fleet-wide firehose", every row needs to say whose session it is).
-   * Defaults to empty so a caller that doesn't track sessions (e.g. a plain
-   * fixture-driven test) still gets a valid feed, just falling back to
-   * short-id-only labels.
+   * `liveStore.sessions.values()` — read only to resolve each row's compact "project · shortId"
+   * identity column, since a fleet-wide firehose needs every row to say whose session it is. Defaults
+   * to empty so a caller that doesn't track sessions (e.g. a fixture-driven test) still gets a valid
+   * feed, falling back to short-id-only labels.
    */
   sessions?: SessionSummary[]
   /** `liveStore.paused` — see the "freeze" doc below for why this component enforces the freeze itself rather than trusting the host not to update `events` while paused. */
@@ -210,13 +181,9 @@ function receivedDisplayItem(item: TimelineItem): TimelineItem {
 }
 
 /**
- * The event's own `ts` — no longer this row's headline value, but not
- * discarded either (round-8 decision: "one honest label, one monotonic
- * read", not "throw the vendor timestamp away"). Surfaced as a plain HTML
- * `title` passed straight through to `<EventRow>`: it isn't one of
- * `EventRow`'s declared props, so Vue's default attribute fallthrough lands
- * it on the row's own root element as a native hover tooltip, with no
- * change to `EventRow.vue` itself.
+ * The event's own `ts`, surfaced as a plain HTML `title` passed straight through to `<EventRow>`:
+ * it isn't one of `EventRow`'s declared props, so Vue's attribute fallthrough lands it on the row's
+ * root element as a native hover tooltip, with no change to `EventRow.vue` itself.
  */
 function eventTimeTitle(item: TimelineItem): string {
   return `Event time: ${formatAbsoluteTime(item.ts)}`
@@ -227,28 +194,14 @@ const maxDurationMs = computed(() => maxDuration(displayItems.value))
 const isFiltered = computed(() => selectedKinds.value.length > 0)
 
 /**
- * Round-6 critic ask: "a stream count near the Pause control" — the total
- * frames this tab has seen on the firehose, unfiltered by the kind select
- * (that's what "this tab" is honestly counting: what arrived, not what the
- * reader currently has selected to look at). Reads `props.events`, not
- * `frozenEvents`/`kindFilteredEvents`, deliberately: even while paused, the
- * count should keep telling the truth about what this tab has received —
- * only the *rendered rows* freeze on pause, per the doc comment above.
+ * Total frames this tab has seen, unfiltered by the kind select and reading `props.events` (not
+ * `frozenEvents`/`kindFilteredEvents`) — even while paused, this keeps telling the truth about what
+ * arrived; only the *rendered rows* freeze on pause, per `frozenEvents`' doc comment above.
  */
 const totalEventCount = computed(() => props.events.length)
 
-// --- Auto-scroll -----------------------------------------------------
-//
-// Inverted from the usual bottom-anchored chat-log pattern because this
-// feed renders newest-first: "the latest" lives at scrollTop 0, not at the
-// bottom, so "following" means pinned to the TOP. SPEC's own "stops when
-// the user scrolls up" (written with a bottom-anchored log in mind)
-// becomes, here, "stops when the user scrolls away from the top". New
-// frames are prepended above whatever is currently rendered; neither a
-// real browser nor jsdom compensates scroll position for content inserted
-// above the current viewport on its own, so without the explicit
-// `scrollTop = 0` reset below, a user who is following would see the list
-// silently scroll away under them on every incoming frame.
+// --- Auto-scroll --- feed is newest-first, so "following" means pinned to scrollTop 0, not the
+// bottom; content prepends above the viewport, so `scrollTop = 0` below must be set explicitly.
 const FOLLOW_THRESHOLD_PX = 4
 
 const scrollContainer = ref<HTMLDivElement | null>(null)
@@ -385,23 +338,10 @@ function onRowOpen(eventRef: string): void {
       :description="isFiltered ? 'No buffered event matches the selected kinds.' : 'Events appear here as soon as they arrive on the live feed.'"
     />
     <!--
-      Layout thrash (PLAN.md P5-05's explicit AC) — what this markup does
-      about it:
-        1. `:key="item.key"` (the anchor event_ref, stable per row) lets
-           Vue's keyed list-patch reuse existing row DOM nodes across a
-           push: a new frame only ever *prepends* one new item, so every
-           other row keeps the same key at a shifted index and Vue moves
-           its existing element rather than destroying/recreating it.
-           Without a stable key, every push would tear down and rebuild the
-           entire visible list.
-        2. `EventRow` itself already fixes each row's height (`h-8`/`h-7`)
-           and right-aligns every numeric column in a fixed-width
-           `tabular-nums` cell, so neither a new row's height nor an
-           existing row's digit count ever reflows a neighbour.
-        3. `scrollTop` is only written from the `watch(displayItems, ...)`
-           below when `following` is true — a paused/scrolled-up reader
-           never has their scroll position fought over by an incoming
-           frame.
+      Layout-thrash avoidance (PLAN.md P5-05): `:key="item.key"` (the anchor event_ref) lets Vue's
+      keyed patch reuse row DOM nodes across a prepend instead of rebuilding the whole list; `EventRow`
+      fixes each row's height and right-aligns numeric columns so a new row never reflows a neighbour;
+      `scrollTop` is only written from the `watch(displayItems, ...)` below when `following` is true.
     -->
     <div
       v-else
@@ -411,28 +351,12 @@ function onRowOpen(eventRef: string): void {
       @scroll="onScroll"
     >
       <!--
-        Round-6 critic gap: the feed's four right-hand numeric columns had no
-        header at all, so a reader could not tell what "—" meant in any of
-        them. `sticky top-0` (the scroll container above is this row's own
-        scrolling ancestor) keeps it pinned while the newest-first list
-        scrolls underneath it — same shaded-row idiom `SessionTable.vue`'s
-        `TableHeader` uses (`bg-muted/40`, a bottom border), just as a plain
-        `div` rather than a `<table>` since this feed already isn't one
-        (fixed-width flex columns, not a `<table>`, per `EventRow` itself).
-        Column widths/gaps below are kept in lockstep with `EventRow`'s own
-        markup by hand — there is no single source of truth for them to
-        drift from without one, but the two are right next to each other in
-        every diff that touches either.
-
-        Round-9 critic gap: the "Event" header span below used to be
-        `min-w-0 flex-1`, growing to match `EventRow`'s own then-`flex-1`
-        identity cluster — which is exactly what stranded the metric
-        columns at the row's far edge with a 460–630px void in between (one
-        row reading as two disconnected halves). It's now the fixed `w-96`
-        `EventRow` renders under `compact-event-column` below, so the
-        "Received" header (and the rest of the metric cluster) sits right
-        after it — same tight rhythm as `SessionTable.vue`'s columns —
-        rather than floating off to the table's edge.
+        `sticky top-0` (the scroll container above is this row's own scrolling ancestor) keeps this
+        header pinned while the newest-first list scrolls underneath — a plain `div`, not a `<table>`,
+        since `EventRow` itself is fixed-width flex columns. Column widths/gaps below are kept in
+        lockstep with `EventRow`'s own markup by hand (the two are adjacent in any diff touching
+        either). The "Event" span matches `EventRow`'s fixed `w-96` under `compact-event-column`, so
+        the metric cluster sits right after it instead of floating off to the table's edge.
       -->
       <div
         class="border-border bg-muted/40 text-muted-foreground sticky top-0 z-10 flex min-w-0 items-center gap-3 border-b px-3 text-xs font-medium"

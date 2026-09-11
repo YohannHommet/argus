@@ -8,19 +8,14 @@
  * (SPEC §4.3) — a `TimelineItem`/raw `TimelineEvent`'s `event_ref` field is
  * exactly what's passed in.
  *
- * Extracted out of `EventDetailSheet.vue` (round-3 critic gap: "selecting a
- * tool call... reveals none of its payload or rationale") so the same fetch
- * + structured-summary + raw-attrs content can be hosted two ways: inside
- * the overlay `Sheet` on narrow viewports (`EventDetailSheet.vue`,
- * unchanged data-testid/behaviour) and inside a persistent right-side panel
- * on wide ones (`EventDetailPanel.vue`) — the Langfuse-style "tree + always-
- * visible inspector" the reference calls for, which a modal/overlay alone
- * cannot give (it and the timeline can never be on screen together).
+ * Extracted out of `EventDetailSheet.vue` so the same fetch + structured-summary + raw-attrs content
+ * can be hosted two ways: inside the overlay `Sheet` on narrow viewports (unchanged data-testid/
+ * behaviour) and inside a persistent right-side panel on wide ones (`EventDetailPanel.vue`) — a
+ * modal/overlay alone can't give that (it and the timeline can never be on screen together).
  *
- * Every id here (`event_ref`, `tool_use_id`, `session_id`) is monospace
- * with its own copy affordance (`CopyIconButton`) — these are long, opaque
- * UUID/ULID-shaped strings nobody reads digit-by-digit, only copies
- * elsewhere (round-3 critic gap: "monospace ids with copy affordances").
+ * Every id here (`event_ref`, `tool_use_id`, `session_id`) is monospace with its own copy affordance
+ * (`CopyIconButton`) — these are long, opaque UUID/ULID-shaped strings nobody reads digit-by-digit,
+ * only copies elsewhere.
  */
 import { computed, ref, watch } from 'vue'
 

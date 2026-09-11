@@ -8,18 +8,11 @@
  * param is a request for that view to open in live-follow mode, honoured or
  * not on its side) on the right.
  *
- * Round-7 critic gap: a per-session `Card` with cost/current-tool stacked
- * *below* the identity heading wasted ~85% of a wide viewport's width on a
- * single active session — the card's own content only needed a fraction of
- * that box, pushing the event feed below it far down the page. Sessions now
- * render as stacked rows inside one contained surface (the same
- * border/rounded/bg-card idiom `SessionTable.vue` uses for its own row
- * container), each row collapsing metrics into right-aligned tabular
- * columns exactly like `SessionRow.vue`'s table cells — visually kin to a
- * sessions-table row, not a floating card. "Started" is dropped from the
- * row entirely (it was never part of this ticket's three requested metric
- * columns — last event, cost, current tool — and a fourth column would
- * undo the width win this round exists to deliver).
+ * Sessions render as stacked rows inside one contained surface (the same border/rounded/bg-card
+ * idiom `SessionTable.vue` uses for its own row container), each row collapsing metrics into
+ * right-aligned tabular columns exactly like `SessionRow.vue`'s table cells — visually kin to a
+ * sessions-table row, not a floating card. Only three metric columns are shown — last event, cost,
+ * current tool — deliberately, to keep the row dense on a wide viewport.
  *
  * Fully props-driven (no store read of its own): `sessions` is
  * `Array.from(liveStore.sessions.values())` and `events` is
@@ -120,13 +113,9 @@ function followTarget(sessionId: string) {
             data-testid="active-session-card-title"
           >
             <!--
-              Round-8 critic gap: "Unknown Unknown project" — `StatusDot` to
-              this row's left already renders its own visible status word
-              (falling back to "Unknown" for an out-of-vocabulary/unset
-              status), and this placeholder used to lead with "Unknown" too,
-              so the two collided into a stutter reading as one garbled
-              phrase. Reworded so the status word — whatever it is — appears
-              exactly once on the row; this placeholder no longer repeats it.
+              `StatusDot` to this row's left already renders its own visible status word (falling
+              back to "Unknown" for an out-of-vocabulary/unset status), so this placeholder must not
+              also lead with "Unknown" — the status word should appear exactly once on the row.
             -->
             <NullValue
               v-if="session.project === ''"
@@ -185,14 +174,10 @@ function followTarget(sessionId: string) {
               data-testid="active-session-card-tool"
             >
               <!--
-                `plain`: this cell's whole value is one bare EM_DASH glyph
-                when no tool.* event has landed yet, the exact case
-                `NullValue`'s own doc calls out — its default dotted-
-                underline "hint text" styling reads as a rendering glitch
-                on a lone glyph with nothing beside it, and (round-6 critic)
-                was one of three different em-dash "weights" visible on this
-                view. `plain` drops the underline while keeping the same
-                title/aria-label reason on hover.
+                `plain`: this cell's whole value is one bare EM_DASH glyph when no tool.* event has
+                landed yet, the exact case `NullValue`'s own doc calls out — its default
+                dotted-underline styling reads as a rendering glitch on a lone glyph with nothing
+                beside it. `plain` drops the underline while keeping the same hover reason.
               -->
               <NullValue
                 v-if="!currentToolName(session.id)"

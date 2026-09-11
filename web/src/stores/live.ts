@@ -199,10 +199,8 @@ export const useLiveStore = defineStore('live', () => {
   function handleEventFrame(ev: MessageEvent): void {
     const payload = parseFrame<TimelineEvent>(ev, 'event')
     if (!payload) return
-    // Read from the parsed body's own `event_ref` field (SPEC §5.1: it's carried both as the SSE
-    // `id:` line and inside the JSON), not `ev.lastEventId` — the latter depends on the real
-    // `EventSource`/`MessageEvent` setting it correctly, which the fake used in tests has no reason
-    // to implement, and jsdom doesn't implement `EventSource` at all.
+    // Read from the parsed body's own `event_ref` (SPEC §5.1), not `ev.lastEventId` — the latter
+    // depends on a real `EventSource` setting it, which the test fake and jsdom don't implement.
     lastEventRef.value = payload.event_ref
     // Tracked even while paused: a reconnect that happens mid-pause must still resume from the true
     // last-seen position, not a stale one from before the pause started.
@@ -210,9 +208,8 @@ export const useLiveStore = defineStore('live', () => {
       bufferedWhilePaused.value += 1
       return
     }
-    // Stamped here, not earlier: this is the instant the frame is actually accepted onto the ring
-    // (a paused tab discards the frame above without ever storing it, so it never needs a receive
-    // stamp it would never show).
+    // Stamped here, not earlier: this is the instant the frame is actually accepted onto the ring (a
+    // paused tab discards it above without ever storing it, so it never needs a stamp it won't show).
     ring.push({ ...payload, receivedAt: new Date().toISOString() })
     ringVersion.value += 1
   }

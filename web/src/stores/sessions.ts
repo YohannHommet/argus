@@ -214,9 +214,8 @@ export const useSessionsStore = defineStore('sessions', () => {
     error.value = null
 
     const client = useApiClient()
-    // Only an explicit 'append' (the "load more" button) ever sends a cursor — a filter/sort change
-    // already cleared nextCursor synchronously in scheduleFetch, well before this call, so a stale
-    // cursor from a previous filter state can never reach the request that follows it.
+    // Only an explicit 'append' ever sends a cursor — a filter/sort change already cleared
+    // nextCursor synchronously in scheduleFetch, so a stale cursor can never reach this call.
     const cursor = mode === 'append' ? nextCursor.value : null
 
     try {
@@ -251,9 +250,8 @@ export const useSessionsStore = defineStore('sessions', () => {
 
   function scheduleFetch(delayMs: number): void {
     clearDebounce()
-    // A filter/sort change invalidates pagination the instant it happens, not when the debounced
-    // fetch eventually fires — sending a cursor minted under the old filters is a 400
-    // (urn:argus:error:invalid-cursor, SPEC §4.1).
+    // A filter/sort change invalidates pagination immediately, not when the debounced fetch fires —
+    // a cursor minted under the old filters would otherwise be sent as a 400 (SPEC §4.1).
     nextCursor.value = null
     hasMore.value = false
     debounceTimer = setTimeout(() => {

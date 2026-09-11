@@ -37,11 +37,10 @@ interface Props {
    */
   layout?: 'row' | 'grid'
   /**
-   * Warn/critical cost cutoffs for the *visible* session set (round-4 UI gap: "give Reject % and
-   * Cost graded warn/critical color"). Computed once per table render by `SessionTable.vue`
-   * (`computeCostThresholds`) rather than per-row, so every row in a page grades against the same
-   * distribution. Defaults to "never" so a row rendered without this prop (e.g. in isolation, in a
-   * test) never fabricates an outlier out of a set of one.
+   * Warn/critical cost cutoffs for the *visible* session set. Computed once per table render by
+   * `SessionTable.vue` (`computeCostThresholds`) rather than per-row, so every row in a page grades
+   * against the same distribution. Defaults to "never" so a row rendered in isolation never
+   * fabricates an outlier out of a set of one.
    */
   costThresholds?: CostThresholds
 }

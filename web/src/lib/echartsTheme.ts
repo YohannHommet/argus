@@ -14,13 +14,9 @@ import { useUiStore } from '@/stores/ui'
 export interface ChartTheme {
   backgroundColor: string
   /**
-   * `theme.css`'s `--card` — every analytics chart lives inside a `Card`
-   * (`bg-card`), one step lighter than the page's own `--background`
-   * (round-5 UI pass, gap: "the inner plot panel sits on a darker box
-   * than its card creating an unintended seam"). A chart's own
-   * `backgroundColor` should read this, not `backgroundColor` above,
-   * whenever it's painting the inside of a `Card` — which is every chart
-   * this product has today.
+   * `theme.css`'s `--card` — every analytics chart lives inside a `Card` (`bg-card`), one step
+   * lighter than the page's own `--background`. A chart's own `backgroundColor` should read this,
+   * not `backgroundColor` above, whenever it's painting the inside of a `Card`.
    */
   cardBackgroundColor: string
   textStyle: { color: string }
@@ -114,9 +110,8 @@ export function buildChartTheme(): ChartTheme {
 export function useChartTheme(): ComputedRef<ChartTheme> {
   const ui = useUiStore()
   return computed(() => {
-    // Read (not just call) ui.theme so this computed actually depends on
-    // it — the real palette comes from getComputedStyle, but that call
-    // alone isn't reactive, so without this the theme would never refresh.
+    // Read (not just call) ui.theme so this computed depends on it — getComputedStyle's own read
+    // isn't reactive, so without this the theme would never refresh.
     void ui.theme
     return buildChartTheme()
   })
@@ -151,13 +146,10 @@ export function withAlpha(oklchColor: string, percent: number): string {
 }
 
 /**
- * Semantic identity of a KPI/series metric, independent of `ChartMetricKind`
- * (`lib/echarts.ts`'s `cost`/`tokens`/`count`/`duration`, which only selects
- * a *formatter* and says nothing about whether more is good or bad). Every
- * metric the Analytics screen shows a sparkline/delta/series for maps to
- * exactly one entry in {@link METRIC_SEMANTICS} — the single table that
- * decides hue + polarity (round-3 UI pass gap: "sparklines, deltas, and
- * chart series are all rendered in one undifferentiated blue/gray").
+ * Semantic identity of a KPI/series metric, independent of `ChartMetricKind` (`lib/echarts.ts`'s
+ * `cost`/`tokens`/`count`/`duration`, which only selects a *formatter* and says nothing about
+ * whether more is good or bad). Every metric the Analytics screen shows a sparkline/delta/series for
+ * maps to exactly one entry in {@link METRIC_SEMANTICS} — the single table that decides hue + polarity.
  */
 export type MetricKey =
   | 'cost'

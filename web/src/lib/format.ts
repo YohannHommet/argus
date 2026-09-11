@@ -144,19 +144,10 @@ export function formatAbsoluteTime(
 }
 
 /**
- * Elapsed-time ladder for `formatRelativeOffset`. Round-5 critic gap: a
- * dense one-line-per-row timeline needs the offset column itself to be
- * compact — always-to-the-second precision (round-4's `formatElapsed`) reads
- * as `"+11d 01h 06m 48s"`, which is wider than the row has room for and
- * defeats "the varying digits lead". The anchor also changed (round-5: the
- * *first loaded event*, not `session.started_at`, so the multi-day drift
- * that motivated always-seconds precision doesn't occur here — the offset
- * column is a screenful of one session, not a decade of clock skew), so
- * trading precision for width is a fair swap: seconds get one decimal
- * (`+3.2s`), minutes keep seconds (`+2m 14s`), hours drop to minutes
- * (`+1h 02m`), days drop to hours (`+3d 04h`) — the same coarsening
- * `formatDuration` already uses for a single measured span, just reused here
- * for an offset from a shared origin.
+ * Elapsed-time ladder for `formatRelativeOffset` — a dense one-line-per-row timeline needs the
+ * offset column to be compact, so precision trades for width: seconds get one decimal (`+3.2s`),
+ * minutes keep seconds (`+2m 14s`), hours drop to minutes (`+1h 02m`), days drop to hours (`+3d
+ * 04h`) — the same coarsening `formatDuration` uses for a single span, reused here for an offset.
  */
 function formatElapsed(ms: number): string {
   const totalSeconds = ms / 1000
@@ -177,16 +168,12 @@ function formatElapsed(ms: number): string {
 }
 
 /**
- * `"+2m 14s"` — an event's timestamp expressed as an offset from a shared
- * origin (round-5: the *first event in the loaded timeline*, passed in by
- * the caller — see `Timeline.vue`'s `originTs`; round-4 used
- * `session.started_at`, which produced multi-day offsets whenever a
- * session's recorded start drifted from its earliest event), not wall-clock
- * "now" (`formatRelativeTime` above is for that). Round-4 critic gap: a
- * column of timeline rows each repeating the same absolute date is
- * unscannable; an offset from a shared origin is. `EM_DASH` when either
- * timestamp is missing/unparseable — never a fabricated `"+0s"` for a
- * session with no known origin (SPEC's partial-session case).
+ * `"+2m 14s"` — an event's timestamp expressed as an offset from a shared origin (the *first event
+ * in the loaded timeline*, passed in by the caller — see `Timeline.vue`'s `originTs`), not
+ * wall-clock "now" (`formatRelativeTime` above is for that): a column of rows each repeating the
+ * same absolute date is unscannable, an offset from a shared origin is. `EM_DASH` when either
+ * timestamp is missing/unparseable — never a fabricated `"+0s"` for a session with no known origin
+ * (SPEC's partial-session case).
  */
 export function formatRelativeOffset(iso: string | null | undefined, originIso: string | null | undefined): string {
   if (!iso || !originIso) return EM_DASH

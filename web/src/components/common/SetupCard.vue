@@ -47,9 +47,8 @@ const hookBlock = computed(
 } }`,
 )
 
-// `--target` gets the same substituted origin as steps 1 and 2: a copied sim
-// command that points at a `localhost` example seeds a *different* Argus than
-// the one the reader is looking at, and silently appears to do nothing here.
+// `--target` gets the same substituted origin as the steps above: a copied sim command pointing at
+// `localhost` would seed a *different* Argus than the one the reader is looking at.
 const simBlock = computed(
   () =>
     `docker compose -f deploy/docker-compose.yml up -d

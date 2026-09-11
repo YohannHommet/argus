@@ -29,9 +29,8 @@ const problem = computed(() => (props.error instanceof ApiError ? props.error : 
 
 const heading = computed(() => props.title ?? problem.value?.title ?? 'Request failed')
 
-// A transport failure's `message` is all there is; a problem+json body's
-// `detail` is the human-readable half and its `title` is already the heading,
-// so showing `message` too would just repeat it.
+// A transport failure's `message` is all there is; a problem+json body's `detail` is the
+// human-readable half — its `title` is already the heading, so showing `message` too would repeat it.
 const detail = computed(() => problem.value?.detail ?? props.error?.message ?? null)
 
 /** One `k=v, k=v` line per `Problem.errors` entry, keys and values verbatim. */

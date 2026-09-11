@@ -37,10 +37,8 @@ withDefaults(defineProps<Props>(), {
 
 const emit = defineEmits<{ retry: [] }>()
 
-// A single controlled dialog reused for whichever row's "View sample"
-// button was last clicked, rather than one Dialog per row — mirrors
-// EventDetailSheet's controlled-open pattern, scaled down since the
-// sample is already in hand (no per-row fetch needed).
+// A single controlled dialog reused for whichever row's "View sample" button was last clicked,
+// rather than one Dialog per row — mirrors EventDetailSheet's controlled-open pattern.
 const selected = ref<UnknownKindGroup | null>(null)
 
 function openSample(row: UnknownKindGroup): void {

@@ -35,18 +35,10 @@
  * color-reactive reject-rate tile (explicit `text-warn` class bound to a
  * computed, rather than a StatTile prop that doesn't exist).
  *
- * Round-6 UI-pass fix: every tile used to carry a 4-5-line prose paragraph
- * as a *sibling* of its Card (a bare `<p>` after `<StatTile>`, or a second
- * paragraph beneath `CardContent` for the two hand-built tiles) — never
- * inside the same containing box, so half the grid's tiles had their
- * description spill past the card border while the other half didn't,
- * giving the grid a ragged, self-contradicting bottom edge. `StatTile` now
- * takes the prose itself, via two dedicated props (`summary`: one always-
- * visible muted line; `description`: the full explanation, in an info-icon
- * tooltip next to the label) — see `StatTile.vue`'s doc comment. That keeps
- * every tile's entire content, including its explanation, inside one Card,
- * and collapses the six wildly-different card heights the old prose
- * paragraphs produced down to the same handful of lines per tile.
+ * `StatTile` takes each tile's prose itself, via two dedicated props (`summary`: one always-visible
+ * muted line; `description`: the full explanation, in an info-icon tooltip next to the label) — see
+ * `StatTile.vue`'s doc comment. That keeps every tile's entire content, including its explanation,
+ * inside one Card, so all six tiles collapse to the same handful of lines regardless of description length.
  */
 import { computed } from 'vue'
 import { CircleHelp } from '@lucide/vue'

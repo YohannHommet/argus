@@ -27,14 +27,10 @@ interface Props {
   /** True for a tool-thread child (tool.decision/tool.permission_request/tool.result nested under its tool.pre call, see TimelineGroup's `buildToolThreads` usage) — renders slightly smaller/quieter than a top-level row, since the thread's own rail already shows the nesting. */
   nested?: boolean
   /**
-   * The first event's `ts` in the currently loaded timeline (round-5: not
-   * `session.started_at` — that anchor produced multi-day offsets whenever a
-   * session's recorded start drifted from its earliest event; see
-   * `Timeline.vue`'s `originTs`) — the origin `item.ts` is offset against
-   * (round-4 critic gap: repeating the same absolute date down a whole
-   * column of rows is unscannable; a relative offset from a shared origin
-   * is). The absolute timestamp still lives in the row's tooltip and the
-   * inspector, never discarded, just no longer the thing eating the row.
+   * The first event's `ts` in the currently loaded timeline, not `session.started_at` (see
+   * `Timeline.vue`'s `originTs`) — `item.ts` is offset against this shared origin so the column reads
+   * as a scannable relative offset instead of repeating the same absolute date down every row. The
+   * absolute timestamp still lives in the row's tooltip and the inspector, never discarded.
    */
   originTs?: string | null
   /** The session's largest observed `duration_ms`, for scaling this row's duration bar — see `durationBarScale`. `0`/absent renders no bar. */
@@ -49,33 +45,20 @@ interface Props {
    */
   sessionLabel?: string | null
   /**
-   * Round-6 (live view) critic gap: the offset column reads `formatRelativeOffset`
-   * against `originTs` — meaningful on a timeline with a fixed anchor (the first
-   * loaded event), meaningless on a live firehose, which has no such anchor and
-   * so always rendered `EM_DASH` here regardless of row (`LiveFeed.vue` never had
-   * an `originTs` to pass). `true` swaps that column to the row's own wall-clock
-   * time (`formatWallClockTime(item.ts)`) instead — a real, always-present value.
-   * Default `false` (this column's original behaviour) so `Timeline.vue`/
-   * `TimelineGroup.vue`, which never pass this prop, render byte-for-byte as
-   * before.
+   * The offset column reads `formatRelativeOffset` against `originTs` — meaningful with a fixed
+   * anchor (the first loaded event), meaningless on a live firehose with no such anchor (always
+   * `EM_DASH`). `true` swaps that column to the row's own wall-clock time
+   * (`formatWallClockTime(item.ts)`) instead. Default `false` so `Timeline.vue`/`TimelineGroup.vue`,
+   * which never pass this prop, render byte-for-byte as before.
    */
   wallClockTime?: boolean
   /**
-   * Round-9 (live view) critic gap: the identity cluster below (label/detail/
-   * decision/skew/file_path) was `flex-1`, so on the firehose — where this
-   * cluster's own content is usually short — it stretched to soak up every
-   * pixel the row wasn't using elsewhere, stranding the right-hand metric
-   * cluster out at the row's far edge with a 460–630px dead gap in between:
-   * one row reading as two disconnected halves. `true` gives the cluster a
-   * fixed content width instead of a growing one, so the metric cluster sits
-   * immediately after it — same tight column rhythm `SessionTable.vue` uses
-   * — at the cost of trailing whitespace on a wide row, which is the
-   * accepted trade (a left-weighted table, not a full-bleed one). It also
-   * lets the `tool_name`/`model` detail chip truncate under that fixed width
-   * (vendor strings are unbounded length) rather than the unconditional
-   * `shrink-0` below, which relied on the cluster always having room to grow
-   * to fit it. Default `false` so `Timeline.vue`/`TimelineGroup.vue`, which
-   * never pass this prop, render byte-for-byte as before.
+   * `true` gives the identity cluster (label/detail/decision/skew/file_path) a fixed content width
+   * instead of a growing `flex-1`, so the metric cluster sits immediately after it instead of
+   * stranding at the row's far edge on a wide row — at the cost of trailing whitespace, an accepted
+   * left-weighted-table trade. It also lets the `tool_name`/model detail chip truncate under that
+   * fixed width rather than overflow, since a vendor string is unbounded length. Default `false` so
+   * `Timeline.vue`/`TimelineGroup.vue`, which never pass this prop, render byte-for-byte as before.
    */
   compactEventColumn?: boolean
 }
@@ -105,12 +88,9 @@ const barScale = computed(() => durationBarScale(props.item.duration_ms, props.m
 const totalTokens = computed(() => (props.item.tokens ? props.item.tokens.input + props.item.tokens.output : null))
 
 /**
- * See `compactEventColumn`'s doc above: a fixed `w-96` instead of the
- * growing `flex-1` `Timeline.vue`/`TimelineGroup.vue` still get by default.
- * `w-96` (24rem/384px) is sized off `eventKinds.ts`'s own longest labels
- * (e.g. "Permission mode changed") plus a typical `tool_name`/model chip and
- * a decision badge — long enough that most real rows never truncate, capped
- * far short of the void the critic measured.
+ * See `compactEventColumn`'s doc above: a fixed `w-96` instead of the growing `flex-1`
+ * `Timeline.vue`/`TimelineGroup.vue` still get by default — sized off `eventKinds.ts`'s longest
+ * labels plus a typical detail chip and decision badge, long enough that most real rows never truncate.
  */
 const eventColumnClass = computed(() =>
   props.compactEventColumn ? 'flex w-96 shrink-0 items-center gap-2 overflow-hidden' : 'flex min-w-0 flex-1 items-center gap-2 overflow-hidden',
@@ -140,12 +120,8 @@ function openEvent(eventRef: string) {
 
 <template>
   <!--
-    One dense line per row (round-5 critic gap: the old two-line layout —
-    label/detail on one line, offset/duration/cost/tokens repeated below —
-    ate ~60px/row for ~4 short fields; collapsing to a single row with the
-    metrics right-aligned in fixed-width tabular-nums columns gets a row
-    under 32px and 3-4x more of them on screen without dropping any field —
-    everything from before is still here, just on one line).
+    One dense line per row: metrics right-aligned in fixed-width tabular-nums columns keeps rows
+    under 32px, fitting far more of them on screen without dropping any field.
   -->
   <div
     class="border-border/50 hover:bg-muted/40 flex min-w-0 cursor-pointer items-center gap-3 border-b text-sm"
@@ -201,21 +177,15 @@ function openEvent(eventRef: string) {
     </div>
 
     <!--
-      Right cluster: fixed-width, right-aligned, tabular-nums metric columns
-      so offset/duration/cost/tokens line up down the whole list (round-5
-      critic: "right-side metrics in fixed-width columns so they align down
-      the list"). The offset leads with its varying digits (round-5: relative
-      to the first loaded event, not a repeated absolute date — round-4's
-      gap) with the absolute timestamp demoted to a hover/inspector detail.
+      Right cluster: fixed-width, right-aligned, tabular-nums metric columns so offset/duration/
+      cost/tokens line up down the whole list. The offset leads with its varying digits, relative to
+      the first loaded event rather than a repeated absolute date, which is demoted to a
+      hover/inspector detail.
 
-      Every column slot below is now unconditionally rendered — round-5
-      critic gap (live feed): a `v-if` that dropped the whole width-N span
-      whenever a row had no cost/tokens made the *other* columns slide
-      left/right depending on which fields a given row kind happened to
-      carry, so the same duration value landed at different x-offsets on
-      different rows. Each formatter already renders `EM_DASH` for a
-      null/absent value (SPEC §6.1), so the fix is simply to let it, rather
-      than removing the slot's reserved width.
+      Every column slot is unconditionally rendered — a `v-if` that drops a whole slot's width would
+      shift the other columns to different x-offsets depending on which fields a given row carries.
+      Each formatter already renders `EM_DASH` for a null/absent value (SPEC §6.1), so the fix is to
+      let it render, not to remove the slot's reserved width.
     -->
     <div class="text-muted-foreground flex shrink-0 items-center gap-3 text-xs">
       <span
@@ -225,10 +195,8 @@ function openEvent(eventRef: string) {
       >{{ wallClockTime ? formatWallClockTime(item.ts) : formatRelativeOffset(item.ts, originTs) }}</span>
 
       <!--
-        Duration bar folded into the single line: a fixed-width inline track
-        beside its own text, scaled (log) against the session's max observed
-        duration (round-4 critic ask, kept — round-5 just moves it onto the
-        row instead of a line below it).
+        Duration bar folded into the single line: a fixed-width inline track beside its own text,
+        scaled (log) against the session's max observed duration.
       -->
       <span class="flex w-16 shrink-0 items-center justify-end gap-1.5">
         <span
@@ -249,13 +217,9 @@ function openEvent(eventRef: string) {
       </span>
 
       <!--
-        `text-cost` only when there is a real cost to show: `text-cost` resolves
-        to `--foreground` (theme.css), a bright/full-contrast color deliberately
-        chosen so a real dollar figure reads as emphasized data. Applying it
-        unconditionally made a *null* cost's EM_DASH render at that same
-        brightness — one of the round-6 critic's "three em-dash weights" in the
-        live feed, where cost is null far more often than in a single session's
-        timeline. A missing value should read as muted, not as emphasized data.
+        `text-cost` (theme.css's `--foreground`, full-contrast) only when there is a real cost to
+        show — applying it unconditionally would render a null cost's EM_DASH at emphasized
+        brightness instead of muted, especially on the live feed where cost is null far more often.
       -->
       <span
         class="w-14 text-right tabular-nums"

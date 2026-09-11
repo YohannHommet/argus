@@ -59,11 +59,9 @@ onBeforeUnmount(() => {
   liveSubscription = null
 })
 
-// "Ready to decide which empty state applies" needs meta/facets settled too, not just the
-// sessions fetch — otherwise a still-loading `hasNoData` (false until loaded, see meta.ts) would
-// briefly render the "no sessions match these filters" branch on a genuinely empty database before
-// flipping to SetupCard once meta catches up. Real data, a definitive empty page (either kind), and
-// an error banner are all legitimate first paints; that transient wrong-branch flash is not.
+// "Ready to decide which empty state applies" needs meta/facets settled too, not just the sessions
+// fetch — otherwise a still-loading `hasNoData` would briefly flash the "no sessions match" branch
+// before flipping to SetupCard once meta catches up.
 const metaSettled = computed(() => (meta.meta !== null && meta.facets !== null) || meta.error !== null)
 useCaptureReady(() => sessions.initialized && metaSettled.value)
 

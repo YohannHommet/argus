@@ -30,11 +30,9 @@ interface Props {
   /** Selects the `lib/format.ts` formatter. Defaults to a plain count. */
   metric?: ChartMetricKind
   /**
-   * Which KPI this tile is — selects the sparkline's hue and the delta's
-   * direction-tint via `lib/echartsTheme.ts`'s `METRIC_SEMANTICS` table
-   * (round-3 UI pass gap: "sparklines, deltas ... rendered in one
-   * undifferentiated blue/gray"). Defaults to `'cost'` (neutral/primary)
-   * for callers that don't pass one.
+   * Which KPI this tile is — selects the sparkline's hue and the delta's direction-tint via
+   * `lib/echartsTheme.ts`'s `METRIC_SEMANTICS` table. Defaults to `'cost'` (neutral/primary) for
+   * callers that don't pass one.
    */
   metricKey?: MetricKey
   /**
@@ -68,11 +66,8 @@ interface Props {
   loading?: boolean
   error?: ApiError | Error | null
   /**
-   * One short muted line under the value — the entire on-card prose budget
-   * (round-6 UI-pass fix: tiles that used to carry a 4-5-line paragraph
-   * *outside* the card, breaking containment and dwarfing the metric).
-   * Truncates to a single line; the full story lives in `description`'s
-   * tooltip instead of pushing the card taller.
+   * One short muted line under the value — the entire on-card prose budget. Truncates to a single
+   * line; the full story lives in `description`'s tooltip instead of pushing the card taller.
    */
   summary?: string
   /** Full explanation, shown in a tooltip off an info icon next to `label`. Omit to skip the icon entirely. */
@@ -105,10 +100,8 @@ const formattedValue = computed(() => {
 
 const nullReason = computed(() => props.reason ?? NOT_ATTRIBUTABLE_TO_MODEL)
 
-// A delta is only meaningful when both the value and the delta itself are
-// known numbers — the null-value case is handled by isNull above, but a
-// present value with an unresolvable previous-window comparison (delta
-// null/undefined) must also render nothing rather than a misleading "+0".
+// A delta is only meaningful when both value and delta are known numbers — a present value with an
+// unresolvable previous-window comparison (delta null/undefined) must render nothing, not a misleading "+0".
 const showDelta = computed(() => !isNull.value && props.delta !== null && props.delta !== undefined)
 
 const formattedDelta = computed(() => {
@@ -122,11 +115,9 @@ const hasSparkline = computed(() => !isNull.value && !!props.sparkline && props.
 const showTrendReason = computed(() => !isNull.value && !hasSparkline.value && !!props.trendReason)
 
 /**
- * Direction-tints the delta text by this tile's metric polarity (round-3
- * UI pass gap): a zero/absent delta stays muted, a `'destructive'` metric
- * (errors, rejects) reads red rising / green falling, and every other
- * metric reads accent rising / muted falling — never a moralizing
- * red/green for "spent more money" or "ran more sessions".
+ * Direction-tints the delta text by this tile's metric polarity: a zero/absent delta stays muted, a
+ * `'destructive'` metric (errors, rejects) reads red rising / green falling, and every other metric
+ * reads accent rising / muted falling — never a moralizing red/green for "spent more money".
  */
 const deltaClass = computed(() => {
   if (!showDelta.value || !props.delta) return 'text-muted-foreground'

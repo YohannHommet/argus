@@ -7,14 +7,9 @@ import { NOT_MEASURED } from '@/lib/nullReasons'
 import { formatCost, formatCount, formatDuration, formatPercent, formatRejectRate, formatTokens } from '@/lib/format'
 import type { components } from '@/api/schema'
 
-// A `SessionSummary`, not `SessionDetail`: every field this strip reads
-// (cost, tokens, turn_count, tool_call_count, tool_reject_count,
-// duration_ms) already lives on the summary shape the session list uses.
-// Typing the prop at that (narrower) level — rather than SessionDetail —
-// is what makes "the KPI strip's cost matches the list row" a type-level
-// guarantee: both read `SessionSummary.cost.usd`, so passing the very
-// SessionDetail response (which extends SessionSummary) here can never
-// substitute a recomputed/re-rounded figure.
+// A `SessionSummary`, not `SessionDetail`: typing the prop at this narrower level is what makes "the
+// KPI strip's cost matches the list row" a type-level guarantee — both read `SessionSummary.cost.usd`,
+// so a `SessionDetail` (which extends it) can never substitute a recomputed figure.
 type SessionSummary = components['schemas']['SessionSummary']
 
 const props = defineProps<{
@@ -24,9 +19,8 @@ const props = defineProps<{
 const totalTokens = computed(() => {
   const t = props.session?.tokens
   if (!t) return null
-  // SPEC has no single "session tokens" field — this strip's one number is
-  // input + output + cache_read + cache_creation, i.e. every token the
-  // session actually moved through the model, cache hits included.
+  // SPEC has no single "session tokens" field — this strip's one number is input + output +
+  // cache_read + cache_creation, every token the session actually moved through the model.
   return t.input + t.output + t.cache_read + t.cache_creation
 })
 
@@ -75,10 +69,8 @@ const estimatedBadgeReason = computed(() => {
 
 <template>
   <!--
-    A single-row band, not six individually-bordered cards: the KPI strip
-    is a caption for the tabs below it, not a dashboard in its own right, so
-    it gets one thin bordered container with divider lines between stats
-    instead of six boxes' worth of border/padding eating vertical space.
+    A single-row band, not six bordered cards: the KPI strip is a caption for the tabs below, not
+    its own dashboard, so it's one container with divider lines instead of six boxes of padding.
   -->
   <div
     data-testid="session-kpi-strip"

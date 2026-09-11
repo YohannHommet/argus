@@ -72,10 +72,8 @@ export const useUiStore = defineStore('ui', () => {
     theme.value = theme.value === 'dark' ? 'light' : 'dark'
   }
 
-  // Synchronous flush: toggling the theme must update <html>'s class and
-  // localStorage immediately, not on the next microtask — callers (and
-  // tests) read document.documentElement right after calling toggle()/
-  // setTheme().
+  // Synchronous flush: toggling the theme must update <html>'s class and localStorage immediately,
+  // not on the next microtask — callers (and tests) read document.documentElement right after calling.
   watch(
     theme,
     (next) => {

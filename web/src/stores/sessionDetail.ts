@@ -176,12 +176,8 @@ export const SESSION_DETAIL_LRU_SIZE = 3
 export const ORPHAN_EVENT_CACHE_MAX = 200
 
 export const useSessionDetailStore = defineStore('sessionDetail', () => {
-  // Plain (non-reactive-collection) Map: reactivity comes from the refs
-  // held inside each SessionDetailEntry, not from the Map's own structure.
-  // Map iteration order is insertion order, and `touch()` deletes+reinserts
-  // an entry to move it to the end — the standard JS-Map LRU trick — so
-  // `entries.keys().next()` is always the true least-recently-*used* key,
-  // not merely the least-recently-*inserted* one.
+  // Plain (non-reactive) Map — reactivity lives in each entry's own refs. `touch()` deletes+reinserts
+  // to move an id to the end (the JS-Map LRU trick), so `keys().next()` is always the true LRU key.
   const entries = new Map<string, SessionDetailEntry>()
   const currentId = ref<string | null>(null)
 
@@ -213,11 +209,8 @@ export const useSessionDetailStore = defineStore('sessionDetail', () => {
     return currentId.value ? entries.get(currentId.value) : undefined
   }
 
-  // --- Timeline filters (SPEC §4.3 / PLAN P4-04). Shared across whichever
-  // session is current — only one timeline is ever on screen at a time —
-  // rather than duplicated per LRU entry. Changing a filter does not by
-  // itself clear cached pages; callers refetch by passing `{ reset: true }`
-  // to loadTimeline().
+  // --- Timeline filters (SPEC §4.3 / PLAN P4-04) — shared across sessions (only one timeline is ever
+  // on screen), not duplicated per LRU entry. Refetch via `loadTimeline({ reset: true })` after a change.
   const kinds = ref<Kind[]>([])
   const agentId = ref<string | null>(null)
   const promptId = ref<string | null>(null)
@@ -392,15 +385,13 @@ export const useSessionDetailStore = defineStore('sessionDetail', () => {
         }),
       )
       if (reset) {
-        // A fresh page from the server is already sorted per the requested `order` and carries no
-        // refs `timelineItems` previously held — a plain replace, not a merge through `insertEvent`,
-        // which exists for the *append* case where live/REST overlap is possible.
+        // A fresh page is already sorted and shares no refs with the old `timelineItems` — a plain
+        // replace, not a merge through `insertEvent` (which exists only for the append/overlap case).
         entry.timelineItems.value = result.data
         entry.timelineRefs = new Set(result.data.map((event) => event.event_ref))
       } else {
-        // `loadMoreTimeline`'s page: routed through the same idempotent, order-preserving insertion a
-        // live frame uses (see `insertEvent`'s doc comment) — a page boundary can re-deliver a ref a
-        // live frame already appended, and this is where that dedupe actually happens.
+        // `loadMoreTimeline`'s page goes through the same idempotent insertion a live frame uses (see
+        // `insertEvent`) — a page boundary can re-deliver a ref a live frame already appended.
         for (const event of result.data) insertEvent(entry, event, order.value)
       }
       entry.timelineNextCursor.value = result.page.next_cursor
@@ -546,21 +537,15 @@ export const useSessionDetailStore = defineStore('sessionDetail', () => {
     liveSubscription = subscription
 
     // SPEC §5.2: a `reset` means local stream-derived state is provably incomplete — the only honest
-    // recovery is the REST refetch this view already knows how to do, exactly like `liveStore` itself
-    // has no REST client of its own and only ever calls back (see its own `onReset` doc comment).
+    // recovery is the REST refetch this view already knows, same as `liveStore` itself only ever calls back.
     unregisterReset = live.onReset(() => {
       void loadTimeline({ reset: true })
     })
 
-    // Not `{ immediate: true }`: at subscribe time `live.events` may still hold frames from whatever
-    // topic was active *before* this one (see `applyLiveEvent`'s doc comment) with nothing new to
-    // react to yet — this watcher's job is frames that arrive *after* subscribing, not a backlog scan.
-    // Re-scans the *whole* current buffer on every change (not just what changed since last time)
-    // rather than tracking a cursor into it: `liveStore`'s ring buffer can wrap (evicting its oldest
-    // entries) independently of how often this watcher runs, which would desync a length- or
-    // index-based cursor; `insertEvent`'s O(1) `timelineRefs` check makes a full rescan of the
-    // (≤`RING_CAPACITY` = 2000) buffer cheap enough that correctness is worth more here than the
-    // saved iterations.
+    // Not `{ immediate: true }`: at subscribe time `live.events` may still hold frames from a prior
+    // topic (see `applyLiveEvent`) — this only reacts to frames arriving *after* subscribing. Rescans
+    // the whole buffer on every change, not a cursor, since the ring buffer can wrap independently of
+    // this watcher; `insertEvent`'s O(1) dedupe keeps a full rescan of ≤`RING_CAPACITY` cheap enough.
     stopEventsWatch = watch(
       () => live.events,
       (events) => {
@@ -569,14 +554,10 @@ export const useSessionDetailStore = defineStore('sessionDetail', () => {
       },
     )
 
-    // The KPI strip's live half (exit criterion 2): a `session` frame is a `SessionSummary`, a subset
-    // of the `SessionDetail` this entry holds, so merging it in (rather than replacing wholesale)
-    // keeps the detail-only fields (`decision_summary`, `raw_events_expired`, ...) intact — exactly
-    // what lets `SessionKpiStrip.vue` need no changes of its own (it only ever reads the
-    // `SessionSummary`-shaped subset). `.get(id)` (not iterating `live.sessions`) tracks a dependency
-    // on that one key, so this only re-runs for this session's own frames. Not gated by `liveEnabled`:
-    // matches `liveStore.pause()`'s own documented split between the raw feed and session/stats
-    // projections — see `liveEnabled`'s doc comment above.
+    // A `session` frame is a `SessionSummary`, a subset of `SessionDetail` — merging it in (rather
+    // than replacing wholesale) keeps detail-only fields (`decision_summary`, ...) intact. `.get(id)`
+    // (not iterating `live.sessions`) means this only re-runs for this session's frames. Not gated by
+    // `liveEnabled`: matches `liveStore.pause()`'s own split between the raw feed and session/stats.
     stopSessionWatch = watch(
       () => live.sessions.get(id),
       (frame) => {
@@ -599,9 +580,8 @@ export const useSessionDetailStore = defineStore('sessionDetail', () => {
     liveSessionId = null
   }
 
-  // Defensive backstop, mirroring `useApi.ts`'s own `onScopeDispose` guard: the view calling
-  // `stopLive()` on unmount is the primary teardown path (asserted directly by the exit-criterion-6
-  // test), this only covers the store itself being disposed without that ever happening.
+  // Defensive backstop (mirrors `useApi.ts`'s own guard): the view's `stopLive()` on unmount is the
+  // primary teardown path; this only covers the store itself being disposed without that happening.
   onScopeDispose(() => {
     stopLive()
   })

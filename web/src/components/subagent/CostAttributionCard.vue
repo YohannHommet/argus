@@ -8,18 +8,10 @@
  * §1.9 calls "the honest form of the claim" instead of a per-agent cost
  * number the telemetry cannot support.
  *
- * Round-6 critic gap: this card was rendering three separate disclaimer
- * sentences (a CardDescription paragraph, the server's `note`, and a
- * hand-written "per-node cost is not available" sentence) plus an
- * always-expanded table, together dwarfing the Subagents tree — the tab's
- * actual primary content. It is now collapsed by default (the table is
- * reference material, not the headline) and the disclaimers collapse into
- * one muted summary line: the honest "$X of $Y" framing stays visible
- * (it's the one number-bearing fact worth a glance without expanding
- * anything), the CardDescription's explanation moves into the (?) tooltip
- * next to the title, and the note/per-node-unavailable sentences fold into
- * a single trailing note element with an info-icon tooltip for the fixed
- * per-node caveat.
+ * Collapsed by default (the table is reference material, not the tab's headline) with every
+ * disclaimer folded into one muted summary line: the honest "$X of $Y" framing stays visible, the
+ * longer explanation moves into the (?) tooltip next to the title, and the per-node-unavailable
+ * caveat folds behind its own info-icon tooltip.
  */
 import { computed, ref } from 'vue'
 import { ChevronDown, ChevronRight, Info } from '@lucide/vue'
@@ -68,7 +60,7 @@ const emit = defineEmits<{ retry: [] }>()
 
 const isEmpty = computed(() => !props.loading && !props.error && props.data === null)
 
-/** Collapsed by default (round-6 critic gap) — this table is secondary reference material next to the Subagents tree, not the tab's headline. */
+/** Collapsed by default — this table is secondary reference material next to the Subagents tree, not the tab's headline. */
 const expanded = ref(false)
 
 /** Raw `by_query_source` keys, sorted by cost descending — no special-casing of any particular key (SPEC §1.9/§4.4). */
@@ -151,11 +143,8 @@ const DESCRIPTION_HINT =
       </button>
 
       <!--
-        This one line is the always-visible summary (round-6 critic gap:
-        "collapse the disclaimers into at most one short muted line +
-        tooltips") — the honest "$X of $Y" framing plus the server's own
-        `note`, with the fixed per-node-unavailable caveat behind an info
-        icon rather than its own sentence.
+        This one line is the always-visible summary — the honest "$X of $Y" framing plus the
+        server's own `note`, with the fixed per-node-unavailable caveat behind an info icon.
       -->
       <p
         v-if="data && allEstimatedNoReportedSplit"
