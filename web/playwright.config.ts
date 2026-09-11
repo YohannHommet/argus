@@ -11,18 +11,19 @@ import { defineConfig, devices } from '@playwright/test'
  * runner drives separately (see e2e.sh), because the live suite needs a load
  * sim streaming *while it runs* and that sim adds sessions the count/total
  * assertions in the other specs must not see:
- *   - main:  `playwright test`               (config `grepInvert` skips @live)
- *   - live:  `playwright test --grep @live`   (CLI --grep overrides the config)
- * So a bare local `playwright test` is always safe: it never runs the live spec
- * without the orchestration that spec depends on.
+ *   - main:  `playwright test --grep-invert @live`
+ *   - live:  `ARGUS_E2E_LIVE=1 playwright test --grep @live`
+ * A bare local `playwright test` is still safe: the @live spec self-skips
+ * unless ARGUS_E2E_LIVE is set (see live.spec.ts), so it never runs the live
+ * assertions without the load-sim orchestration they depend on. Config-level
+ * `grep`/`grepInvert` is intentionally NOT set — it ANDs with the CLI's, which
+ * would make `--grep @live` match nothing.
  */
 const baseURL = process.env.ARGUS_E2E_BASE_URL ?? 'http://localhost:18090'
 const isCI = !!process.env.CI
 
 export default defineConfig({
   testDir: './e2e',
-  // The live spec is opt-in via `--grep @live`; a default run excludes it.
-  grepInvert: /@live/,
   fullyParallel: false,
   forbidOnly: isCI,
   // WSL2 headless chromium is flaky under Docker load; a single retry absorbs a

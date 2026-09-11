@@ -26,3 +26,12 @@ services:
       args:
         VERSION: ${VERSION:-e2e}
         COMMIT: ${COMMIT:-unknown}
+    # Merged onto the base stack's argusd env. The deterministic demo seed sends
+    # ~15k events with --flush-immediately (many tiny batches) in one burst; the
+    # default 1024-batch ingest queue can load-shed that (429/503) when the DB
+    # workers drain slowly under transient IO contention — e.g. right after the
+    # image build pegged every core. A large queue + more workers absorb the
+    # whole seed so it lands deterministically, on a busy dev box or a CI runner.
+    environment:
+      ARGUS_INGEST_QUEUE: "16384"
+      ARGUS_INGEST_WORKERS: "8"

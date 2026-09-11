@@ -36,7 +36,8 @@
 #   ARGUS_E2E_KEEP           set to 1 to leave the stack running for debugging
 #   ARGUS_E2E_SKIP_LIVE      set to 1 to skip the @live phase (the load-sim pass)
 #   ARGUS_E2E_LIVE_RATE      load-sim events/s during the live phase (default 20)
-#   ARGUS_E2E_LIVE_DURATION  load-sim duration (default 180s — must outlast the live specs)
+#   ARGUS_E2E_LIVE_DURATION  load-sim duration (default 600s — must outlast the
+#                            whole @live phase incl. retries; teardown kills it early)
 #   ARGUS_E2E_LIVE_SEED      load-sim seed (default 7)
 set -euo pipefail
 
@@ -50,7 +51,7 @@ seed="${ARGUS_E2E_SEED:-42}"
 # "Load more" reveals the rest) — which sessions.spec's pagination case needs.
 sessions_count="${ARGUS_E2E_SESSIONS:-80}"
 live_rate="${ARGUS_E2E_LIVE_RATE:-20}"
-live_duration="${ARGUS_E2E_LIVE_DURATION:-180s}"
+live_duration="${ARGUS_E2E_LIVE_DURATION:-600s}"
 live_seed="${ARGUS_E2E_LIVE_SEED:-7}"
 base_url="http://localhost:${port}"
 # Overridable so an E2E run and a concurrent capture run (or a second E2E run)
@@ -192,7 +193,7 @@ fi
 log "running the main Playwright suite against ${base_url}"
 (
   cd "$repo_root/web"
-  ARGUS_E2E_BASE_URL="$base_url" pnpm exec playwright test
+  ARGUS_E2E_BASE_URL="$base_url" pnpm exec playwright test --grep-invert @live
 )
 
 # --- @live suite (needs a load sim streaming while it runs) -----------------
@@ -216,7 +217,7 @@ else
   log "running the @live Playwright suite while events stream"
   (
     cd "$repo_root/web"
-    ARGUS_E2E_BASE_URL="$base_url" pnpm exec playwright test --grep @live
+    ARGUS_E2E_BASE_URL="$base_url" ARGUS_E2E_LIVE=1 pnpm exec playwright test --grep @live
   )
 fi
 
