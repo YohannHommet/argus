@@ -9,7 +9,7 @@ LDFLAGS := -s -w \
 	-X github.com/YohannHommet/argus/server/internal/telemetry.Commit=$(COMMIT)
 
 .PHONY: help dev build test test-fast lint type-check openapi-check ci gen migrate sim \
-	compose-up compose-smoke \
+	compose-up compose-smoke e2e \
 	check-server check-web check-migrations check-compose check-smoke
 
 help: ## Show this list of targets
@@ -88,3 +88,6 @@ compose-up: check-compose ## Start the local stack (postgres + argusd) via docke
 
 compose-smoke: check-smoke ## Run the compose smoke test
 	bash scripts/smoke.sh
+
+e2e: check-web check-compose ## Run the browser E2E suite (boots the stack, seeds, Playwright, tears down)
+	bash scripts/e2e.sh

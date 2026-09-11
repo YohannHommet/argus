@@ -1,0 +1,71 @@
+name: e2e
+
+# The v0.1.0 ship gate: assertion-based browser E2E against the real embedded
+# SPA. Runs on every PR (which targets main) and on pushes to main, alongside
+# the other gates in ci.yml.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    name: e2e
+    runs-on: ubuntu-latest
+    # Docker image build (compiles + embeds the SPA) + seed + two Playwright
+    # phases; generous but bounded so a hung stack fails the gate, not the queue.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      # Node/pnpm for Playwright only — the SPA itself is built inside Docker by
+      # server/Dockerfile, so no Go toolchain is needed on the runner. Same
+      # pnpm/setup pattern as ci.yml's `web` job.
+      - uses: pnpm/setup@v2
+        with:
+          version: 11
+          runtime: node@25
+          cache: true
+          cache-dependency-path: web/pnpm-lock.yaml
+          package-json-file: web/package.json
+          install: false
+
+      - name: install web deps
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+
+      # Cache the Playwright browser download across runs, keyed on the lockfile
+      # (which pins the playwright version). A cache hit makes the install below
+      # — and e2e.sh's own on-demand install — a fast no-op.
+      - name: cache playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('web/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-playwright-
+
+      - name: install chromium
+        working-directory: web
+        # --with-deps pulls the system libraries chromium needs on a clean
+        # runner; the browser binary itself comes from the cache above on a hit.
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: e2e
+        # Boots the compose stack on a non-default port, seeds demo data, waits
+        # for rollup convergence, runs the main suite then the @live suite, and
+        # tears the stack down on exit. This is the gate.
+        run: bash scripts/e2e.sh
+
+      - name: upload playwright report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: web/playwright-report/
+          retention-days: 14
+          if-no-files-found: ignore

@@ -2,7 +2,7 @@ import { fileURLToPath, URL } from 'node:url'
 
 import tailwindcss from '@tailwindcss/vite'
 import vue from '@vitejs/plugin-vue'
-import { defineConfig } from 'vitest/config'
+import { configDefaults, defineConfig } from 'vitest/config'
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -22,6 +22,11 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     globals: false,
+    // Keep vitest out of the Playwright E2E suite: e2e/*.spec.ts match vitest's
+    // default spec glob but are `@playwright/test` files (a `test.describe` from
+    // Playwright, not vitest), and belong to `pnpm exec playwright test` /
+    // scripts/e2e.sh, not `pnpm unit`.
+    exclude: [...configDefaults.exclude, 'e2e/**'],
     setupFiles: ['./src/test-setup.ts'],
     // Node 25's global `localStorage` shadows jsdom's, and test-setup.ts's
     // global `afterEach(() => localStorage.clear())` (plus every store

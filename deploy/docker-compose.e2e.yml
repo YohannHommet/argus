@@ -1,0 +1,37 @@
+# Overlay used only by scripts/e2e.sh (the assertion-based Playwright E2E
+# suite). Sibling of docker-compose.capture.yml (the screenshot harness) — same
+# two deviations from the base stack, for the same reasons, but a distinct image
+# tag so an E2E run and a concurrent screenshot/live-stack run never clobber each
+# other's image:
+#
+#   docker compose -p argus-e2e \
+#     -f deploy/docker-compose.yml -f deploy/docker-compose.e2e.yml up -d
+#
+#   1. Its own image tag (argus:e2e). The base stack and scripts/smoke.sh use
+#      ghcr.io/yohannhommet/argus:latest; the capture harness uses
+#      argus:ui-capture. An E2E run builds from the working tree, so it must not
+#      overwrite either.
+#   2. It builds. server/Dockerfile compiles the Vue SPA and embeds it in
+#      argusd, so building here is what makes the suite exercise the *embedded*
+#      app (the real shipped artifact) rather than a Vite dev server.
+#
+# No postgres port is published: nothing on the host talks to the database
+# during an E2E run, and host 5432 is commonly already taken.
+services:
+  argusd:
+    image: argus:e2e
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
+      args:
+        VERSION: ${VERSION:-e2e}
+        COMMIT: ${COMMIT:-unknown}
+    # Merged onto the base stack's argusd env. The deterministic demo seed sends
+    # ~15k events with --flush-immediately (many tiny batches) in one burst; the
+    # default 1024-batch ingest queue can load-shed that (429/503) when the DB
+    # workers drain slowly under transient IO contention — e.g. right after the
+    # image build pegged every core. A large queue + more workers absorb the
+    # whole seed so it lands deterministically, on a busy dev box or a CI runner.
+    environment:
+      ARGUS_INGEST_QUEUE: "16384"
+      ARGUS_INGEST_WORKERS: "8"

@@ -127,6 +127,7 @@ function openEvent(eventRef: string) {
     class="border-border/50 hover:bg-muted/40 focus-visible:ring-ring flex min-w-0 cursor-pointer items-center gap-3 border-b text-sm outline-none focus-visible:ring-2 focus-visible:-outline-offset-2"
     :class="[nested ? 'h-7 px-2' : 'h-8 px-3', selected ? 'bg-muted border-l-primary border-l-2' : '']"
     data-testid="event-row"
+    :data-event-ref="primaryEventRef"
     :data-selected="selected"
     role="button"
     tabindex="0"

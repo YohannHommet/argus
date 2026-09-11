@@ -10,7 +10,8 @@
     "type-check": "vue-tsc --build --force",
     "lint": "eslint .",
     "gen:api": "openapi-typescript ../server/api/openapi.yaml -o src/api/schema.d.ts",
-    "gen:fixtures": "node scripts/gen-fixtures.mjs"
+    "gen:fixtures": "node scripts/gen-fixtures.mjs",
+    "e2e": "playwright test"
   },
   "dependencies": {
     "@lucide/vue": "1.31.0",
@@ -28,6 +29,7 @@
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
+    "@playwright/test": "1.62.1",
     "@tailwindcss/vite": "4.3.3",
     "@types/node": "26.2.0",
     "@vitejs/plugin-vue": "6.0.8",
