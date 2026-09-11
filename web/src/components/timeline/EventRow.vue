@@ -124,13 +124,13 @@ function openEvent(eventRef: string) {
     under 32px, fitting far more of them on screen without dropping any field.
   -->
   <div
-    class="border-border/50 hover:bg-muted/40 flex min-w-0 cursor-pointer items-center gap-3 border-b text-sm"
+    class="border-border/50 hover:bg-muted/40 focus-visible:ring-ring flex min-w-0 cursor-pointer items-center gap-3 border-b text-sm outline-none focus-visible:ring-2 focus-visible:-outline-offset-2"
     :class="[nested ? 'h-7 px-2' : 'h-8 px-3', selected ? 'bg-muted border-l-primary border-l-2' : '']"
     data-testid="event-row"
     :data-selected="selected"
     role="button"
     tabindex="0"
-    :aria-selected="selected"
+    :aria-current="selected ? 'true' : undefined"
     @click="openPrimary"
     @keydown.enter="openPrimary"
   >

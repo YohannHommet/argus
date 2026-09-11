@@ -145,6 +145,28 @@ describe('TimeSeriesChart', () => {
     document.documentElement.style.removeProperty('--foreground')
   })
 
+  // PLAN.md P6-04 AC: the chart's data isn't chart-only — a disclosure behind the canvas exposes the
+  // same series/buckets as a real <table>, one column per series plus "Other", one row per bucket.
+  it('renders a data-table toggle whose table has one column per series and one row per bucket (P6-04 AC)', () => {
+    const { wrapper } = mountChart({ data: getAnalyticsTimeseries200Default })
+
+    expect(wrapper.find('[data-testid="chart-data-table-toggle"]').exists()).toBe(true)
+
+    const table = wrapper.get('[data-testid="chart-data-table"]')
+    const headers = table.findAll('th').map((h) => h.text())
+    // fixture: 1 named series ("argus") + `other` -> Time, argus, Other
+    expect(headers).toEqual(['Time', 'argus', 'Other'])
+
+    const rows = table.findAll('tbody tr')
+    expect(rows).toHaveLength(getAnalyticsTimeseries200Default.buckets.length)
+    expect(rows[0]!.findAll('td')).toHaveLength(3)
+  })
+
+  it('omits the data-table toggle when there is no data to show (empty state, no chart either)', () => {
+    const { wrapper } = mountChart({ data: { bucket: 'day', buckets: [], series: [] } })
+    expect(wrapper.find('[data-testid="chart-data-table-toggle"]').exists()).toBe(false)
+  })
+
   it('resizes the chart when its container is observed as resized (ResizeObserver stub)', () => {
     const { resize } = mountChart({ data: getAnalyticsTimeseries200Default })
     expect(resize).not.toHaveBeenCalled()

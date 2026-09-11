@@ -18,6 +18,7 @@ import { ApiError } from '@/api/errors'
 import type { components } from '@/api/schema'
 import { formatterForMetric, useChartResize, VChart, type ChartMetricKind, type ResizableChart } from '@/lib/echarts'
 import { chartLegend, paletteColor, useChartTheme } from '@/lib/echartsTheme'
+import ChartDataTable from './ChartDataTable.vue'
 import ErrorState from '@/components/common/ErrorState.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -134,6 +135,13 @@ const option = computed<BreakdownOption>(() => {
     series: [series],
   }
 })
+
+/** PLAN.md P6-04: the disclosure's table, one row per `Breakdown.rows` entry, same label/formatter the chart itself uses — never a second formatting pass that could drift from what's drawn. */
+const dataTableRows = computed<(string | number)[][]>(() => {
+  const d = props.data
+  if (!d) return []
+  return d.rows.map((row) => [rowLabel(row.key), valueFormatter.value(row.value)])
+})
 </script>
 
 <template>
@@ -150,16 +158,23 @@ const option = computed<BreakdownOption>(() => {
     v-else-if="isEmpty"
     title="No data for this range"
   />
-  <div
-    v-else
-    ref="containerRef"
-    class="h-64 w-full"
-  >
-    <VChart
-      ref="chartRef"
-      class="h-full w-full"
-      :option="option"
-      :autoresize="false"
+  <div v-else>
+    <div
+      ref="containerRef"
+      class="h-64 w-full"
+    >
+      <VChart
+        ref="chartRef"
+        class="h-full w-full"
+        :option="option"
+        :autoresize="false"
+      />
+    </div>
+    <ChartDataTable
+      caption="The chart's underlying data, as a table"
+      summary="Show data table"
+      :columns="['Label', 'Value']"
+      :rows="dataTableRows"
     />
   </div>
 </template>

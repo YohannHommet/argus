@@ -157,9 +157,12 @@ function onChildSelect(agentId: string): void {
     class="list-none"
     data-testid="subagent-node"
     :data-agent-id="node.agent_id"
+    role="treeitem"
+    :aria-level="renderDepth + 1"
+    :aria-expanded="hasChildren ? expanded : undefined"
   >
     <div
-      class="border-border/60 group flex items-center gap-2 rounded-md border-l-2 py-1.5 pr-2 hover:bg-muted/40"
+      class="border-border/60 group focus-visible:ring-ring flex items-center gap-2 rounded-md border-l-2 py-1.5 pr-2 outline-none hover:bg-muted/40 focus-visible:ring-2 focus-visible:-outline-offset-2"
       :style="{ paddingLeft: `${0.5 + renderDepth * 1.25}rem` }"
       role="button"
       tabindex="0"
@@ -293,6 +296,7 @@ function onChildSelect(agentId: string): void {
     <ul
       v-if="hasChildren && expanded && !depthLimitReached"
       class="border-border/40 ml-4 border-l pl-0"
+      role="group"
     >
       <SubagentNode
         v-for="child in node.children"

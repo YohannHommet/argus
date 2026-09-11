@@ -116,17 +116,21 @@ function isSelected(item: TimelineItem): boolean {
       class="bg-muted/95 border-border sticky top-0 z-10 flex cursor-pointer items-center gap-2 border-b backdrop-blur"
       :class="isCompactSingleton ? 'px-3 py-0.5 opacity-80' : 'px-3 py-1.5'"
       data-testid="timeline-group-header"
-      role="button"
-      tabindex="0"
-      :aria-expanded="!collapsed"
       @click="emit('toggle-collapse')"
-      @keydown.enter="emit('toggle-collapse')"
     >
+      <!--
+        The real, only interactive control for this header (axe "nested-interactive": a header with
+        its own role="button" wrapping this button was two interactive controls doing the same thing
+        — see PLAN.md P6-04). The header's own @click above is a bonus mouse convenience ("click
+        anywhere in the row"), not a second way to reach this via keyboard/AT; this button alone
+        carries the label, aria-expanded and focus ring a screen reader / keyboard user needs.
+      -->
       <button
         type="button"
-        class="text-muted-foreground hover:text-foreground shrink-0"
+        class="text-muted-foreground hover:text-foreground focus-visible:ring-ring shrink-0 rounded outline-none focus-visible:ring-2"
         data-testid="timeline-group-toggle"
         :aria-label="collapsed ? 'Expand turn' : 'Collapse turn'"
+        :aria-expanded="!collapsed"
         @click.stop="emit('toggle-collapse')"
       >
         <ChevronDown
