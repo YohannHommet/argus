@@ -49,6 +49,15 @@ RUN CGO_ENABLED=0 go build -trimpath \
 
 # --- final: distroless, nonroot, static ------------------------------------
 FROM gcr.io/distroless/static-debian12:nonroot
+# ARGs are stage-scoped in buildkit: re-declare to use them in this stage's LABELs.
+ARG VERSION=dev
+ARG COMMIT=unknown
+LABEL org.opencontainers.image.title="Argus" \
+      org.opencontainers.image.description="Self-hosted observability platform for Claude Code and other OTel-emitting coding agents." \
+      org.opencontainers.image.source="https://github.com/YohannHommet/argus" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${COMMIT}"
 COPY --from=build /out/argusd /argusd
 USER nonroot:nonroot
 EXPOSE 8080

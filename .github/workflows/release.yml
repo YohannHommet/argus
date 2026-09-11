@@ -1,0 +1,182 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g. v0.1.0 or v0.1.0-rc1)'
+        required: false
+        type: string
+
+# Never cancel a run mid-flight: a cancelled multi-arch buildx push can leave a
+# half-pushed manifest in GHCR, and a cancelled release job can leave a GitHub
+# Release with only some of its binaries attached.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  version:
+    name: version
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      version: ${{ steps.meta.outputs.version }}
+      short_sha: ${{ steps.meta.outputs.short_sha }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+    steps:
+      - name: Resolve tag, version, short SHA and prerelease flag
+        id: meta
+        env:
+          DISPATCH_TAG: ${{ inputs.tag }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="$DISPATCH_TAG"
+          else
+            TAG="${{ github.ref_name }}"
+          fi
+          if [ -z "$TAG" ]; then
+            echo "::error::no tag to release (pass 'tag' when running via workflow_dispatch)"
+            exit 1
+          fi
+
+          # v0.1.0 -> 0.1.0
+          VERSION="${TAG#v}"
+          SHORT_SHA="${GITHUB_SHA:0:7}"
+
+          # A hyphen in the version (v0.1.0-rc1 -> 0.1.0-rc1) marks a prerelease.
+          PRERELEASE=false
+          case "$VERSION" in
+            *-*) PRERELEASE=true ;;
+          esac
+
+          {
+            echo "tag=$TAG"
+            echo "version=$VERSION"
+            echo "short_sha=$SHORT_SHA"
+            echo "prerelease=$PRERELEASE"
+          } >> "$GITHUB_OUTPUT"
+
+  docker:
+    name: docker
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: server/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/yohannhommet/argus:${{ needs.version.outputs.version }}
+            ghcr.io/yohannhommet/argus:latest
+          build-args: |
+            VERSION=${{ needs.version.outputs.version }}
+            COMMIT=${{ needs.version.outputs.short_sha }}
+
+  binaries:
+    name: binaries (${{ matrix.os }}/${{ matrix.arch }})
+    needs: version
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [linux, darwin]
+        arch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: server/go.mod
+          cache: true
+          cache-dependency-path: server/go.sum
+
+      - name: build argusd-${{ matrix.os }}-${{ matrix.arch }}
+        working-directory: server
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+        # NOTE: this binary does NOT embed the web SPA build (that only
+        # happens in the Docker "web" stage) — acceptable for a CLI/binary
+        # artifact, the server still serves the embedded placeholder assets.
+        run: |
+          go build -trimpath \
+            -ldflags "-s -w \
+              -X github.com/YohannHommet/argus/server/internal/telemetry.Version=${{ needs.version.outputs.version }} \
+              -X github.com/YohannHommet/argus/server/internal/telemetry.Commit=${{ needs.version.outputs.short_sha }}" \
+            -o argusd-${{ matrix.os }}-${{ matrix.arch }} ./cmd/argusd
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: argusd-${{ matrix.os }}-${{ matrix.arch }}
+          path: server/argusd-${{ matrix.os }}-${{ matrix.arch }}
+          if-no-files-found: error
+
+  release:
+    name: release
+    needs: [version, docker, binaries]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: argusd-*
+          path: dist
+          merge-multiple: true
+
+      - name: Extract CHANGELOG.md section for this version
+        id: changelog
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          TAG: ${{ needs.version.outputs.tag }}
+        run: |
+          extract() {
+            awk -v ver="$1" '
+              /^## \[/ {
+                if (printing) exit
+                if ($0 ~ "\\[" ver "\\]") { printing = 1; next }
+              }
+              printing { print }
+            ' CHANGELOG.md
+          }
+
+          # Exact match first (e.g. "0.1.0"); fall back to the semver core
+          # (e.g. "0.1.0-rc1" -> "0.1.0") for prerelease tags that ride on an
+          # already-released CHANGELOG section.
+          BASE_VERSION="${VERSION%%-*}"
+          extract "$VERSION" > release-notes.md
+          if [ ! -s release-notes.md ] && [ "$BASE_VERSION" != "$VERSION" ]; then
+            extract "$BASE_VERSION" > release-notes.md
+          fi
+          if [ ! -s release-notes.md ]; then
+            echo "_No CHANGELOG.md section found for ${TAG}; see CHANGELOG.md for details._" > release-notes.md
+          fi
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.version.outputs.tag }}
+          prerelease: ${{ needs.version.outputs.prerelease }}
+          body_path: release-notes.md
+          files: dist/*
