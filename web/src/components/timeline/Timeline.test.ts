@@ -289,3 +289,74 @@ describe('Timeline', () => {
     expect(store.agentId).toBe('agent-107d2cba')
   })
 })
+
+describe('Timeline — scroll anchoring (PLAN.md P5-06 AC)', () => {
+  const ROW_HEIGHT = 44
+
+  /**
+   * jsdom computes no real layout: `scrollHeight`/`clientHeight` are always 0 and `scrollTop` has no
+   * relationship to content. Rather than have the test itself flip a fake "layout changed" flag at a
+   * moment it chooses (which would only prove the assertion logic, not the component's actual timing
+   * against Vue's own render), `scrollHeight` is wired to the *real* DOM node count — it changes
+   * exactly when, and only when, Vue patches the DOM to add or remove an `event-row`. This is what
+   * makes the assertions below genuine rather than a mock-was-called check.
+   */
+  function attachSyntheticLayout(container: HTMLElement, getRowCount: () => number): void {
+    Object.defineProperty(container, 'scrollHeight', { get: () => getRowCount() * ROW_HEIGHT, configurable: true })
+    Object.defineProperty(container, 'clientHeight', { value: ROW_HEIGHT * 2, configurable: true })
+    let scrollTopValue = 0
+    Object.defineProperty(container, 'scrollTop', {
+      get: () => scrollTopValue,
+      set: (v: number) => {
+        scrollTopValue = v
+      },
+      configurable: true,
+    })
+  }
+
+  function threeUncollapsedEvents() {
+    // Distinct tool_use_ids so `collapseEvents` never merges them (SPEC §1.5.3(b)'s correlation-key
+    // rule) — each renders as its own `event-row`, giving a known, controllable row count.
+    return [
+      makeTimelineEvent({ tool_use_id: 'toolu_1', event_ref: 'r1', ts: '2026-08-14T01:00:00.000Z' }),
+      makeTimelineEvent({ tool_use_id: 'toolu_2', event_ref: 'r2', ts: '2026-08-14T01:00:05.000Z' }),
+      makeTimelineEvent({ tool_use_id: 'toolu_3', event_ref: 'r3', ts: '2026-08-14T01:00:10.000Z' }),
+    ]
+  }
+
+  it('compensates scrollTop by exactly the height a new row added, when the user has scrolled away from the bottom', async () => {
+    getTimeline = vi.fn(() => timelinePage(threeUncollapsedEvents(), true))
+    const { wrapper } = await mountTimeline()
+    expect(wrapper.findAll('[data-testid="event-row"]')).toHaveLength(3)
+
+    const container = wrapper.get('[data-testid="timeline-scroll-container"]').element as HTMLElement
+    attachSyntheticLayout(container, () => wrapper.findAll('[data-testid="event-row"]').length)
+    // 3 rows * 44px = 132 scrollHeight, 88px visible: scrolled to the very top — 44px of content
+    // below the fold, i.e. not at the bottom.
+    container.scrollTop = 0
+
+    getTimeline.mockImplementation(() => timelinePage([makeTimelineEvent({ tool_use_id: 'toolu_4', event_ref: 'r4', ts: '2026-08-14T01:00:15.000Z' })], false))
+    await wrapper.get('[data-testid="timeline-load-more"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.findAll('[data-testid="event-row"]')).toHaveLength(4)
+    expect(container.scrollTop).toBe(ROW_HEIGHT)
+  })
+
+  it('does not touch scrollTop when the user is already at the bottom', async () => {
+    getTimeline = vi.fn(() => timelinePage(threeUncollapsedEvents(), true))
+    const { wrapper } = await mountTimeline()
+
+    const container = wrapper.get('[data-testid="timeline-scroll-container"]').element as HTMLElement
+    attachSyntheticLayout(container, () => wrapper.findAll('[data-testid="event-row"]').length)
+    // scrollHeight(132) - scrollTop - clientHeight(88) = 0: the true bottom.
+    container.scrollTop = 44
+
+    getTimeline.mockImplementation(() => timelinePage([makeTimelineEvent({ tool_use_id: 'toolu_4', event_ref: 'r4', ts: '2026-08-14T01:00:15.000Z' })], false))
+    await wrapper.get('[data-testid="timeline-load-more"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.findAll('[data-testid="event-row"]')).toHaveLength(4)
+    expect(container.scrollTop).toBe(44)
+  })
+})

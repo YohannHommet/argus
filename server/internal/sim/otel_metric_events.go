@@ -5,25 +5,10 @@ import (
 	metricspb "go.opentelemetry.io/proto/otlp/metrics/v1"
 )
 
-// newSumMetric builds one OTLP Sum metric with a single delta data point,
-// attrs prefixed with session.id — every metric fixture in
-// internal/ingest/normalize/testdata/metrics/*.json carries a session.id
-// data-point attribute (SPEC §1.8: OTEL_METRICS_INCLUDE_SESSION_ID), so
-// every builder below takes sessionID and this function is the one place
-// that attribute is attached.
-//
-// Claude Code's own metrics are cumulative counters exported at
-// OTEL_METRIC_EXPORT_INTERVAL (telemetry-surfaces.md's "7 metrics" table),
-// but the committed fixtures (cost_usage_cumulative.json,
-// active_time_total.json) show both AGGREGATION_TEMPORALITY_CUMULATIVE and
-// AGGREGATION_TEMPORALITY_DELTA in the wild with is_monotonic=true; this
-// generator reports delta (one increment per 60s simulated export window)
-// rather than tracking a running cumulative total per session, since a
-// delta series round-trips through FromOTLPMetrics's Sum/delta path
-// identically to a cumulative one for a single-point export. Temporality is
-// Argus's own vocabulary (otel_metrics.go's mapTemporality comment), not a
-// vendor-supplied value, so this choice is a generator modeling decision,
-// not a fidelity-rule attribute fabrication.
+// newSumMetric builds one OTLP Sum metric with delta data point (SPEC §1.8:
+// OTEL_METRICS_INCLUDE_SESSION_ID), session.id prefixed on all attrs.
+// Delta temporality (not cumulative) is a generator modeling choice
+// (identically round-trips through FromOTLPMetrics).
 func newSumMetric(name, sessionID string, seconds uint64, value float64, isInt bool, attrs ...*commonpb.KeyValue) *metricspb.Metric {
 	allAttrs := append([]*commonpb.KeyValue{kvString("session.id", sessionID)}, attrs...)
 	dp := &metricspb.NumberDataPoint{

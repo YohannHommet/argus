@@ -12,14 +12,8 @@ import (
 	"github.com/YohannHommet/argus/server/internal/store/postgres"
 )
 
-// checksumTable returns a stable, order-independent full-row checksum of
-// every row `selectSQL` returns (one text-castable expression per row,
-// aggregated with string_agg ordered by orderBy so two runs over identical
-// data always produce the same digest regardless of physical row order).
-// sessions passes a column list that excludes `updated_at` (a DEFAULT now()
-// bookkeeping column, SPEC has no such column on the other three projection
-// tables — see rebuild_test.go's checksum tests for why it must be
-// excluded); the other three tables pass "t.*".
+// checksumTable returns a stable, order-independent full-row checksum via string_agg.
+// sessions excludes `updated_at` (SPEC has no bookkeeping column on other three tables).
 func checksumTable(t *testing.T, pool *pgxpool.Pool, rowExpr, from, orderBy string) string {
 	t.Helper()
 	var sum string
@@ -30,12 +24,7 @@ func checksumTable(t *testing.T, pool *pgxpool.Pool, rowExpr, from, orderBy stri
 	return sum
 }
 
-// projectionChecksums is a full-row checksum of all four SPEC §1.6
-// projection tables (sessions, turns, tool_calls, subagents), used to assert
-// RebuildProjections reproduces byte-identical rows. sessions excludes
-// `updated_at` (SPEC has no equivalent bookkeeping column on the other
-// three) since that column legitimately differs between the original write
-// and a later rebuild.
+// projectionChecksums holds full-row checksums for all four projection tables to verify byte-identical rebuild results.
 type projectionChecksums struct {
 	Sessions, Turns, ToolCalls, Subagents string
 }
@@ -85,12 +74,7 @@ func withDecision(d, src string) eventOpt {
 	return func(e *model.Event) { e.Decision = &d; e.DecisionSource = &src }
 }
 
-// buildRebuildFixture writes a moderately rich, multi-batch dataset spanning
-// all four projection tables: a session with an LLM request (turn), an
-// otel-only tool call, and a subagent with its own hook-attributed tool
-// call — exactly the shape RebuildProjections's four TRUNCATEd tables must
-// reproduce identically. Returns the session id and the fixture's base ts
-// (the earliest event), so callers can pick a fromTS at or before it.
+// buildRebuildFixture writes a fixture spanning all four projection tables; returns session id and base ts.
 func buildRebuildFixture(t *testing.T, st *postgres.Store, base time.Time, sessionID string) time.Time {
 	t.Helper()
 	ctx := context.Background()
@@ -143,10 +127,7 @@ func buildRebuildFixture(t *testing.T, st *postgres.Store, base time.Time, sessi
 	return base
 }
 
-// --- AC: RebuildProjections, after truncating the four projection tables, -
-// --- reproduces byte-identical rows (full-row checksum, tool_calls.id -----
-// --- included) — possible because tool_calls.id is deterministic UUIDv5. --
-
+// AC: RebuildProjections reproduces byte-identical rows (tool_calls.id deterministic UUIDv5).
 func TestRebuildProjections_ReproducesIdenticalRowsByChecksum(t *testing.T) {
 	st, pool := newStore(t)
 	base := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
@@ -185,16 +166,7 @@ func TestRebuildProjections_ReproducesIdenticalRowsByChecksum(t *testing.T) {
 	require.Nil(t, watermark, "a completed rebuild must clear its watermark")
 }
 
-// --- AC: resuming from a partial watermark completes correctly. -----------
-//
-// Simulated by forging the state an interrupted rebuild leaves behind: the
-// four projection tables truncated and a job_state watermark parked at a
-// real event's (ts, seq) partway through the timeline — exactly what
-// RebuildProjections itself would have left had it crashed after committing
-// that page. A resumed call must (a) NOT re-truncate (proven by a session
-// whose only events are before the watermark staying absent afterwards —
-// if the resume had instead restarted from fromTS, that early session would
-// reappear) and (b) fully reconstruct everything after the watermark.
+// AC: resuming from a partial watermark completes correctly without re-truncating.
 func TestRebuildProjections_ResumesFromPartialWatermark(t *testing.T) {
 	st, pool := newStore(t)
 	ctx := context.Background()
@@ -253,10 +225,7 @@ func TestRebuildProjections_ResumesFromPartialWatermark(t *testing.T) {
 	require.Nil(t, watermark, "a completed resume must clear the watermark")
 }
 
-// --- AC (implicit correctness guard): RebuildProjections never touches ----
-// --- rollups — SPEC §2.4's "rollups and projections are never deleted" ----
-// --- applies to a rebuild exactly as it does to retention.
-
+// AC: RebuildProjections never touches rollups (SPEC §2.4).
 func TestRebuildProjections_NeverTouchesRollups(t *testing.T) {
 	st, pool := newStore(t)
 	ctx := context.Background()
@@ -286,15 +255,9 @@ func TestRebuildProjections_NeverTouchesRollups(t *testing.T) {
 	require.Equal(t, before, after, "RebuildProjections must never touch rollup_hourly")
 }
 
-// --- M12: a session that straddles --from-ts (started before it, still ----
-// --- active at/after it) must be rebuilt from its own true start, not a --
-// --- partial post-fromTS slice — otherwise its aggregates (event_count, ---
-// --- started_at, cwd, token/cost sums, …) come out wrong instead of missing.
+// M12: straddling sessions must be rebuilt from their true start, not partial post-fromTS slices.
 
-// rebuildLockKeyForTest mirrors rebuild.go's unexported rebuildLockKey
-// (0x41_52_47_55_53_30_33, "ARGUS03"): TestRebuildProjectionsForce_RefusesWhenAnotherRebuildHoldsTheLock
-// holds this same key from a separate connection to simulate a concurrent
-// rebuild, so it must stay in sync with that constant.
+// rebuildLockKeyForTest mirrors rebuild.go's unexported rebuildLockKey (ARGUS03) for concurrent rebuild simulation.
 const rebuildLockKeyForTest = int64(0x41_52_47_55_53_30_33)
 
 func TestRebuildProjections_StraddlingSessionRebuiltInFull(t *testing.T) {
@@ -322,11 +285,7 @@ func TestRebuildProjections_StraddlingSessionRebuiltInFull(t *testing.T) {
 	require.Equal(t, idsBefore, toolCallIDs(t, pool))
 }
 
-// --- M12: a --from-ts predating the oldest surviving events partition -----
-// --- is refused unless --force is set, since raw events before that point --
-// --- may already be gone (SPEC §2.4 retention) and a rebuild could only ---
-// --- reconstruct an incomplete history for sessions rooted there. ---------
-
+// M12: a --from-ts predating the oldest partition is refused unless --force is set.
 func TestRebuildProjectionsForce_RefusesFromTSOlderThanOldestPartitionUnlessForced(t *testing.T) {
 	st, pool := newStore(t)
 	ctx := context.Background()
@@ -352,10 +311,7 @@ func TestRebuildProjectionsForce_RefusesFromTSOlderThanOldestPartitionUnlessForc
 	require.Equal(t, int64(1), report.Sessions, "the destruction report must count the session about to be rebuilt")
 }
 
-// --- M13: an exclusive ARGUS03 advisory lock rejects a concurrent ---------
-// --- rebuild-projections instead of silently letting two passes race and --
-// --- double-count (SPEC §1.6's "rebuild produces identical rows"). --------
-
+// M13: ARGUS03 advisory lock rejects concurrent rebuilds (prevents double-counting).
 func TestRebuildProjectionsForce_RefusesWhenAnotherRebuildHoldsTheLock(t *testing.T) {
 	st, pool := newStore(t)
 	ctx := context.Background()

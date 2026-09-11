@@ -18,14 +18,7 @@ import (
 	"github.com/YohannHommet/argus/server/internal/model"
 )
 
-// --- fixture helpers -------------------------------------------------------
-
-// otelFixture decodes a live-capture-derived OTLP fixture from
-// internal/ingest/normalize/testdata/otel (shared with that package's own
-// tests — SPEC hard rule: reuse existing capture-derived fixtures, don't
-// invent new tool_decision/tool_result payloads) and normalizes it with a
-// fixed clock safely after the fixture's own timestamps (2026-08-11) and
-// within retention.
+// otelFixture decodes a live-capture OTLP fixture and normalizes it with a fixed clock (shared with normalize/testdata/otel).
 func otelFixtureEvents(t *testing.T, name string) []model.Event {
 	t.Helper()
 	path := filepath.Join("..", "..", "ingest", "normalize", "testdata", "otel", name)
@@ -50,10 +43,7 @@ func otelFixtureEvents(t *testing.T, name string) []model.Event {
 	return events
 }
 
-// hookEvent builds one hook-sourced model.Event via the real
-// FromHookPayload path (not a hand-built model.Event), so these tests
-// exercise the same mapping P2-03 shipped. fields are merged into the
-// common hook payload shape.
+// hookEvent builds a hook-sourced model.Event via the real FromHookPayload path to exercise the P2-03 mapping.
 func hookEvent(t *testing.T, ts time.Time, hookEventName, sessionID string, fields map[string]any) model.Event {
 	t.Helper()
 	body := map[string]any{

@@ -1,18 +1,6 @@
-// Package postgres — read_toolcalls.go implements store.Reader's
-// ListToolCalls (SPEC §3.3, §4.2, P3-03): one hand-built dynamic-filter
-// query (filter.go's whitelist clause builder) serving both the
-// session-scoped `GET /api/v1/sessions/{id}/tool-calls` and the
-// cross-session "decision-provenance drill-down" `GET /api/v1/tool-calls`
-// (SPEC §4.2) through store.ToolCallFilter.SessionID.
-//
-// Sort/keyset: SPEC's openapi.yaml exposes no `order`/`sort` parameter on
-// either tool-calls endpoint (unlike ListEvents/ListSessions), so there is
-// exactly one order — `started_at DESC, id` — matching the two SPEC §2.3
-// indexes tool_calls carries for this access pattern
-// (`(session_id, started_at)`, `(tool_name, started_at DESC)`) and the
-// natural "most recent decisions first" reading of a drill-down list. `id`
-// (a UUID, always present and unique — SPEC §2.3's PK) is the keyset
-// tiebreak, the same role SessionFilter's `id` plays for ListSessions.
+// Package postgres — read_toolcalls.go implements store.Reader's ListToolCalls.
+// Hand-built dynamic-filter query serving both session-scoped and cross-session drill-down.
+// Sort/keyset: exactly one order (started_at DESC, id), indexed for both access patterns.
 package postgres
 
 import (
@@ -28,31 +16,24 @@ import (
 )
 
 const (
-	// defaultToolCallLimit / maxToolCallLimit mirror SPEC §4.1's pagination
-	// defaults, same as defaultSessionLimit/maxSessionLimit.
+	// defaultToolCallLimit / maxToolCallLimit mirror SPEC §4.1's pagination defaults.
 	defaultToolCallLimit = 50
 	maxToolCallLimit     = 500
 
-	// toolCallCursorKey is the fixed sort-key tag ListToolCalls' cursor
-	// binds to (there being only one sort, unlike ListSessions/ListEvents),
-	// rejecting a cursor minted by some other endpoint that happens to
-	// decode as valid base64/JSON.
+	// toolCallCursorKey is the fixed sort-key tag ListToolCalls' cursor binds to.
 	toolCallCursorKey = "started_at"
 )
 
-// toolCallCursorPayload mirrors sessionCursorPayload's wire shape (SPEC
-// §4.1): `{"k":"<fixed key>","v":[started_at, id]}`.
+// toolCallCursorPayload mirrors sessionCursorPayload (SPEC §4.1): K is sort key, V is [started_at, id].
 type toolCallCursorPayload struct {
 	K string            `json:"k"`
 	V []json.RawMessage `json:"v"`
 }
 
-// toolCallCursorEncoding matches sessionCursorEncoding's choice (SPEC
-// §4.1): URL-safe, unpadded base64.
+// toolCallCursorEncoding is URL-safe, unpadded base64 (SPEC §4.1).
 var toolCallCursorEncoding = base64.RawURLEncoding
 
-// encodeToolCallCursor renders the next page's cursor from the last row's
-// own started_at/id.
+// encodeToolCallCursor encodes the next page's cursor from started_at and id.
 func encodeToolCallCursor(startedAt time.Time, id string) (store.Cursor, error) {
 	saJSON, err := json.Marshal(startedAt)
 	if err != nil {
@@ -91,38 +72,28 @@ func decodeToolCallCursor(c store.Cursor) (startedAt time.Time, id string, err e
 	return startedAt, id, nil
 }
 
-// toolCallKeysetPredicate renders the "seek past the last row of the
-// previous page" WHERE fragment for the `started_at DESC, id` sort
-// (started_at is NOT NULL — SPEC §2.3 — so this needs no NULLS-handling
-// branch, unlike sessionKeysetPredicate's started_at case).
+// toolCallKeysetPredicate renders the keyset predicate for started_at DESC, id sort.
 func toolCallKeysetPredicate(b *clauseBuilder, startedAt time.Time, id string) string {
 	saPH := b.placeholder(startedAt)
 	idPH := b.placeholder(id)
 	return fmt.Sprintf("(tc.started_at < %s OR (tc.started_at = %s AND tc.id < %s))", saPH, saPH, idPH)
 }
 
-// toolCallColumns is the exact column list (and order) ListToolCalls' scan
-// destinations agree on, matching model.ToolCall's field order.
+// toolCallColumns is the exact column list ListToolCalls' scan destinations agree on.
 const toolCallColumns = `tc.id, tc.session_id, tc.prompt_id, tc.tool_use_id, tc.tool_name,
 	tc.tool_source, tc.agent_id, tc.decision, tc.decision_source, tc.permission_mode,
 	tc.started_at, tc.decided_at, tc.ended_at, tc.duration_ms, tc.wait_ms,
 	tc.success, tc.error_type, tc.file_path, tc.input_size_bytes, tc.result_size_bytes,
 	tc.correlation, tc.event_count`
 
-// listToolCallsQuery is what buildListToolCallsQuery returns, matching
-// listSessionsQuery/listEventsQuery's shape/purpose.
+// listToolCallsQuery is what buildListToolCallsQuery returns.
 type listToolCallsQuery struct {
 	SQL   string
 	Args  []any
 	Limit int
 }
 
-// buildListToolCallsQuery renders ListToolCalls' full dynamic SQL:
-// filter.go's whitelist WHERE clause, the keyset predicate for an incoming
-// cursor (if any), and the fixed `started_at DESC, id DESC` ORDER BY/LIMIT.
-// Factored out of ListToolCalls itself so a future EXPLAIN test runs
-// against the EXACT query ListToolCalls executes, matching
-// buildListSessionsQuery/buildListEventsQuery's convention.
+// buildListToolCallsQuery renders the full dynamic SQL with WHERE, keyset predicate, ORDER BY, LIMIT.
 func buildListToolCallsQuery(f store.ToolCallFilter, p store.Page) (listToolCallsQuery, error) {
 	limit := p.Limit
 	if limit <= 0 {
@@ -161,11 +132,8 @@ func buildListToolCallsQuery(f store.ToolCallFilter, p store.Page) (listToolCall
 	return listToolCallsQuery{SQL: sql, Args: b.args, Limit: limit}, nil
 }
 
-// ListToolCalls implements store.Reader (SPEC §3.3, §4.2): filtered,
-// keyset-paginated tool calls, serving both the session-scoped list and the
-// cross-session decision-provenance drill-down through
-// store.ToolCallFilter.SessionID. Fetches limit+1 rows to learn has_more
-// without a second COUNT query, matching ListSessions/ListEvents.
+// ListToolCalls implements store.Reader: filtered, keyset-paginated tool calls.
+// Fetches limit+1 rows to detect has_more without a second COUNT.
 func (s *Store) ListToolCalls(ctx context.Context, f store.ToolCallFilter, p store.Page) ([]model.ToolCall, store.Cursor, error) {
 	q, err := buildListToolCallsQuery(f, p)
 	if err != nil {

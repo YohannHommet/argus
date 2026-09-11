@@ -72,8 +72,7 @@ const customFromDraft = ref('')
 const customToDraft = ref('')
 
 // Seed the draft fields from the live filters every time the popover opens, rather than binding
-// them directly — so opening the popover to look, then dismissing it (Escape/outside click)
-// without hitting "Apply", never mutates the URL/refetch.
+// directly — so dismissing it (Escape/outside click) without "Apply" never mutates the URL/refetch.
 watch(customOpen, (open) => {
   if (!open) return
   customFromDraft.value = sessions.filters.from ?? ''

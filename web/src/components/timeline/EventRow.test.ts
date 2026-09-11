@@ -53,4 +53,107 @@ describe('EventRow', () => {
     expect(selected.attributes('data-selected')).toBe('true')
     expect(notSelected.attributes('aria-selected')).toBe('false')
   })
+
+  // Round-5 critic gap: no `sessionLabel` (the default, and every existing caller above) must
+  // render no session column at all — a single-session timeline is not the firehose.
+  it('renders no session identity column when sessionLabel is not supplied', () => {
+    const [item] = collapseEvents([otelToolResultEvent])
+    const wrapper = mount(EventRow, { props: { item: item! } })
+    expect(wrapper.find('[data-testid="event-row-session"]').exists()).toBe(false)
+  })
+
+  it('renders the given sessionLabel as its own column when supplied', () => {
+    const [item] = collapseEvents([otelToolResultEvent])
+    const wrapper = mount(EventRow, { props: { item: item!, sessionLabel: 'platform · a1b2c3d4' } })
+    expect(wrapper.get('[data-testid="event-row-session"]').text()).toBe('platform · a1b2c3d4')
+  })
+
+  // Round-5 critic gap: "two identical '3.4s' landed 136px apart" — each fixed metric column must
+  // keep its reserved width whether or not this row kind carries a value, so a `v-if` on the
+  // *value* is fine but a `v-if` that drops the whole column is not.
+  it('always renders the offset/duration/cost/tokens columns, falling back to EM_DASH per-value rather than dropping the column', () => {
+    const [item] = collapseEvents([makeTimelineEvent({ cost: null, tokens: null, duration_ms: null })])
+    const wrapper = mount(EventRow, { props: { item: item! } })
+
+    expect(wrapper.get('[data-testid="event-row-offset"]').text()).toBe('—')
+    expect(wrapper.get('[data-testid="event-row-duration"]').text()).toBe('—')
+    expect(wrapper.get('[data-testid="event-row-cost"]').text()).toBe('—')
+    expect(wrapper.get('[data-testid="event-row-tokens"]').text()).toBe('—')
+  })
+
+  // Round-6 (live view) critic gap: a null cost rendered its EM_DASH via
+  // `text-cost` (== `--foreground`, a bright/full-contrast color meant for a
+  // real dollar figure), one visible "weight" out of three the critic found
+  // for the same glyph. A missing value must read as muted like every other
+  // missing value in the row, not emphasized like real data.
+  it('does not apply the cost color class to a null cost\'s EM_DASH, but does apply it to a real cost', () => {
+    const [nullCost] = collapseEvents([makeTimelineEvent({ cost: null })])
+    const [realCost] = collapseEvents([makeTimelineEvent({ cost: 0.02 })])
+
+    const nullWrapper = mount(EventRow, { props: { item: nullCost! } })
+    const realWrapper = mount(EventRow, { props: { item: realCost! } })
+
+    expect(nullWrapper.get('[data-testid="event-row-cost"]').classes()).not.toContain('text-cost')
+    expect(realWrapper.get('[data-testid="event-row-cost"]').classes()).toContain('text-cost')
+  })
+
+  // Round-6 (live view) critic gap: the offset column is `EM_DASH` on every
+  // single row of a live firehose (it has no fixed origin to offset against),
+  // which read as an unnameable, always-empty column. `wallClockTime` swaps
+  // it for the event's own real, always-present timestamp — and must not
+  // affect `Timeline.vue`'s existing callers, which never pass it.
+  describe('wallClockTime', () => {
+    it('defaults to false: renders the relative-offset column exactly as before', () => {
+      const [item] = collapseEvents([makeTimelineEvent()])
+      const wrapper = mount(EventRow, { props: { item: item!, originTs: item!.ts } })
+
+      expect(wrapper.find('[data-testid="event-row-offset"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="event-row-time"]').exists()).toBe(false)
+      expect(wrapper.get('[data-testid="event-row-offset"]').text()).toBe('+0.0s')
+    })
+
+    it('true: renders the event\'s own wall-clock time under a distinct testid, ignoring originTs entirely', () => {
+      const [item] = collapseEvents([makeTimelineEvent({ ts: '2026-08-19T09:05:03.000Z' })])
+      const wrapper = mount(EventRow, { props: { item: item!, wallClockTime: true } })
+
+      expect(wrapper.find('[data-testid="event-row-offset"]').exists()).toBe(false)
+      expect(wrapper.get('[data-testid="event-row-time"]').text()).toMatch(/^\d{2}:\d{2}:\d{2}$/)
+    })
+  })
+
+  // Round-9 (live view) critic gap: the identity cluster (label/detail/
+  // decision/skew/file_path) was `flex-1`, growing to soak up whatever width
+  // the rest of the row wasn't using — on the firehose, where that cluster's
+  // own content is usually short, that stranded the metric cluster at the
+  // row's far edge with a 460–630px void in between. `compactEventColumn`
+  // swaps the growing column for a fixed one; `Timeline.vue`/
+  // `TimelineGroup.vue`, which never pass it, must keep rendering exactly as
+  // before.
+  describe('compactEventColumn', () => {
+    it('defaults to false: the identity cluster keeps growing (flex-1), matching Timeline\'s existing rendering', () => {
+      const [item] = collapseEvents([otelToolResultEvent])
+      const wrapper = mount(EventRow, { props: { item: item! } })
+      const cluster = wrapper.get('[data-testid="event-row-detail"]').element.parentElement as HTMLElement
+
+      expect(cluster.className).toContain('flex-1')
+      expect(cluster.className).not.toContain('w-96')
+    })
+
+    it('true: gives the identity cluster a fixed width instead of a growing one, and lets the detail chip truncate under it', () => {
+      const [item] = collapseEvents([otelToolResultEvent])
+      const wrapper = mount(EventRow, { props: { item: item!, compactEventColumn: true } })
+      const cluster = wrapper.get('[data-testid="event-row-detail"]').element.parentElement as HTMLElement
+
+      expect(cluster.className).toContain('w-96')
+      expect(cluster.className).not.toContain('flex-1')
+
+      // `shrink-0` (Timeline's default, inert under flex-1) would force a
+      // fixed-width cluster to overflow instead of truncating a long vendor
+      // tool_name/model — compact mode trades it for `min-w-0` so `truncate`
+      // (present either way) can actually engage.
+      const detail = wrapper.get('[data-testid="event-row-detail"]')
+      expect(detail.classes()).toContain('min-w-0')
+      expect(detail.classes()).not.toContain('shrink-0')
+    })
+  })
 })

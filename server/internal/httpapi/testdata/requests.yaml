@@ -295,23 +295,28 @@ requests:
     expect_status: 200
 
 exempt:
-  # SSE (SPEC §5): the hub is Phase 5 (P3-10's PLAN entry lists no hub
-  # ticket in Phase 3), so there is no live stream to open a connection
-  # against and no request/response pair to round-trip — an SSE response
-  # never finishes, it is framed events over one open connection. Their
-  # StreamEvent frame payloads are validated directly against
-  # components.schemas.StreamEvent in TestConformance_StreamEventSchemas
-  # instead (SPEC §5.1), which is the ticket note's prescribed treatment.
+  # SSE (SPEC §5, P5-02): the hub exists now, but this exemption is not
+  # about that — an SSE response structurally never completes (it is framed
+  # events over one connection meant to stay open), and this table's own
+  # harness (TestConformance in conformance_test.go) reads a whole response
+  # body via httptest.NewRecorder before validating it, which a stream that
+  # never finishes cannot satisfy no matter what backs it. StreamEvent frame
+  # *shapes* are validated directly against components.schemas.StreamEvent
+  # in TestConformance_StreamEventSchemas instead; the actual live wire
+  # behavior (headers, ordering, replay, teardown, shutdown) is
+  # internal/httpapi/sse_test.go's job, using a real net/http server
+  # (httptest.NewServer) that this recorder-based table cannot express.
   - operation_id: streamSession
     reason: >-
-      SSE stream; no hub exists before Phase 5. Covered by
-      TestConformance_StreamEventSchemas validating representative
-      StreamEvent frames (event/session/stats/lag/reset/shutdown) directly
-      against components.schemas.StreamEvent.
+      An SSE response never completes, so this recorder-based table
+      structurally cannot round-trip it. Frame shapes are covered by
+      TestConformance_StreamEventSchemas (event/session/stats/lag/reset/
+      shutdown against components.schemas.StreamEvent); live wire behavior
+      is covered by internal/httpapi/sse_test.go.
   - operation_id: streamAll
     reason: >-
       Same as streamSession — the firehose shares the same StreamEvent frame
-      schemas, covered by the same direct schema validation.
+      schemas and the same structural round-trip limitation.
 
   # OTLP + hooks ingest (SPEC §3.4/§3.5): these are mounted through
   # httpapi.Deps.OTLPMounter/HookMounter, not through the Reader/

@@ -91,11 +91,8 @@ const SOURCE_RANK: Record<EventSource, number> = {
   otel_log: 30,
   hook: 20,
   otel_metric: 10,
-  // TimelineEvent carries no field naming which real source a `sim` event
-  // imitates, so this implementation cannot honour "sim = rank of the
-  // source it imitates" literally. Documented deviation: `sim` ranks below
-  // every real source, so a genuine telemetry reading always wins over a
-  // simulated stand-in when both are present in a group.
+  // TimelineEvent carries no field naming which real source a `sim` event imitates, so this cannot
+  // honour "sim = rank of the source it imitates" literally: `sim` ranks below every real source instead.
   sim: 0,
 }
 
@@ -166,9 +163,8 @@ function mergeFields(members: TimelineEvent[]): Omit<TimelineItem, 'key' | 'sour
     duration_ms: pickByRank(members, (e) => e.duration_ms, durationRank),
     success: pickByRank(members, (e) => e.success, successRank),
     error_type: pickByRank(members, (e) => e.error_type, successRank),
-    // agent_id: hook-only field (SPEC §1.9) — no other source ever carries
-    // it, so a plain rank-based pick is equivalent to "the hook member's
-    // value" without needing a bespoke priority function.
+    // agent_id: hook-only field (SPEC §1.9) — no other source carries it, so a plain rank-based pick
+    // is equivalent to "the hook member's value" without a bespoke priority function.
     agent_id: pickByRank(members, (e) => e.agent_id, genericRank),
     agent_type: pickByRank(members, (e) => e.agent_type, genericRank),
     permission_mode: pickByRank(members, (e) => e.permission_mode, genericRank),

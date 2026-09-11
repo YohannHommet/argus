@@ -13,26 +13,10 @@ import (
 	"github.com/YohannHommet/argus/server/internal/store"
 )
 
-// validSortOrders is SPEC §4.3's closed `order` vocabulary ("order=asc|
-// desc"), shared by GET /api/v1/events and GET
-// /api/v1/sessions/{id}/timeline (sessions.go's getSessionTimelineHandler)
-// — same closed-vocabulary-needs-a-400 reasoning as sessions.go's
-// validSessionSorts (m1 audit finding).
+// validSortOrders is SPEC §4.3's closed order vocabulary.
 var validSortOrders = []store.SortOrder{store.OrderAsc, store.OrderDesc}
 
-// timelineEvent is the wire shape SPEC §4.3/openapi.yaml's TimelineEvent
-// schema declares, adapted from model.Event. It cannot be model.Event
-// marshaled directly: model.Event has no JSON tags at all (it mirrors the
-// `events` table 1:1, a storage shape, not a wire one — see its own doc
-// comment), and even with tags added the shapes differ structurally
-// (model.Event's four flat *Tokens fields nest into one `tokens` object or
-// null; CostUSD becomes a single nullable `cost` number, not an object;
-// `event_ref` doesn't exist on model.Event at all — it's computed from
-// (TS, Seq); IngestedAt/VendorSeq/RequestID/MessageUUID/DedupKey/
-// ParentAgentID/Attrs are internal-only and never on the wire here). This
-// is flagged as a P3-07 report item: the ticket's "marshal model types
-// directly" guidance holds for SessionSummary/SessionDetail/Turn/
-// SubagentTree, but not for Event/ToolCall.
+// timelineEvent is SPEC §4.3's TimelineEvent wire shape, adapted from model.Event.
 type timelineEvent struct {
 	EventRef       string            `json:"event_ref"`
 	Seq            int64             `json:"seq"`
@@ -63,26 +47,19 @@ type timelineEvent struct {
 	ClockSkewed    bool              `json:"clock_skewed"`
 }
 
-// eventDetail is GET /api/v1/events/{ref}'s body (openapi.yaml's
-// EventDetail: TimelineEvent plus `attrs`). timelineEvent's fields promote
-// unqualified into the JSON object since it is embedded without its own
-// tag.
+// eventDetail is GET /api/v1/events/{ref}'s body: TimelineEvent plus attrs.
 type eventDetail struct {
 	timelineEvent
 	Attrs map[string]any `json:"attrs"`
 }
 
-// timelineListResponse is GET /api/v1/events' and GET
-// /api/v1/sessions/{id}/timeline's shared body shape (openapi.yaml's
-// TimelineListResponse).
+// timelineListResponse is the shared body for GET /events and GET /sessions/{id}/timeline.
 type timelineListResponse struct {
 	Data []timelineEvent `json:"data"`
 	Page pageInfo        `json:"page"`
 }
 
-// newTimelineEvent adapts one model.Event into its wire shape (see
-// timelineEvent's doc comment for why this adapter, not direct marshaling,
-// is required).
+// newTimelineEvent adapts model.Event into timelineEvent wire shape.
 func newTimelineEvent(e model.Event) timelineEvent {
 	var tokens *model.TokenUsage
 	if e.InputTokens != nil || e.OutputTokens != nil || e.CacheReadTokens != nil || e.CacheCreationTokens != nil {
@@ -139,16 +116,13 @@ func derefInt64(p *int64) int64 {
 	return *p
 }
 
-// mountEventRoutes attaches the cross-session event routes this ticket
-// owns.
+// mountEventRoutes attaches the cross-session event routes.
 func mountEventRoutes(r chi.Router, reader Reader, logger *slog.Logger) {
 	r.Get("/events", listEventsHandler(reader, logger))
 	r.Get("/events/{ref}", getEventHandler(reader, logger))
 }
 
-// listEventsHandler implements GET /api/v1/events (SPEC §4.3): the
-// cross-session counterpart of getSessionTimelineHandler, sharing
-// query.ListEvents/timelineEvent via store.EventFilter.SessionID == "".
+// listEventsHandler implements GET /api/v1/events (SPEC §4.3): cross-session events.
 func listEventsHandler(reader Reader, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
@@ -199,9 +173,7 @@ func listEventsHandler(reader Reader, logger *slog.Logger) http.HandlerFunc {
 	}
 }
 
-// getEventHandler implements GET /api/v1/events/{ref} (SPEC §4.1, §4.3): a
-// `ref` that does not decode is 400 urn:argus:error:invalid-event-ref; a
-// well-formed `ref` naming no row is 404.
+// getEventHandler implements GET /api/v1/events/{ref} (SPEC §4.1, §4.3).
 func getEventHandler(reader Reader, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		raw := chi.URLParam(r, "ref")

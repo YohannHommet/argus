@@ -44,9 +44,8 @@ const searchedRows = computed(() => {
   return tools.toolCalls.filter((row) => row.tool_name.toLowerCase().includes(q))
 })
 
-// Client-side-only (no server sort param exists for this endpoint — see tools.ts's doc comment on
-// ToolCallFilters). Lives here, not in the store: it's a display concern of the currently-loaded
-// page, not fetched state.
+// Client-side-only (no server sort param exists for this endpoint — see tools.ts's doc comment).
+// Lives here, not in the store: it's a display concern of the currently-loaded page, not fetched state.
 const sortKey = ref<SortableKey | null>(null)
 
 function onSortChange(key: SortableKey): void {

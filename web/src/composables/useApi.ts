@@ -43,9 +43,8 @@ export function useApi<T>(
   const loading = ref(false)
 
   let controller: AbortController | null = null
-  // Monotonic run id: the settlement handler for a run only writes state
-  // when its id is still the latest — a superseded run's resolve/reject
-  // is otherwise indistinguishable from the current one settling late.
+  // Monotonic run id: the settlement handler only writes state when its id is still the latest — a
+  // superseded run's resolve/reject is otherwise indistinguishable from the current one settling late.
   let currentRunId = 0
 
   function abort(): void {
@@ -73,12 +72,8 @@ export function useApi<T>(
       loading.value = false
     } catch (err) {
       if (isAbortError(err) || signal.aborted) {
-        // Aborted runs are not errors — never written to `error`. If a
-        // newer execute() already superseded this run, `runId` no longer
-        // matches and `loading` is that newer run's to own; leave it
-        // alone. If nothing superseded it (a bare `abort()` call, or
-        // unmount), this run's own `loading: true` would otherwise be
-        // stuck forever with nothing left in flight to clear it.
+        // Aborted runs are not errors — never written to `error`. If a newer execute() superseded
+        // this run, leave `loading` to that newer run; otherwise clear it so it's not stuck forever.
         if (runId === currentRunId) {
           loading.value = false
         }
@@ -95,10 +90,8 @@ export function useApi<T>(
         return
       }
 
-      // Anything else is `fetch` itself failing (DNS, offline, CORS,
-      // "Failed to fetch") — retried exactly once, on a fresh signal from
-      // the same controller generation so an abort() during the retry
-      // still cancels it.
+      // Anything else is `fetch` itself failing (DNS, offline, CORS) — retried exactly once, on a
+      // fresh signal from the same controller generation so an abort() during the retry still cancels it.
       try {
         const retryResult = await runOnce(signal)
         if (runId !== currentRunId) return
@@ -119,9 +112,8 @@ export function useApi<T>(
     void execute()
   }
 
-  // `getCurrentScope()` covers both a component's setup() and a pinia
-  // setup-store's setup() — `onUnmounted` would silently no-op (and warn)
-  // in the latter since there's no component instance to unmount.
+  // `getCurrentScope()` covers both a component's setup() and a pinia setup-store's setup() —
+  // `onUnmounted` would silently no-op (and warn) in the latter since there's no component instance.
   if (getCurrentScope()) {
     onScopeDispose(() => {
       abort()

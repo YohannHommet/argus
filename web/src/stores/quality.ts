@@ -41,10 +41,8 @@ export const useQualityStore = defineStore('quality', () => {
     { immediate: true },
   )
 
-  // No from/to: the ticket's live data example queries the endpoint with
-  // no window at all and gets back everything Argus has ever measured —
-  // there is no "last 24h" framing for hook latency in the ticket or
-  // SPEC §6.2, unlike the unknown-kinds tile.
+  // No from/to: this endpoint is queried with no window at all and returns everything Argus has ever
+  // measured — there is no "last 24h" framing for hook latency in SPEC §6.2, unlike the unknown-kinds tile.
   const hookLatency = useApi<QualityHookLatencyResponse>(
     (signal) => {
       const client = useApiClient()

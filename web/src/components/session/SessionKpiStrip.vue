@@ -2,18 +2,14 @@
 import { computed } from 'vue'
 
 import NullValue from '@/components/common/NullValue.vue'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { NOT_MEASURED } from '@/lib/nullReasons'
-import { formatCost, formatCount, formatDuration, formatRejectRate, formatTokens } from '@/lib/format'
+import { formatCost, formatCount, formatDuration, formatPercent, formatRejectRate, formatTokens } from '@/lib/format'
 import type { components } from '@/api/schema'
 
-// A `SessionSummary`, not `SessionDetail`: every field this strip reads
-// (cost, tokens, turn_count, tool_call_count, tool_reject_count,
-// duration_ms) already lives on the summary shape the session list uses.
-// Typing the prop at that (narrower) level — rather than SessionDetail —
-// is what makes "the KPI strip's cost matches the list row" a type-level
-// guarantee: both read `SessionSummary.cost.usd`, so passing the very
-// SessionDetail response (which extends SessionSummary) here can never
-// substitute a recomputed/re-rounded figure.
+// A `SessionSummary`, not `SessionDetail`: typing the prop at this narrower level is what makes "the
+// KPI strip's cost matches the list row" a type-level guarantee — both read `SessionSummary.cost.usd`,
+// so a `SessionDetail` (which extends it) can never substitute a recomputed figure.
 type SessionSummary = components['schemas']['SessionSummary']
 
 const props = defineProps<{
@@ -23,9 +19,8 @@ const props = defineProps<{
 const totalTokens = computed(() => {
   const t = props.session?.tokens
   if (!t) return null
-  // SPEC has no single "session tokens" field — this strip's one number is
-  // input + output + cache_read + cache_creation, i.e. every token the
-  // session actually moved through the model, cache hits included.
+  // SPEC has no single "session tokens" field — this strip's one number is input + output +
+  // cache_read + cache_creation, every token the session actually moved through the model.
   return t.input + t.output + t.cache_read + t.cache_creation
 })
 
@@ -49,14 +44,33 @@ const rejectRateReason = computed(() => {
   if (calls === 0) return 'No tool calls recorded — reject rate is undefined, not 0%.'
   return NOT_MEASURED
 })
+
+/**
+ * D-30 (docs/review/phase-4-gauntlet.md, owner-ratified 2026-08-18): `cost.usd`
+ * is `reported_usd + estimated_usd` (SPEC §2.4) — before the server-side fix,
+ * an all-`--cost-mode=omit` session rendered `Cost $0.00` here with nothing to
+ * tell an operator that $0.00 meant "never measured", not "measured zero"
+ * (SPEC §6.1). `estimated_share` is the number that distinguishes them: 0
+ * means every dollar shown was vendor-reported (today's behaviour, byte for
+ * byte — the marker below simply never renders), `>0` means some or all of it
+ * is Argus's own `model_prices` estimate.
+ */
+const estimatedShare = computed(() => props.session?.cost.estimated_share ?? 0)
+const showEstimatedBadge = computed(() => estimatedShare.value > 0)
+const fullyEstimated = computed(() => estimatedShare.value >= 1)
+const estimatedBadgeLabel = computed(() => (fullyEstimated.value ? 'Estimated' : 'Partly est.'))
+const estimatedBadgeReason = computed(() => {
+  if (fullyEstimated.value) {
+    return "This session's entire cost is estimated from Argus's own model_prices table — no event reported a vendor cost."
+  }
+  return `${formatPercent(estimatedShare.value)} of this session's cost is estimated from Argus's own model_prices table, not reported by the vendor.`
+})
 </script>
 
 <template>
   <!--
-    A single-row band, not six individually-bordered cards: the KPI strip
-    is a caption for the tabs below it, not a dashboard in its own right, so
-    it gets one thin bordered container with divider lines between stats
-    instead of six boxes' worth of border/padding eating vertical space.
+    A single-row band, not six bordered cards: the KPI strip is a caption for the tabs below, not
+    its own dashboard, so it's one container with divider lines instead of six boxes of padding.
   -->
   <div
     data-testid="session-kpi-strip"
@@ -72,6 +86,19 @@ const rejectRateReason = computed(() => {
       >
         {{ formatCost(session?.cost.usd) }}
       </p>
+      <TooltipProvider v-if="showEstimatedBadge">
+        <Tooltip>
+          <TooltipTrigger as-child>
+            <span
+              class="border-warn/40 bg-warn/10 text-warn mt-0.5 inline-block cursor-help rounded px-1 py-0.5 text-[0.625rem] font-medium tracking-wide uppercase"
+              data-testid="kpi-cost-estimated-badge"
+              :title="estimatedBadgeReason"
+              :aria-label="estimatedBadgeReason"
+            >{{ estimatedBadgeLabel }}</span>
+          </TooltipTrigger>
+          <TooltipContent>{{ estimatedBadgeReason }}</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
     </div>
 
     <div class="min-w-20 flex-1 px-3 py-1.5">

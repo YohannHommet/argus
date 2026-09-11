@@ -16,26 +16,20 @@
  * (`v-model:collapsed` here) — never sent to the server, same rule as the
  * top-level collapse toggle.
  *
- * Within the group, `buildToolThreads` (round-3 critic gap: "tool
- * calls/results don't read as children") nests a `tool.pre` call's
- * decision/permission/result under it by shared `tool_use_id`, one level
- * deeper than the turn rail above — the decision/duration/cost worth
- * showing lands on the *parent* row (`thread.display`) so a reviewer sees
- * "this call was accepted in 120ms" without expanding anything, while the
- * raw decision/result events are still one click away as nested children.
+ * Within the group, `buildToolThreads` nests a `tool.pre` call's decision/permission/result under
+ * it by shared `tool_use_id`, one level deeper than the turn rail above — the decision/duration/cost
+ * worth showing lands on the *parent* row (`thread.display`) so a reviewer sees "this call was
+ * accepted in 120ms" without expanding anything, while the raw decision/result events are still one
+ * click away as nested children.
  *
- * `isContinuation` labels a second (or later) contiguous run of the same
- * `prompt_id` as "Turn N · continued" rather than repeating a bare "Turn
- * N" header — Timeline.vue's grouping is an honest contiguous-run split
- * (module doc there), which is correct but, unlabelled, reads as a bug
- * ("Turn 0" appearing twice — round-3 critic gap).
+ * `isContinuation` labels a second (or later) contiguous run of the same `prompt_id` as "Turn N ·
+ * continued" rather than repeating a bare "Turn N" header — Timeline.vue's grouping is an honest
+ * contiguous-run split (module doc there), which is correct but, unlabelled, reads as a bug.
  *
- * The header renders on `bg-muted` (round-4 critic gap: at `bg-background/95`
- * it sat within ~12 luminance levels of both the page and the rows under
- * it, so groups didn't read as grouped). `--muted` is a distinct, lighter
- * surface token from `--background`/`--card` in both themes (see
- * `theme.css`), so this reuses the design system's own surface ladder
- * rather than inventing a one-off shade.
+ * The header renders on `bg-muted` rather than `bg-background/95`, which sat within ~12 luminance
+ * levels of both the page and the rows under it, so groups didn't read as grouped. `--muted` is a
+ * distinct, lighter surface token from `--background`/`--card` in both themes (`theme.css`), so this
+ * reuses the design system's own surface ladder rather than inventing a one-off shade.
  */
 import { computed } from 'vue'
 import { ChevronDown, ChevronRight, ListTree, MessageSquare } from '@lucide/vue'
@@ -81,13 +75,10 @@ const emit = defineEmits<{ open: [eventRef: string]; 'toggle-collapse': [] }>()
 const isNoTurn = computed(() => props.promptId === null)
 
 /**
- * A trailing "no turn" group of exactly one event (a stray hook/log line
- * between turns, not a turn in its own right) gets a visually quieter
- * header — no explanatory subtitle, tighter padding — so a run of these
- * doesn't read as a wall of identical, seemingly-broken section headers
- * (round-3 critic gap: "consider folding trailing no-turn singletons
- * visually"). Still its own group (SPEC's contiguous-run honesty — see
- * Timeline.vue's module doc), just de-emphasised.
+ * A trailing "no turn" group of exactly one event (a stray hook/log line between turns, not a turn
+ * in its own right) gets a visually quieter header — no explanatory subtitle, tighter padding — so a
+ * run of these doesn't read as a wall of identical, seemingly-broken section headers. Still its own
+ * group (SPEC's contiguous-run honesty — see Timeline.vue's module doc), just de-emphasised.
  */
 const isCompactSingleton = computed(() => isNoTurn.value && props.items.length === 1)
 
@@ -154,11 +145,9 @@ function isSelected(item: TimelineItem): boolean {
         aria-hidden="true"
       />
       <!--
-        A trailing no-turn singleton (round-3/5 critic: it muddies hierarchy
-        against real turns) drops to the plain muted-foreground weight/size a
-        metrics label uses elsewhere, instead of the bold `text-foreground`
-        every real turn header gets — a real "Turn N" should visually win
-        against a run of these, not compete with them.
+        A trailing no-turn singleton drops to the plain muted-foreground weight/size a metrics label
+        uses, instead of the bold `text-foreground` a real turn header gets — it shouldn't compete
+        visually with them.
       -->
       <span
         :class="isCompactSingleton ? 'text-muted-foreground text-[0.6875rem] font-normal' : 'text-foreground text-sm font-semibold'"
@@ -187,13 +176,11 @@ function isSelected(item: TimelineItem): boolean {
     </header>
 
     <!--
-      Span-tree rail: a turn's events sit inside a left-bordered, indented
-      container so they read as owned children of the header above — the
-      same connector-line idiom `SubagentNode` uses for its own children.
-      The "No turn" group stays compact (SPEC/critic guidance: it's a
-      leading catch-all, not a turn) so it gets a plainer, unindented list.
-      Inside, `buildToolThreads` nests a tool call's decision/result one
-      rail deeper still (module doc above).
+      Span-tree rail: a turn's events sit inside a left-bordered, indented container so they read as
+      owned children of the header above — the same connector-line idiom `SubagentNode` uses. The
+      "No turn" group stays compact (it's a leading catch-all, not a turn) so it gets a plainer,
+      unindented list. `buildToolThreads` nests a tool call's decision/result one rail deeper still
+      (module doc above).
     -->
     <div
       v-if="!collapsed"

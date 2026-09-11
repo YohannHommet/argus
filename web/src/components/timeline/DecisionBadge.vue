@@ -13,11 +13,9 @@
  * label; anything else — including a value Argus has never seen — renders
  * verbatim through `RawValue` (SPEC §6.1).
  *
- * The `accept`/`reject` icon (round-3 critic gap: "accept=green check,
- * reject=red x") is purely additive to the existing color/text convention
- * `decisionColorClass` already encodes — it never replaces the raw,
- * verbatim decision text, and a decision value that is neither literal
- * string renders with no icon at all rather than guessing.
+ * The `accept`/`reject` icon is purely additive to the existing color/text convention
+ * `decisionColorClass` already encodes — it never replaces the raw, verbatim decision text, and any
+ * other decision value renders with no icon at all rather than guessing.
  */
 import { CheckCircle2, XCircle } from '@lucide/vue'
 import { computed } from 'vue'

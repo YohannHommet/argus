@@ -73,9 +73,8 @@ const option = computed<BreakdownOption>(() => {
 
   const labels = d.rows.map((row) => rowLabel(row.key))
 
-  // Same rule as `TimeSeriesChart`: "unattributed" is muted/neutral, never a cycled palette
-  // color — a palette slot means one fixed thing (a real, named entity) across every chart on
-  // this screen (round-5 UI pass, gap: "blue means different things in adjacent charts").
+  // Same rule as `TimeSeriesChart`: "unattributed" is muted/neutral, never a cycled palette color —
+  // a palette slot means one fixed thing (a real, named entity) across every chart on this screen.
   let paletteIndex = 0
   const rowColor = d.rows.map((row) => (row.key === '' ? t.mutedColor : paletteColor(t, paletteIndex++)))
 

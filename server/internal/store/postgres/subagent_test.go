@@ -13,13 +13,7 @@ import (
 	"github.com/YohannHommet/argus/server/internal/store/postgres"
 )
 
-// insertSessionStub creates a minimal sessions row via the real WriteBatch
-// path (stub-on-reference, SPEC §1.7) so later direct SQL inserts into
-// subagents satisfy its `REFERENCES sessions(id)` FK — used by the
-// cycle/depth-cap tests below, which construct subagents rows raw (SQL)
-// rather than through upsertSubagents, because their point is to exercise
-// SubagentTree's READ-side guard against data shapes upsertSubagents itself
-// would never produce (a mutual parent_agent_id cycle).
+// insertSessionStub creates a minimal sessions row to satisfy FK constraints for raw subagent inserts; used by cycle/depth-cap tests.
 func insertSessionStub(t *testing.T, st *postgres.Store, sessionID string, ts time.Time) {
 	t.Helper()
 	e := mkEvent(t, sessionID, model.KindAgentSetup, model.SourceHook, ts)

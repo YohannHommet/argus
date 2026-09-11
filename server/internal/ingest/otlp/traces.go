@@ -6,18 +6,7 @@ import (
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
 )
 
-// handleTraces implements POST /v1/traces (SPEC §3.4): "accept, discard,
-// count argus_otlp_traces_discarded_total, return an empty
-// ExportTraceServiceResponse." Traces are out of scope (DECISIONS.md), but
-// silently 404-ing an exporter causes noisy client-side retry loops;
-// accepting and dropping is friendlier and is a documented decision, not
-// laziness (lead note 3).
-//
-// The request is still fully decoded (same content-negotiation, gzip-cap,
-// and malformed-body handling as /v1/logs and /v1/metrics — SPEC §3.4
-// applies those rules uniformly across all three routes) so a client sees
-// the same error contract on every route; only the decoded spans are then
-// thrown away instead of being turned into anything stored.
+// handleTraces accepts, drops, counts (SPEC §3.4). Traces out of scope but accept avoids 404 retries.
 func (h *Handler) handleTraces(w http.ResponseWriter, r *http.Request) {
 	format, body, derr := readBody(w, r, h.maxBodyBytes)
 	if derr != nil {
@@ -38,9 +27,7 @@ func (h *Handler) handleTraces(w http.ResponseWriter, r *http.Request) {
 	writeExportResult(w, format, "rejectedSpans", 0, "")
 }
 
-// countSpans totals every Span across ResourceSpans -> ScopeSpans, for the
-// argus_otlp_traces_discarded_total counter (SPEC §3.4): per-span, not
-// per-request, so the counter reflects how much data was actually dropped.
+// countSpans totals per-span not per-request (SPEC §3.4: reflects actual data dropped).
 func countSpans(resourceSpans []*tracepb.ResourceSpans) int {
 	n := 0
 	for _, rs := range resourceSpans {

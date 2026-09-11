@@ -1,13 +1,4 @@
-// problem_test.go is the m2 audit finding's regression suite: 22 non-test
-// call sites used to put a wrapped store/query error's own text straight
-// into a 5xx problem+json `detail`, which could carry internal detail no
-// client should see (the audit's worst example: /readyz, unauthenticated by
-// default, echoing pgx's `user=%s database=%s` connection-failure string).
-// These tests assert the general contract writeInternalError/logStoreError
-// now enforce across every handler in this package: the response never
-// contains the underlying error's text, the response does carry a
-// request_id an operator can use to find the real error, and the real error
-// is actually logged under that same request id.
+// problem_test.go verifies m2 audit fix: internal errors never leak to clients but are logged with request IDs.
 package httpapi_test
 
 import (
@@ -25,13 +16,7 @@ import (
 	"github.com/YohannHommet/argus/server/internal/model"
 )
 
-// TestInternalError_NeverLeaksErrorText_ButLogsItWithRequestID drives GET
-// /api/v1/facets to a store failure carrying text no client should ever see
-// (a fabricated pgx-style connection failure, matching the ops.go:67 audit
-// example almost verbatim) and asserts three things: the 500 body contains
-// none of that text, the 500 body carries a non-empty request_id, and the
-// access/error log written through Deps.Logger contains both the real error
-// text and that same request id — so an operator can join the two.
+// TestInternalError_NeverLeaksErrorText_ButLogsItWithRequestID verifies error logging without client leaks.
 func TestInternalError_NeverLeaksErrorText_ButLogsItWithRequestID(t *testing.T) {
 	t.Parallel()
 
@@ -67,10 +52,7 @@ func TestInternalError_NeverLeaksErrorText_ButLogsItWithRequestID(t *testing.T) 
 	require.Contains(t, logged, problem.RequestID, "the log line must carry the same request id the response body does")
 }
 
-// errPlain is a minimal error type distinct from fmt.Errorf's *errors.errorString
-// only so this file needs no extra import; its Error() is exactly the string
-// passed in, with no wrapping noise to account for in the Contains checks
-// above.
+// errPlain is a minimal error type with no wrapping noise for Contains checks.
 type errPlain string
 
 func (e errPlain) Error() string { return string(e) }

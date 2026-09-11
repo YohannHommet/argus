@@ -1,22 +1,10 @@
-// conformance_test.go is P3-09's OpenAPI conformance harness (docs/SPEC.md
-// §4.4): it loads server/api/openapi.yaml with kin-openapi, routes the ~50
-// requests testdata/requests.yaml describes through the *real* router
-// (httpapi.New) wired to a fake store (internal/store/testing.Fake), and
-// validates every response body — not just its status code — against the
-// schema for the operation that request actually hit. A meta-assertion
-// requires every operationId in the spec to appear in the table, either as
-// a round-tripped request or as an explicit, reasoned exemption (SSE and the
-// ingest mount seams — see requests.yaml's own comment).
-//
-// This is deliberately the strictest test in the package: SPEC's own words
-// are "a conformance test that passes because it validates too little is
-// worse than no test at all" (ticket lead note), so every assertion here
-// either fails the build on a genuine drift between a handler and the
-// contract, or is annotated with why it cannot.
+// Package httpapi_test provides OpenAPI conformance tests (SPEC §4.4):
+// validates response bodies against openapi.yaml for ~50 test requests.
 package httpapi_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -40,14 +28,7 @@ import (
 	storetest "github.com/YohannHommet/argus/server/internal/store/testing"
 )
 
-// --- fixture identities shared by the Fake and requests.yaml ---------------
-
-// conformSessionID/conformUnknownSessionID/conform*EventRef name the fixed
-// entities requests.yaml's `path`s reference by literal id (sessions) or by
-// the `{{known_event_ref}}`/`{{unknown_event_ref}}` placeholders
-// resolveRequestPath substitutes (event_ref is an opaque base64url encoding
-// of a timestamp+seq, SPEC §1.2 — not something a YAML file can spell out by
-// hand without duplicating model.EventRef's own codec).
+// conformSessionID and conform*EventRef are fixture identities referenced by requests.yaml.
 const (
 	conformSessionID        = "s-conform"
 	conformUnknownSessionID = "does-not-exist"
@@ -57,16 +38,9 @@ var (
 	conformKnownEventRef   = model.EventRef{TS: time.Date(2026, 8, 11, 9, 12, 4, 221_000_000, time.UTC), Seq: 918233}
 	conformUnknownEventRef = model.EventRef{TS: time.Date(2026, 8, 11, 9, 12, 5, 0, time.UTC), Seq: 1}
 
-	// conformUnknownQuerySource is the ticket AC's "a response containing an
-	// unknown query_source string validates (it must, since the schema is
-	// string)" (SPEC §0): a value Argus has never seen, wired into the known
-	// event's query_source field, so every request that returns it exercises
-	// the AC — TestConformance_UnknownQuerySourceValidates asserts it
-	// explicitly and by name.
+	// conformUnknownQuerySource is an unseen value exercising SPEC §0's unknown string validation.
 	conformUnknownQuerySource = "a_future_query_source"
 )
-
-// --- request table -----------------------------------------------------
 
 // requestCase is one row of testdata/requests.yaml (see that file's header
 // comment for the field-by-field contract).
@@ -109,13 +83,7 @@ func resolveRequestPath(path string) string {
 	return path
 }
 
-// --- openapi.yaml loading ------------------------------------------------
-
-// specFilePath resolves server/api/openapi.yaml from this source file's own
-// location (runtime.Caller), matching internal/tools/specvalidate/main.go's
-// own rationale: `go test` always runs with cwd set to this package's
-// directory, but a relative path written for one invocation convention can
-// silently break under another.
+// specFilePath resolves openapi.yaml using runtime.Caller to handle varying test invocation cwd.
 func specFilePath() string {
 	_, thisFile, _, _ := runtime.Caller(0)
 	return filepath.Join(filepath.Dir(thisFile), "..", "..", "api", "openapi.yaml")
@@ -521,8 +489,8 @@ func requireOperationIDCoverage(t *testing.T, doc *openapi3.T, table requestTabl
 	// someone deliberately edits it here — which is the point at which the
 	// trade-off gets reviewed rather than assumed.
 	allowedExemptions := map[string]string{
-		"streamSession": "SSE; no hub before Phase 5 — covered instead by direct StreamEvent schema validation",
-		"streamAll":     "SSE; no hub before Phase 5 — covered instead by direct StreamEvent schema validation",
+		"streamSession": "SSE response never completes; this table reads a whole body, so it cannot round-trip a stream — covered by TestConformance_StreamEventSchemas (frame shapes) and sse_test.go (live wire behavior)",
+		"streamAll":     "SSE response never completes; this table reads a whole body, so it cannot round-trip a stream — covered by TestConformance_StreamEventSchemas (frame shapes) and sse_test.go (live wire behavior)",
 		"ingestLogs":    "mounted via Deps.OTLPMounter, not the Reader ports this Fake backs",
 		"ingestMetrics": "mounted via Deps.OTLPMounter, not the Reader ports this Fake backs",
 		"ingestTraces":  "mounted via Deps.OTLPMounter, not the Reader ports this Fake backs",
@@ -596,15 +564,31 @@ func TestConformance_UnknownQuerySourceValidates(t *testing.T) {
 }
 
 // TestConformance_StreamEventSchemas is streamSession/streamAll's exemption
-// treatment (requests.yaml's `exempt` entries, SPEC §5.1): the hub does not
-// exist before Phase 5, so there is no live SSE connection to round-trip,
-// but every frame *shape* SPEC §5.1 documents is validated directly against
-// components.schemas.StreamEvent — the same schema-conformance guarantee the
-// request-table rows get, just without an HTTP round trip.
+// treatment (requests.yaml's `exempt` entries, SPEC §5.1): an SSE response
+// never completes — it is framed events over one connection that is meant
+// to stay open — so the request-table harness above (which reads a whole
+// response body before validating it) cannot structurally round-trip
+// streamAll/streamSession at all. sse_test.go's httptest.NewServer-based
+// suite covers the live wire behavior instead; this test covers the one
+// thing that suite cannot: that every frame *shape* SPEC §5.1 documents
+// validates against components.schemas.StreamEvent's oneOf, and validates
+// against exactly one member of it (never zero, never more than one).
 func TestConformance_StreamEventSchemas(t *testing.T) {
 	doc, _ := loadSpec(t)
 	streamEvent := doc.Components.Schemas["StreamEvent"].Value
 	require.NotNil(t, streamEvent, "openapi.yaml must define components.schemas.StreamEvent")
+
+	// The session fixture is the full model.SessionSummary conformFixtures
+	// already builds for GET /api/v1/sessions (not the SPEC §5.1 example's
+	// 4-field subset): StreamSessionFrame is now `allOf: [SessionSummary]`
+	// (P5-02), so this is the shape the real handler actually emits.
+	// Round-tripping through JSON (rather than a hand-built map literal)
+	// keeps this fixture from silently drifting out of sync with
+	// SessionSummary's own field set.
+	sessionJSON, err := json.Marshal(newConformFixtures().session.SessionSummary)
+	require.NoError(t, err)
+	var sessionPayload map[string]any
+	require.NoError(t, json.Unmarshal(sessionJSON, &sessionPayload))
 
 	frames := map[string]map[string]any{
 		"event": {
@@ -616,13 +600,7 @@ func TestConformance_StreamEventSchemas(t *testing.T) {
 			"duration_ms": 180, "success": true, "error_type": nil, "agent_id": nil, "agent_type": nil,
 			"permission_mode": "default", "file_path": "server/internal/store/postgres/store.go", "clock_skewed": false,
 		},
-		"session": {
-			"id": conformSessionID, "status": "active", "turn_count": 12,
-			"cost": map[string]any{
-				"usd": 4.27, "reported_usd": 4.27, "estimated_usd": 0.0, "estimated_share": 0.0,
-				"by_query_source": map[string]any{}, "dominant_query_source": "", "other_query_source_usd": 0.0,
-			},
-		},
+		"session":  sessionPayload,
 		"stats":    {"events_per_sec": 42.1, "active_sessions": 3, "queue_depth": 0, "ingest_lag_ms": 180, "dropped_total": 0},
 		"lag":      {"dropped": 3},
 		"reset":    {"reason": "replay_window_exceeded", "from": "2026-08-11T09:00:00Z"},

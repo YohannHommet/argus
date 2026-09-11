@@ -14,19 +14,13 @@ import (
 	"github.com/YohannHommet/argus/server/internal/store"
 )
 
-// defaultLimit / maxLimit are SPEC §4.1's pagination defaults ("?limit=
-// (default 50, max 500)"), shared by every list endpoint this ticket binds.
+// defaultLimit / maxLimit are SPEC §4.1's pagination defaults (default 50, max 500).
 const (
 	defaultLimit = 50
 	maxLimit     = 500
 )
 
-// paramError is httpapi's internal representation of one invalid query/path
-// parameter. Its Error() string is already the exact `detail` text every
-// `urn:argus:error:invalid-parameter` problem+json response uses (SPEC
-// §4.1, openapi.yaml's BadRequest.invalidParameter example: "from: not a
-// valid RFC 3339 timestamp or relative shorthand: ..."), so handlers never
-// reformat it — see writeBindError.
+// paramError represents an invalid query/path parameter; its Error() string is the exact problem+json detail.
 type paramError struct {
 	param   string
 	message string
@@ -40,11 +34,7 @@ func newParamError(param, format string, args ...any) *paramError {
 	return &paramError{param: param, message: fmt.Sprintf(format, args...)}
 }
 
-// parseLimit binds `?limit=` (SPEC §4.1). Absent or explicit "0" defaults
-// to 50; anything above 500 clamps silently to 500 (not an error); a
-// negative or non-numeric value is a paramError naming "limit" (P3-07
-// ticket note: limit=9999 clamps, it is not an error — only a negative or
-// non-numeric value is).
+// parseLimit binds ?limit=; defaults to 50, clamps to 500, errors on negative/non-numeric.
 func parseLimit(raw string) (int, error) {
 	if raw == "" {
 		return defaultLimit, nil
@@ -65,12 +55,8 @@ func parseLimit(raw string) (int, error) {
 	return n, nil
 }
 
-// parseRelativeShorthand parses SPEC §4.1's relative time shorthand (`-24h`,
-// `-7d`) into the time.Duration to add to "now". Go's time.ParseDuration
-// already accepts "-24h" natively (h/m/s/ms/us/ns units); only the "d"
-// (days) unit needs hand-rolling, since ParseDuration has no day unit by
-// design — SPEC's shorthand is casual enough that a fixed 24h/day is fine
-// here.
+// parseRelativeShorthand parses SPEC §4.1's relative time shorthand (-24h, -7d).
+// The "d" (days) unit requires hand-rolling since time.ParseDuration has no day unit.
 func parseRelativeShorthand(raw string) (time.Duration, bool) {
 	if d, err := time.ParseDuration(raw); err == nil {
 		return d, true
@@ -85,12 +71,8 @@ func parseRelativeShorthand(raw string) (time.Duration, bool) {
 	return time.Duration(days * float64(24*time.Hour)), true
 }
 
-// parseTimeParam binds a single `from`/`to` value (SPEC §4.1: RFC 3339 or
-// relative shorthand). now is resolved once per request by the caller
-// (parseTimeWindow) so `from`/`to` never straddle two different clock
-// reads. An empty raw value means "absent" (nil, nil); callers apply their
-// own endpoint-specific default (unbounded for sessions, -24h for
-// analytics — SPEC §4.1).
+// parseTimeParam binds from/to values (RFC 3339 or relative shorthand).
+// now is shared per request so from/to never straddle two clock reads.
 func parseTimeParam(name, raw string, now time.Time) (*time.Time, error) {
 	if raw == "" {
 		return nil, nil //nolint:nilnil // absent is a valid, distinct outcome from "invalid" here — see doc comment

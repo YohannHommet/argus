@@ -28,17 +28,9 @@ import (
 	storetesting "github.com/YohannHommet/argus/server/internal/store/testing"
 )
 
-// blockingBody signals onStart the moment its first Read call is made (a
-// reliable proxy for "the client has begun sending the request, and the
-// server is now blocked inside io.ReadAll(r.Body) waiting for it"), sleeps
-// delay in that same first call, then hands back the whole payload at once.
-// A single sleep — rather than many small paced chunks — avoids compounding
-// per-call scheduling jitter under a loaded test machine into the total
-// held-open duration, and the onStart signal lets the caller synchronize on
-// an event instead of guessing a fixed real-time delay for "the request
-// must be in flight by now". This is what lets a test hold a real in-flight
-// HTTP request open past ARGUS_SHUTDOWN_GRACE deterministically, without
-// touching router.go or any handler.
+// blockingBody: signals onStart on first Read (server blocked in ReadAll),
+// sleeps delay, then returns payload. Lets test hold request past grace
+// deterministically, without touching router.go.
 type blockingBody struct {
 	payload []byte
 	delay   time.Duration
@@ -69,10 +61,8 @@ func debugLogOutput() io.Writer {
 	return io.Discard
 }
 
-// serveResult is a Serve() outcome that is safe to observe from more than
-// one place (the test itself, and t.Cleanup): unlike a plain channel, Err()
-// can be called repeatedly and from multiple goroutines without the second
-// caller blocking forever on an already-drained channel.
+// serveResult: safe Serve() outcome for multi-caller observation. Err() can
+// be called repeatedly without blocking on already-drained channel.
 type serveResult struct {
 	err  error
 	done chan struct{}
@@ -86,13 +76,9 @@ func (r *serveResult) Err() error {
 	return r.err
 }
 
-// newShutdownTestApp is newE2EApp's shutdown-test-specific twin: it needs
-// to control exactly when Serve's ctx is cancelled (relative to an
-// in-flight slow request this file drives) and to observe Serve's own
-// return value directly (m6's fix is only visible in what Serve returns
-// and in side effects observable after it returns), neither of which the
-// shared newE2EApp/e2e_ingest_test.go helper exposes — that helper installs
-// its own t.Cleanup(cancel) and never returns the cancel func or the result.
+// newShutdownTestApp: shutdown-test twin of newE2EApp. Needs to control ctx
+// cancellation timing and observe Serve's return value (m6 fix only visible in
+// return value and side effects), which newE2EApp doesn't expose.
 func newShutdownTestApp(t *testing.T) (app *App, baseURL string, pool *pgxpool.Pool, cancel context.CancelFunc, result *serveResult) {
 	t.Helper()
 	ctx := context.Background()

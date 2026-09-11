@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import ErrorState from '@/components/common/ErrorState.vue'
@@ -10,6 +10,7 @@ import Timeline from '@/components/timeline/Timeline.vue'
 import ToolCallTable from '@/components/tools/ToolCallTable.vue'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useCaptureReady } from '@/composables/useCaptureReady'
 import { formatAbsoluteTime, formatPercent, formatRelativeTime } from '@/lib/format'
@@ -35,24 +36,20 @@ function tabFromRoute(): Tab {
   return isTab(value) ? value : DEFAULT_TAB
 }
 
-// Tab state lives in the URL query (?tab=…), not a nested route, so a
-// reload re-derives it from `route.query` on mount instead of resetting to
-// the default — PLAN P4-03's "tab state survives reload" AC.
+// Tab state lives in the URL query (?tab=…), not a nested route, so a reload re-derives it from
+// `route.query` on mount instead of resetting to the default (PLAN P4-03's "survives reload" AC).
 const activeTab = ref<Tab>(tabFromRoute())
 
 function setTab(next: string | number): void {
   const tab = isTab(next) ? next : DEFAULT_TAB
   activeTab.value = tab
-  // `{ query }` alone is resolved relative to `path: '/'`, not the current
-  // route, so the current route/params must be given explicitly — omitting
-  // them would navigate away from `/sessions/:id` entirely.
+  // `{ query }` alone is resolved relative to `path: '/'`, not the current route, so the current
+  // route/params must be given explicitly — omitting them would navigate away from `/sessions/:id`.
   void router.replace({ name: route.name ?? undefined, params: route.params, query: { ...route.query, tab } })
 }
 
-// Keeps activeTab in sync with browser back/forward and any direct edit of
-// the URL — router.replace() above is this view's own writes; this watcher
-// is what makes an *external* query change (not caused by setTab) take
-// effect too.
+// Keeps activeTab in sync with browser back/forward and direct URL edits — router.replace() above
+// is this view's own writes; this watcher is what applies an *external* query change too.
 watch(
   () => route.query.tab,
   () => {
@@ -60,9 +57,8 @@ watch(
   },
 )
 
-// PLAN P4-05: "a node click navigates to ?tab=timeline&agent_id=…" — the
-// store's timeline filter must pick that up. `null` clears the filter when
-// the query param is absent, e.g. navigating away from a filtered link.
+// PLAN P4-05: a node click navigates to ?tab=timeline&agent_id=…, and the store's timeline filter
+// must pick that up. `null` clears the filter when the param is absent (e.g. leaving a filtered link).
 watch(
   () => route.query.agent_id,
   (raw) => {
@@ -72,32 +68,67 @@ watch(
   { immediate: true },
 )
 
-// Fetch the session whenever the route's :id changes. Registered before the
-// tab-activation watcher below so `store.currentId` is already pointed at
-// this session (loadSession sets it synchronously, before its first await)
-// by the time that watcher's lazy loadSubagents/loadToolCalls calls run.
+// Registered before the tab-activation watcher so `store.currentId` already points here
+// (`loadSession` sets it synchronously, before its first await) by the time that watcher's lazy loads run.
 watch(
   () => props.id,
   (id) => {
-    if (id) void store.loadSession(id)
+    if (!id) return
+    void store.loadSession(id)
+    // `startLive` is idempotent per id and tears down the *previous* id's subscription itself. This
+    // view never remounts across an id change, so this watcher, not onMounted, migrates the live
+    // subscription across a same-view navigation instead of leaking it.
+    store.startLive(id)
+    applyLiveDefault(id)
   },
   { immediate: true },
 )
 
-// Lazy per tab (SPEC/PLAN P4-03 design note): Subagents/Tools panels are
-// other tickets' (P4-05/P4-06), but this view owns tab activation, so it is
-// what triggers each panel's first fetch — never both at once, never the
-// Timeline tab's own turns/tool-calls unless a later ticket asks for them.
+/**
+ * PLAN.md P5-06 / SPEC §6.2 ("follow session jumps to detail in live mode"): honours `?live=1`
+ * literally. P5-05 owns the actual follow link and its exact param name isn't visible from here, so
+ * the *absence* of the param still defaults to live for an `active` session (Phase-5 exit criterion
+ * 2 — opening an actively-generating session must show new rows with no manual refresh) — the feature
+ * works whether or not P5-05 ends up using this exact name.
+ */
+function applyLiveDefault(id: string): void {
+  const raw = route.query.live
+  const liveParam = Array.isArray(raw) ? raw[0] : raw
+  if (liveParam === '1') {
+    store.setLiveEnabled(true)
+    return
+  }
+  if (liveParam === '0') {
+    store.setLiveEnabled(false)
+    return
+  }
+  if (store.session && store.session.id === id) {
+    store.setLiveEnabled(store.session.status === 'active')
+    return
+  }
+  // First navigation to this id: the session hasn't loaded yet. Waits for it once, then stops —
+  // not persistent, since a *later* live frame must never silently re-override a toggle flipped by hand.
+  const stopWatchingSession = watch(
+    () => store.session,
+    (session) => {
+      if (!session || session.id !== id) return
+      store.setLiveEnabled(session.status === 'active')
+      stopWatchingSession()
+    },
+  )
+}
+
+onBeforeUnmount(() => {
+  store.stopLive()
+})
+
+// Lazy per tab (PLAN P4-03): this view owns tab activation, so it triggers each panel's first fetch.
 watch(
   activeTab,
   (tab) => {
-    // Round-6 critic gap ("tool-breakdown" per subagent node): the tree's
-    // tool_call_count is a total with no per-tool detail, but ToolCall rows
-    // already carry a real (hook-sourced) agent_id — SubagentTree can derive
-    // a genuine per-node tool-name breakdown from the same toolCalls the
-    // Tools tab uses, provided they're loaded. `loadToolCalls` is
-    // load-once/cached (see the store), so activating the Tools tab later
-    // does not refetch.
+    // The tree also needs `toolCalls` loaded — it derives a per-node tool-name breakdown from the
+    // same hook-sourced `agent_id` the Tools tab uses. `loadToolCalls` is load-once/cached, so
+    // activating the Tools tab later does not refetch.
     if (tab === 'subagents') {
       void store.loadSubagents()
       void store.loadToolCalls()
@@ -112,12 +143,9 @@ function retry(): void {
 }
 
 /**
- * Round-6 critic gap: the Timeline tab's agent filter (set by a Subagents
- * node click, see SubagentTree.vue) had no visible chip and no way to clear
- * it. `Timeline.vue` deliberately does not own this filter (its own doc
- * comment: routing is this view's job), so it only emits; clearing the URL
- * query here is what the existing `route.query.agent_id` watcher above
- * turns back into `store.setTimelineFilters({ agentId: null })`.
+ * `Timeline.vue` doesn't own its agent filter (routing is this view's job), so it only emits;
+ * clearing the URL query here is what the `route.query.agent_id` watcher above turns back into
+ * `store.setTimelineFilters({ agentId: null })`.
  */
 function clearAgentFilter(): void {
   const query = { ...route.query }
@@ -125,9 +153,8 @@ function clearAgentFilter(): void {
   void router.replace({ name: route.name ?? undefined, params: route.params, query })
 }
 
-// The screenshot harness blocks on this. "Ready" = the initial session
-// fetch has settled one way or another (data, or a definitive error) —
-// never mid-fetch, per useCaptureReady's own contract.
+// The screenshot harness blocks on this. "Ready" = the initial session fetch has settled one way or
+// another (data, or a definitive error) — never mid-fetch, per useCaptureReady's own contract.
 useCaptureReady(() => !store.loading && (store.session !== null || store.error !== null))
 
 const hasSessionYet = computed(() => store.session !== null)
@@ -174,6 +201,25 @@ const hasSessionYet = computed(() => store.session !== null)
         >
           Partial — no session.start seen
         </Badge>
+
+        <!--
+          PLAN.md P5-06: "off" stops the timeline from appending new rows but never closes the
+          underlying subscription — see `sessionDetail.ts`'s `liveEnabled` doc comment for why this is
+          not `liveStore.pause()`. `role="status"`/label text make the toggle's current state
+          announced, not just its control.
+        -->
+        <label class="ml-auto flex items-center gap-2 text-xs">
+          <span
+            class="text-muted-foreground"
+            role="status"
+          >{{ store.liveEnabled ? 'Live' : 'Live (paused)' }}</span>
+          <Switch
+            :model-value="store.liveEnabled"
+            data-testid="live-toggle"
+            aria-label="Toggle live timeline updates"
+            @update:model-value="store.setLiveEnabled"
+          />
+        </label>
       </div>
 
       <p class="text-muted-foreground text-xs">
@@ -181,11 +227,8 @@ const hasSessionYet = computed(() => store.session !== null)
       </p>
 
       <!--
-        Started/last-event and decision_summary.exact_share (SPEC §4.3 — the
-        fraction of this session's accept/reject decisions whose correlation
-        is exact rather than heuristic) share one compact meta line instead
-        of three stacked paragraphs, so the header stays a caption for the
-        tabs below rather than a block competing with them for height.
+        Started/last-event and decision_summary.exact_share (SPEC §4.3) share one compact meta line
+        instead of three stacked paragraphs, so the header stays a caption, not a competing block.
       -->
       <p class="text-muted-foreground text-xs">
         Started
@@ -221,11 +264,9 @@ const hasSessionYet = computed(() => store.session !== null)
 
       <TabsContent value="timeline">
         <!--
-          raw_events_expired (SPEC §1.x, retention): the raw event log was
-          pruned, but the session's own aggregates above are still real.
-          That is a different fact from "this session simply had no
-          events", so it gets its own notice rather than falling into
-          whatever empty-timeline placeholder P4-04 renders.
+          raw_events_expired (SPEC §1.x, retention): the raw log was pruned, but the aggregates above
+          are still real — a different fact from "no events", so it gets its own notice, not P4-04's
+          empty-timeline placeholder.
         -->
         <div
           v-if="store.session!.raw_events_expired"
@@ -248,15 +289,10 @@ const hasSessionYet = computed(() => store.session !== null)
 
       <TabsContent value="subagents">
         <!--
-          The tree is this tab's primary content (it's the structural view —
-          the differentiator the cost table can't show); the cost table is
-          reference material, so it's capped and scrollable on its own
-          (CostAttributionCard's `max-h-48`) rather than growing to whatever
-          height its own row count wants, which previously let it dwarf the
-          tree. The tree itself sizes to its actual content — a session with
-          only a couple of subagents must not reserve a fixed tall slot it
-          doesn't use (round-3 critic gap: "~300px dead canvas above the
-          cost table" from an earlier `min-h-[22rem]` here).
+          The tree is this tab's primary content; the cost table is reference material, so it's
+          capped and scrollable on its own (CostAttributionCard's `max-h-48`) rather than growing to
+          its row count. The tree sizes to its actual content — a session with only a couple of
+          subagents must not reserve a fixed tall slot it doesn't use.
         -->
         <div class="flex flex-col gap-3">
           <div>
@@ -269,11 +305,18 @@ const hasSessionYet = computed(() => store.session !== null)
               @retry="store.loadSubagents({ force: true })"
             />
           </div>
+          <!--
+            estimated-usd/estimated-share come from the *session* projection, not `costAttribution`:
+            SPEC §2.1 makes `by_query_source` reported-cost-only, so an all-estimated session has
+            nothing in it to derive an estimate from (D-30).
+          -->
           <CostAttributionCard
             class="shrink-0"
             :data="store.costAttribution"
             :loading="store.subagentsLoading"
             :error="store.subagentsError"
+            :estimated-usd="store.session?.cost.estimated_usd ?? 0"
+            :estimated-share="store.session?.cost.estimated_share ?? 0"
             @retry="store.loadSubagents({ force: true })"
           />
         </div>

@@ -13,21 +13,11 @@ import (
 	"github.com/YohannHommet/argus/server/internal/query"
 )
 
-// facetsCacheTTL is GET /api/v1/facets' in-process cache window (P3-08
-// ticket note: "60 s in-process"). openapi.yaml/SPEC name no dedicated
-// config key for this — Facets' underlying queries are cheap DISTINCT scans
-// over sessions/tool_calls (read_quality.go), not rollups, so a fixed
-// constant rather than a configurable one is the deliberately minimal
-// choice here.
+// facetsCacheTTL is GET /api/v1/facets' in-process cache window (P3-08: 60s).
 const facetsCacheTTL = 60 * time.Second
 
-// facetsCache is GET /api/v1/facets' in-process cache: a single shared
-// value plus its expiry, guarded by a mutex so concurrent requests (the
-// ticket's -race AC) never race on the read-then-maybe-refresh sequence. A
-// failed refresh never overwrites the cached value or its expiry — an
-// error must not be cached as a success (ticket note) — so a transient
-// store error only ever costs one extra store call on the next request,
-// never a permanently stuck stale/zero value.
+// facetsCache is GET /api/v1/facets' in-process cache with mutex-guarded refresh.
+// Failed refreshes never overwrite the cache (errors are not cached as success).
 type facetsCache struct {
 	mu        sync.Mutex
 	value     model.Facets

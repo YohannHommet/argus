@@ -4,6 +4,7 @@ import { computed } from 'vue'
 import { Badge } from '@/components/ui/badge'
 import NullValue from '@/components/common/NullValue.vue'
 import RawValue from '@/components/common/RawValue.vue'
+import LiveDot from './LiveDot.vue'
 import StatusDot from './StatusDot.vue'
 import { NO_HOOK_COVERAGE } from '@/lib/nullReasons'
 import {
@@ -36,11 +37,10 @@ interface Props {
    */
   layout?: 'row' | 'grid'
   /**
-   * Warn/critical cost cutoffs for the *visible* session set (round-4 UI gap: "give Reject % and
-   * Cost graded warn/critical color"). Computed once per table render by `SessionTable.vue`
-   * (`computeCostThresholds`) rather than per-row, so every row in a page grades against the same
-   * distribution. Defaults to "never" so a row rendered without this prop (e.g. in isolation, in a
-   * test) never fabricates an outlier out of a set of one.
+   * Warn/critical cost cutoffs for the *visible* session set. Computed once per table render by
+   * `SessionTable.vue` (`computeCostThresholds`) rather than per-row, so every row in a page grades
+   * against the same distribution. Defaults to "never" so a row rendered in isolation never
+   * fabricates an outlier out of a set of one.
    */
   costThresholds?: CostThresholds
 }
@@ -95,7 +95,11 @@ function activate(): void {
       role="cell"
       class="px-3 py-2 align-middle"
     >
-      <StatusDot :status="session.status" />
+      <span class="flex items-center gap-1.5">
+        <StatusDot :status="session.status" />
+        <!-- PLAN.md P5-06 / SPEC §6.2: a live badge on `active` sessions — renders nothing otherwise. -->
+        <LiveDot :status="session.status" />
+      </span>
     </component>
     <component
       :is="cellTag"

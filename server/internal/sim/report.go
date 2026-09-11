@@ -8,11 +8,8 @@ import (
 	"time"
 )
 
-// Report is SPEC §7.2's exit report: "sessions/events/hooks/metric points
-// sent, HTTP status histogram, throughput, and non-2xx bodies — so a
-// 429/503 storm during load testing is legible." Every field is exported
-// so runner.go's tests can assert on it directly without parsing Print's
-// text output.
+// Report is SPEC §7.2's exit report: sessions/events sent, HTTP status
+// histogram, non-2xx bodies. Exported for direct test assertions.
 type Report struct {
 	mu sync.Mutex
 
@@ -42,19 +39,14 @@ type Report struct {
 // consume unbounded memory.
 const nonOKBodiesCap = 20
 
-// NewReport starts a Report with its Started timestamp set to now — a real
-// wall-clock read is correct here (unlike event generation): the report
-// measures the run's own real-world duration/throughput, which is
-// meaningful regardless of --clock-origin.
+// NewReport creates a Report with Started timestamp (real wall-clock, unlike
+// event generation; measures run's real-world duration/throughput).
 func NewReport() *Report {
 	return &Report{StatusHistogram: map[int]int{}, Started: time.Now()}
 }
 
-// RecordSend folds one Transport call's SendResult into the report. kind is
-// "logs"|"metrics"|"hooks", used only to pick which counter to bump — the
-// caller passes the count of individual events the batch represented, not
-// the batch count, so LogEvents/HookEvents/MetricPoints always mean
-// "events", never "HTTP requests".
+// RecordSend records a Transport call result. kind is "logs"|"metrics"|"hooks";
+// eventCount is individual events, not batch count (so counters mean "events").
 func (r *Report) RecordSend(kind string, eventCount int, res SendResult) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

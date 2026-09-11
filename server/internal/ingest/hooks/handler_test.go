@@ -24,11 +24,10 @@ import (
 	"github.com/YohannHommet/argus/server/internal/store"
 )
 
-// --- test doubles ---
+// Test doubles
 
-// captureEnqueuer is the "fake pipeline" the AC list asks for: a
-// hooks.Enqueuer whose behaviour is entirely test-controlled, with no
-// ingest.Pipeline and no database involved at all.
+// captureEnqueuer is the "fake pipeline": a hooks.Enqueuer whose behaviour is
+// entirely test-controlled, with no ingest.Pipeline or database.
 type captureEnqueuer struct {
 	mu      sync.Mutex
 	batches [][]model.Event
@@ -55,13 +54,9 @@ func (c *captureEnqueuer) allEvents() []model.Event {
 	return out
 }
 
-// spyWriter is the store.Writer the "zero store calls" AC needs wired into
-// a *real* ingest.Pipeline (lead decision #1): the Handler itself never
-// receives a store — it only ever sees the narrow hooks.Enqueuer port — so
-// the only way to structurally prove "nothing reaches the store
-// synchronously during the request" is to sit the spy behind the pipeline
-// EnqueueEvents hands off to, and assert it was never called in the same
-// instant ServeHTTP returns.
+// spyWriter is the store.Writer for the "zero store calls" AC: the Handler
+// only sees the narrow hooks.Enqueuer port, so the spy behind the pipeline
+// proves nothing reaches the store synchronously during the request.
 type spyWriter struct {
 	mu           sync.Mutex
 	batchCalls   int
@@ -100,15 +95,14 @@ func (s *spyWriter) calls() (batches, metrics int) {
 	return s.batchCalls, s.metricCalls
 }
 
-// discardLogger swallows every log line so tests that intentionally trigger
-// an error-class response don't spam `go test -v` output.
+// discardLogger swallows every log line so error tests don't spam output.
 func discardLogger() *slog.Logger { return slog.New(slog.NewTextHandler(discardWriter{}, nil)) }
 
 type discardWriter struct{}
 
 func (discardWriter) Write(p []byte) (int, error) { return len(p), nil }
 
-// --- helpers ---
+// Helpers
 
 func newHookRequest(t *testing.T, body []byte) *http.Request {
 	t.Helper()
@@ -117,10 +111,8 @@ func newHookRequest(t *testing.T, body []byte) *http.Request {
 	return req
 }
 
-// metricValue reads a counter/gauge straight off the Prometheus wire
-// format, the same technique internal/ingest/pipeline_test.go uses instead
-// of importing prometheus/client_golang/prometheus/testutil (which pulls in
-// a transitive dependency this module's go.sum does not declare).
+// metricValue reads a counter/gauge off the Prometheus wire format, avoiding
+// prometheus/client_golang/prometheus/testutil's transitive dependencies.
 func metricValue(t *testing.T, m prometheus.Metric) float64 {
 	t.Helper()
 	var pb dto.Metric
@@ -138,7 +130,7 @@ func metricValue(t *testing.T, m prometheus.Metric) float64 {
 
 const sessionEndPayload = `{"session_id":"sess-1","hook_event_name":"SessionEnd","reason":"clear"}`
 
-// --- AC: a SessionEnd payload returns 202 in under 20ms with a fake pipeline ---
+// AC: SessionEnd payload returns 202 in under 20ms with fake pipeline
 
 func TestHandler_SessionEnd_Returns202AndIsFast(t *testing.T) {
 	reg := prometheus.NewRegistry()
@@ -166,18 +158,15 @@ func TestHandler_SessionEnd_Returns202AndIsFast(t *testing.T) {
 
 	require.Len(t, enq.allEvents(), iterations, "one SessionEnd event enqueued per request")
 
-	// SPEC §3.5 targets p99 < 20ms, and the AC says "returns 202 in under
-	// 20 ms with a fake pipeline" — so this asserts the SPEC number itself,
-	// not a widened one. It is the *max* of 25 in-process calls with no
-	// network, no real store and a fake enqueuer, which measures ~0.5-2ms in
-	// practice, so 20ms is not a tight fit. t.Logf reports the real figure
-	// every run so a regression is visible before it reaches the bound.
+	// SPEC §3.5 targets p99 < 20ms. This asserts the exact SPEC number
+	// (max of 25 in-process calls, ~0.5-2ms in practice). t.Logf reports
+	// actual times for regression detection.
 	t.Logf("hooks handler: max of %d calls = %s (SPEC §3.5 target: p99 < 20ms)", iterations, maxDur)
 	require.Less(t, maxDur, 20*time.Millisecond,
 		"handler latency exceeded SPEC §3.5's 20ms budget — the SessionEnd hook shares a hard 1.5s budget, so this is the guard rail")
 }
 
-// --- lead decision #3: the duration histogram records a real observation per call ---
+// Duration histogram records a real observation per call
 
 func TestHandler_RecordsDurationObservationPerRequest(t *testing.T) {
 	reg := prometheus.NewRegistry()
@@ -191,10 +180,8 @@ func TestHandler_RecordsDurationObservationPerRequest(t *testing.T) {
 		require.Equal(t, http.StatusAccepted, rec.Code)
 	}
 
-	// A duplicate-registration panic (if two Handlers ever shared a
-	// registry) would fail this test before reaching here — see
-	// TestHandler_TwoInstancesDoNotPanicOnDuplicateRegistration below for
-	// the direct assertion of that guarantee.
+	// Duplicate-registration panic would fail this test (see
+	// TestHandler_TwoInstancesDoNotPanicOnDuplicateRegistration for direct proof).
 	families, err := reg.Gather()
 	require.NoError(t, err)
 	require.Len(t, families, 1)
@@ -203,11 +190,9 @@ func TestHandler_RecordsDurationObservationPerRequest(t *testing.T) {
 	require.EqualValues(t, 3, families[0].Metric[0].Histogram.GetSampleCount())
 }
 
-// TestHandler_TwoInstancesDoNotPanicOnDuplicateRegistration proves lead
-// decision #3's registerer-injection requirement: two Handlers built
-// against two independent registries in the same test binary must not
-// panic, exactly as internal/ingest.NewMetrics already requires of its
-// callers.
+// TestHandler_TwoInstancesDoNotPanicOnDuplicateRegistration proves the
+// registerer-injection requirement: two Handlers with independent registries
+// in the same test binary must not panic.
 func TestHandler_TwoInstancesDoNotPanicOnDuplicateRegistration(t *testing.T) {
 	norm := normalize.NewHookNormalizer(time.Now, 90*24*time.Hour, false)
 	require.NotPanics(t, func() {
@@ -216,7 +201,7 @@ func TestHandler_TwoInstancesDoNotPanicOnDuplicateRegistration(t *testing.T) {
 	})
 }
 
-// --- AC: missing session_id -> 400 problem+json ---
+// AC: missing session_id → 400 problem+json
 
 func TestHandler_MissingSessionID_Returns400ProblemJSON(t *testing.T) {
 	reg := prometheus.NewRegistry()
@@ -238,7 +223,7 @@ func TestHandler_MissingSessionID_Returns400ProblemJSON(t *testing.T) {
 	require.Empty(t, enq.allEvents(), "an invalid payload must never occupy queue capacity (SPEC §3.6)")
 }
 
-// --- AC: MessageDisplay gated by default still yields 202 (zero events is not an error) ---
+// AC: MessageDisplay gated by default still yields 202
 
 func TestHandler_MessageDisplayGatedByDefault_StillReturns202(t *testing.T) {
 	reg := prometheus.NewRegistry()

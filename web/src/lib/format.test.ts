@@ -11,6 +11,7 @@ import {
   formatRelativeOffset,
   formatRelativeTime,
   formatTokens,
+  formatWallClockTime,
 } from './format'
 
 describe('formatCost', () => {
@@ -166,6 +167,18 @@ describe('formatAbsoluteTime', () => {
   it('returns EM_DASH for null/invalid', () => {
     expect(formatAbsoluteTime(null)).toBe(EM_DASH)
     expect(formatAbsoluteTime('not-a-date')).toBe(EM_DASH)
+  })
+})
+
+describe('formatWallClockTime', () => {
+  it('renders HH:MM:SS (24-hour, zero-padded)', () => {
+    expect(formatWallClockTime('2026-08-17T12:03:04.000Z')).toMatch(/^\d{2}:\d{2}:\d{2}$/)
+  })
+
+  it('returns EM_DASH for null/undefined/unparseable input, never Invalid Date', () => {
+    expect(formatWallClockTime(null)).toBe(EM_DASH)
+    expect(formatWallClockTime(undefined)).toBe(EM_DASH)
+    expect(formatWallClockTime('not-a-date')).toBe(EM_DASH)
   })
 })
 

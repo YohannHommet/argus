@@ -1,39 +1,21 @@
 package normalize
 
-// Rejection is a source record that a normalizer could not attribute to any
-// session at all (SPEC §3.4: the OTLP/HTTP receiver reports these as
-// `partial_success{rejected_log_records: N, error_message}`, while the rest
-// of the batch is still stored, possibly as `kind='unknown'`). It is
-// deliberately not a Go error: SPEC §0 forbids any Go type that can reject a
-// *value* a vendor supplies, but a record with no session identity has no
-// key to store a row under, so it cannot become a model.Event. Surfacing it
-// as data here — rather than dropping it silently or returning an error that
-// would abort the whole batch — is what lets FromOTLPLogs (and its P2-03/
-// P2-04 siblings) guarantee "a rejection never discards the rest of the
-// batch".
+// Rejection is a source record that normalizer could not attribute to any
+// session (SPEC §3.4: OTLP/HTTP reports as partial_success.rejected_log_records).
+// Deliberately not an error: SPEC §0 forbids rejecting vendor *values*; session-less
+// record has no row key, cannot become model.Event. Surfacing as data ensures
+// "rejection never discards rest of batch" (FromOTLPLogs + P2-03/P2-04 siblings).
 type Rejection struct {
-	// Reason is a short, human-readable explanation (e.g. "missing
-	// session.id"), not a closed vocabulary — SPEC §0 only closes kind,
-	// source, correlation and status.
+	// Reason is short explanation (e.g. "missing session.id"), not closed vocabulary.
 	Reason string
 
-	// Record is the fully merged attribute map for the rejected record —
-	// the same shape a surviving record's Event.Attrs would have received
-	// — so a rejection is debuggable from the API/UI without re-decoding
-	// the original wire payload.
+	// Record is the fully merged attribute map (same shape as Event.Attrs),
+	// debuggable from API/UI without re-decoding original wire payload.
 	Record map[string]any
 
-	// Count is how many underlying wire-level units this one Rejection
-	// actually represents — 1 for every existing caller (an OTel log
-	// record, or an OTLP NumberDataPoint), but more than 1 for
-	// FromOTLPMetrics's "unsupported aggregation type" rejection
-	// (otel_metrics.go), which discards an entire Metric's worth of data
-	// points as a single Rejection value (audit finding m14: reporting
-	// len(rejections) there undercounts an ExponentialHistogram's 50
-	// points as 1). 0 is legitimate only when the rejected unit itself
-	// carried no data points at all (an OTLP aggregation-type oneof with
-	// no variant set) — every other constructor in this package sets it to
-	// the real, non-zero count. A caller summing `rejectedDataPoints`
+	// Count is how many underlying wire-level units (1 for OTel LogRecord/NumberDataPoint,
+	// >1 for FromOTLPMetrics "unsupported aggregation" discarding entire Metric's
+	// points as one Rejection per audit finding m14). Caller summing rejectedDataPoints
 	// should sum Count, not len(rejections).
 	Count int
 }

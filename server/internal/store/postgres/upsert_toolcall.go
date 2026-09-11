@@ -69,15 +69,7 @@ import (
 	"github.com/YohannHommet/argus/server/internal/store/postgres/gen"
 )
 
-// decisionRank ranks a contribution's authority over the decision /
-// decision_source / tool_source triplet specifically (SPEC §1.5.3:
-// "tool_decision > tool_result > hook"). The generic sourceRank (used
-// elsewhere in this package, otel_log=30/hook=20/otel_metric=10) cannot
-// express this: tool_decision and tool_result are BOTH source=otel_log, so
-// a plain source-based rank can't tell them apart. This function encodes
-// the finer precedence, scoped to exactly this one triplet of fields (and
-// decided_at, which by construction is only ever offered by a
-// KindToolDecision contribution).
+// decisionRank ranks contribution authority over decision/decision_source/tool_source (SPEC §1.5.3: tool_decision > tool_result > hook).
 func decisionRank(source model.Source, kind model.Kind) int {
 	switch {
 	case kind == model.KindToolDecision && source == model.SourceOTelLog:
@@ -127,10 +119,7 @@ func (r *rankedIntField) offer(val *int, rank int, ts time.Time) {
 	}
 }
 
-// rankedTime is like rankedBoolField but for decided_at: the only column
-// whose *value itself* is a timestamp governed by a rank (every other
-// timestamp column on tool_calls — started_at, ended_at — is a plain
-// LEAST/GREATEST, not rank-governed, per SPEC §1.5.3's table).
+// rankedTime is like rankedBoolField but for decided_at: the only timestamp column value itself governed by rank (SPEC §1.5.3).
 type rankedTime struct {
 	ts   time.Time
 	rank int
@@ -264,25 +253,7 @@ func promptKeyPart(p *string) string {
 	return *p
 }
 
-// upsertToolCalls is the P2-07 fill-in of write.go's named seam (SPEC
-// §1.6, §2.3). Its slot in the lock order is right after events, before
-// subagents — unchanged from the seam's placeholder.
-//
-// It returns the post-upsert started_at of every tool_calls row touched
-// this batch (P3-05 defect 1's dirty-marking fix): rollup_hourly's
-// tool_calls/tool_rejects counters are now bucketed on
-// date_trunc('hour', tool_calls.started_at) (AggregateToolCallRollup,
-// db/queries/rollups.sql), not on the ts of whichever event happened to
-// touch the row. Marking only that triggering event's own ts hour dirty
-// (as write.go's main marks loop already does for every candidate event)
-// is not enough on its own: a tool.decision event can land in a different
-// hour than the call's started_at (e.g. a PreToolUse hook in hour H1
-// followed by a slow tool_decision OTel event delivered in hour H2), and
-// only that decision changes tool_rejects for H1's bucket, which nothing
-// else would re-mark. Returning started_at here lets write.go additionally
-// dirty-mark started_at's own hour for every touched call, so the bucket
-// that actually needs recomputing is never missed regardless of which hour
-// the triggering event's ts falls in.
+// upsertToolCalls is the P2-07 seam fill-in (SPEC §1.6, §2.3). Returns post-upsert started_at for P3-05 dirty-marking fix: rollup_hourly buckets on tool_calls.started_at, not event ts.
 func upsertToolCalls(ctx context.Context, tx pgx.Tx, candidates []model.Event) ([]time.Time, error) {
 	var keyed, keyless []normalize.ToolCallContribution
 	for _, e := range candidates {

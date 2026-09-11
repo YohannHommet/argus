@@ -6,13 +6,9 @@ interface Props {
   reason?: string
   label?: string
   /**
-   * Drops the dotted-underline "hint text" styling while keeping the same
-   * title/aria-label tooltip contract. Default styling is right for a
-   * null value sitting among real text (the underline is the only cue
-   * there's a reason to hover); it reads as a rendering glitch when the
-   * value is a single bare glyph with nothing beside it — e.g. every row
-   * of a table column that's *always* null (round-3 critic gap: subagent
-   * tree cost column read as "clipped glyphs" at a glance).
+   * Drops the dotted-underline "hint text" styling while keeping the same title/aria-label tooltip
+   * contract. Default styling suits a null value sitting among real text; it reads as a rendering
+   * glitch when the value is a single bare glyph with nothing beside it, e.g. a column that's always null.
    */
   plain?: boolean
 }

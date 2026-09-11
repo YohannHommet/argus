@@ -10,17 +10,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestDeterminism_ByteIdenticalOutput is the ticket's AC1: "argusd sim
-// --out=/tmp/f --seed=7 --sessions=3 twice produces byte-identical files
-// (golden test in CI over a 1-session run) — which is only true because
-// --clock-origin defaults to a fixed epoch under --out (review M7)".
-//
-// It runs RunCLI twice into two fresh temp directories with the same
-// --seed/--sessions/--flush-immediately, using seed 193 (testdata/README.md:
-// chosen for a small session so the committed golden stays small) and
-// diffs the two output trees byte-for-byte, then diffs the first tree
-// against the committed golden fixture so a determinism regression is
-// caught even if it happens to be self-consistent within a single CI run.
+// TestDeterminism_ByteIdenticalOutput asserts AC1: same --seed ⇒ byte-identical
+// output files (requires --clock-origin default to fixed epoch under --out).
+// Diffs two runs against each other, then first run against committed golden.
 func TestDeterminism_ByteIdenticalOutput(t *testing.T) {
 	t.Parallel()
 

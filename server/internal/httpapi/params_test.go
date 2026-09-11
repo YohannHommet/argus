@@ -11,11 +11,7 @@ import (
 	"github.com/YohannHommet/argus/server/internal/query"
 )
 
-// These tests live in package httpapi (not httpapi_test) because
-// parseLimit/parseTimeParam/parseRelativeShorthand/repeatedParam/
-// decodeCursorParam/castSessionStatuses/castKinds are all unexported —
-// they are httpapi's own internal binding/validation helpers, not part of
-// its public surface.
+// These tests live in package httpapi because the tested helpers are unexported.
 
 func TestParseLimit(t *testing.T) {
 	t.Parallel()

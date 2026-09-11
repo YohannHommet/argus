@@ -14,39 +14,28 @@ import (
 	"github.com/YohannHommet/argus/server/internal/store"
 )
 
-// defaultTimeseriesLimitSeries / defaultBreakdownLimit mirror openapi.yaml's
-// documented defaults for `limit_series` (getAnalyticsTimeseries) and
-// `limit` (getAnalyticsBreakdown) — httpapi only needs them to distinguish
-// "absent" from "explicit 0" when parsing; read_analytics.go's own defaults
-// (store package) apply identically when 0 reaches the store layer, so
-// these constants exist for doc/error-message purposes only, not because
-// httpapi enforces them itself.
+// defaultTimeseriesLimitSeries / defaultBreakdownLimit mirror openapi.yaml defaults;
+// needed here to distinguish "absent" from "explicit 0" when parsing.
 const (
 	defaultTimeseriesLimitSeries = 8
 	defaultBreakdownLimit        = 20
 	maxBreakdownLimit            = 500
 )
 
-// validTimeseriesMetrics is SPEC §4.3's closed TimeseriesMetric vocabulary
-// (openapi.yaml's TimeseriesMetric schema) in its documented order — Argus's
-// own query surface, so (unlike vendor vocabulary elsewhere in this
-// package) an unrecognized value is a 400 that enumerates the valid set,
-// per the ticket's explicit AC wording.
+// validTimeseriesMetrics is SPEC §4.3's closed TimeseriesMetric vocabulary;
+// unrecognized values return 400 with the valid set enumerated.
 var validTimeseriesMetrics = []store.TimeseriesMetric{
 	store.MetricCost, store.MetricTokens, store.MetricSessions, store.MetricTurns,
 	store.MetricAPIRequests, store.MetricAPIErrors, store.MetricToolCalls, store.MetricToolRejects, store.MetricLOC,
 }
 
-// validBreakdownDimensions is SPEC §4.3's closed AnalyticsDimension
-// vocabulary (openapi.yaml's `dimension` enum), same closed-vocabulary
-// reasoning as validTimeseriesMetrics.
+// validBreakdownDimensions is SPEC §4.3's closed AnalyticsDimension vocabulary.
 var validBreakdownDimensions = []store.AnalyticsDimension{
 	store.DimensionModel, store.DimensionProject, store.DimensionTool,
 	store.DimensionDecisionSource, store.DimensionQuerySource, store.DimensionErrorType,
 }
 
-// validBreakdownMetrics is SPEC §4.3's closed BreakdownMetric vocabulary
-// (openapi.yaml's `metric` enum on getAnalyticsBreakdown).
+// validBreakdownMetrics is SPEC §4.3's closed BreakdownMetric vocabulary.
 var validBreakdownMetrics = []store.BreakdownMetric{
 	store.BreakdownMetricCost, store.BreakdownMetricCalls, store.BreakdownMetricTokens,
 }
@@ -68,8 +57,7 @@ func contains[T comparable](values []T, want T) bool {
 	return false
 }
 
-// mountAnalyticsRoutes attaches the four analytics read routes this ticket
-// owns (SPEC §4.2).
+// mountAnalyticsRoutes mounts analytics read routes (SPEC §4.2).
 func mountAnalyticsRoutes(r chi.Router, reader AnalyticsReader, logger *slog.Logger) {
 	r.Get("/analytics/summary", getAnalyticsSummaryHandler(reader, logger))
 	r.Get("/analytics/timeseries", getAnalyticsTimeseriesHandler(reader, logger))
@@ -77,13 +65,8 @@ func mountAnalyticsRoutes(r chi.Router, reader AnalyticsReader, logger *slog.Log
 	r.Get("/analytics/decisions", getAnalyticsDecisionsHandler(reader, logger))
 }
 
-// parseAnalyticsFilter binds the `from`/`to`/`project`/`model`/`vendor`/
-// `source` query parameters every analytics endpoint shares (SPEC §4.3,
-// openapi.yaml's AnalyticsSource parameter). `source` is not strictly
-// validated against its two-value enum — an unrecognized value simply
-// defaults to "event" at the store layer (store.sourceKindOf's documented
-// zero-value behaviour), the same permissive-unless-Argus-invented-and-
-// AC'd convention params.go's `sort`/`group_by` binding already follows.
+// parseAnalyticsFilter binds shared query parameters (SPEC §4.3); source is
+// permissive and defaults to "event" if unrecognized (matching params.go convention).
 func parseAnalyticsFilter(r *http.Request) (store.AnalyticsFilter, error) {
 	from, to, err := parseTimeWindow(r)
 	if err != nil {
@@ -100,17 +83,12 @@ func parseAnalyticsFilter(r *http.Request) (store.AnalyticsFilter, error) {
 	}, nil
 }
 
-// writeNotAttributable writes SPEC §4.3's documented 400 for a metric/
-// dimension that cannot honour an active `?model=` filter (openapi.yaml's
-// notAttributable example: urn:argus:error:not-attributable).
+// writeNotAttributable writes the not-attributable error (SPEC §4.3).
 func writeNotAttributable(w http.ResponseWriter, r *http.Request, detail string) {
 	writeProblem(w, r, http.StatusBadRequest, "not-attributable", detail)
 }
 
-// getAnalyticsSummaryHandler implements GET /api/v1/analytics/summary (SPEC
-// §4.3). No parameter here is Argus-invented-and-closed (source is
-// permissive, see parseAnalyticsFilter), so the only 400s are
-// parseTimeWindow's.
+// getAnalyticsSummaryHandler implements GET /api/v1/analytics/summary (SPEC §4.3).
 func getAnalyticsSummaryHandler(reader AnalyticsReader, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		f, err := parseAnalyticsFilter(r)
@@ -128,10 +106,7 @@ func getAnalyticsSummaryHandler(reader AnalyticsReader, logger *slog.Logger) htt
 }
 
 // getAnalyticsTimeseriesHandler implements GET /api/v1/analytics/timeseries
-// (SPEC §4.3): `metric` (required, closed) and `bucket` (optional, closed)
-// are validated here and 400 with the allowed-values list on a miss; `
-// group_by`/`limit_series` are permissive/clamped at the store layer, same
-// reasoning as `source`.
+// (SPEC §4.3); metric and bucket are validated here (closed).
 func getAnalyticsTimeseriesHandler(reader AnalyticsReader, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
@@ -185,9 +160,7 @@ func getAnalyticsTimeseriesHandler(reader AnalyticsReader, logger *slog.Logger) 
 }
 
 // getAnalyticsBreakdownHandler implements GET /api/v1/analytics/breakdown
-// (SPEC §4.3): `dimension` (required, closed) and `metric` (optional,
-// closed) are validated here and 400 with the allowed-values list on a
-// miss.
+// (SPEC §4.3); dimension and metric are validated here (closed).
 func getAnalyticsBreakdownHandler(reader AnalyticsReader, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
@@ -239,8 +212,7 @@ func getAnalyticsBreakdownHandler(reader AnalyticsReader, logger *slog.Logger) h
 	}
 }
 
-// getAnalyticsDecisionsHandler implements GET /api/v1/analytics/decisions
-// (SPEC §4.3): only `from`/`to`/`project`, none of them closed.
+// getAnalyticsDecisionsHandler implements GET /api/v1/analytics/decisions (SPEC §4.3).
 func getAnalyticsDecisionsHandler(reader AnalyticsReader, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		from, to, err := parseTimeWindow(r)

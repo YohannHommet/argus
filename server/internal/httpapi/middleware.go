@@ -11,11 +11,7 @@ import (
 	chimw "github.com/go-chi/chi/v5/middleware"
 )
 
-// AccessLog logs every request via logger, sampling successful (status <
-// 400) requests at 1-in-sampleRate — the same "sampled 1/100 on success"
-// rule SPEC §3.8 states for ingest logs, applied here to the general access
-// log so a busy read API can't flood the log file either. Errors are always
-// logged in full. sampleRate <= 1 disables sampling (logs everything).
+// AccessLog logs requests, sampling successful (status < 400) by sampleRate, always logging errors.
 func AccessLog(logger *slog.Logger, sampleRate int) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -43,19 +39,12 @@ func AccessLog(logger *slog.Logger, sampleRate int) func(http.Handler) http.Hand
 	}
 }
 
-// RequireAPIToken guards the read API (SPEC §3.5): a no-op when token is
-// empty (ARGUS_API_TOKEN unset — DECISIONS.md: no auth in v1 by default),
-// otherwise it requires a matching "Authorization: Bearer <token>" header,
-// compared in constant time.
+// RequireAPIToken guards the read API (SPEC §3.5); no-op if token is empty.
 func RequireAPIToken(token string) func(http.Handler) http.Handler {
 	return requireBearerToken(token)
 }
 
-// RequireIngestToken guards the ingest surface (OTLP + hooks, SPEC §3.5):
-// same no-op-when-empty, constant-time-compare seam as RequireAPIToken, but
-// gated by ARGUS_INGEST_TOKEN. Nothing mounts behind it yet in Phase 1 (P2's
-// ingest.Mounter will), but the seam must exist now so router.go never needs
-// touching again.
+// RequireIngestToken guards the ingest surface (SPEC §3.5); no-op if token is empty.
 func RequireIngestToken(token string) func(http.Handler) http.Handler {
 	return requireBearerToken(token)
 }
@@ -85,10 +74,7 @@ func bearerToken(r *http.Request) (string, bool) {
 	return strings.TrimPrefix(h, prefix), true
 }
 
-// CORS is the optional cross-origin middleware SPEC §3.7 says is "needed
-// only for pnpm dev on :5173": when origins is empty it is a no-op, matching
-// the default (`ARGUS_CORS_ORIGINS` unset) in which the SPA is always
-// same-origin with the API. origins is a comma-separated allow-list.
+// CORS is optional cross-origin middleware (SPEC §3.7); no-op if origins is empty.
 func CORS(origins string) func(http.Handler) http.Handler {
 	allowed := parseOrigins(origins)
 	return func(next http.Handler) http.Handler {
@@ -108,6 +94,24 @@ func CORS(origins string) func(http.Handler) http.Handler {
 				}
 			}
 			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// StreamAwareTimeout wraps chi's Timeout, exempting SSE routes to avoid killing live streams.
+// SSE handlers select r.Context().Done() for teardown; chi's Timeout would fire at exactly
+// `timeout` and abort the stream. Chi's fixed middleware stack forbids routing-level exemption,
+// so we check isStreamPath (sse.go) per-request to bypass Timeout for stream routes only.
+func StreamAwareTimeout(timeout time.Duration) func(http.Handler) http.Handler {
+	bound := chimw.Timeout(timeout)
+	return func(next http.Handler) http.Handler {
+		timed := bound(next)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if isStreamPath(r.URL.Path) {
+				next.ServeHTTP(w, r)
+				return
+			}
+			timed.ServeHTTP(w, r)
 		})
 	}
 }

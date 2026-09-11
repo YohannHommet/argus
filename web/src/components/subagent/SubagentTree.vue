@@ -32,14 +32,11 @@ interface Props {
   /** `cost_attribution.note`, when the caller has one — passed through to every node's cost tooltip in place of the generic constant. */
   costNote?: string | null
   /**
-   * Round-6 critic gap ("tool-breakdown"): `SubagentNode.tool_call_count` is
-   * a bare total with no per-tool detail. `ToolCall.agent_id` is
-   * hook-sourced but real (SPEC §1.9) — grouping the session's already-loaded
-   * tool calls by that field gives every node a genuine per-tool-name
-   * breakdown without inventing anything the server didn't say. Optional:
-   * a caller that hasn't loaded tool calls yet (or a unit test exercising
-   * the tree in isolation) simply gets nodes with no breakdown, which reads
-   * identically to today's plain tool count.
+   * `SubagentNode.tool_call_count` is a bare total with no per-tool detail. `ToolCall.agent_id` is
+   * hook-sourced but real (SPEC §1.9) — grouping the session's already-loaded tool calls by that
+   * field gives every node a genuine per-tool-name breakdown without inventing anything the server
+   * didn't say. Optional: a caller that hasn't loaded tool calls yet gets nodes with no breakdown,
+   * which reads identically to a plain tool count.
    */
   toolCalls?: ToolCall[]
 }
@@ -102,18 +99,11 @@ const toolBreakdownByAgent = computed<Record<string, ToolBreakdownEntry[]>>(() =
 })
 
 /**
- * Round-5 critic gap: "the Subagents duration scale reads '0-4ms' —
- * meaningless at these magnitudes". A bar chart (and its legend) implies the
- * differences it's drawing are worth comparing; at sub-second magnitudes
- * across a handful of subagent calls, a few milliseconds of spread is
- * scheduler/clock-resolution noise, not a real "this one took visibly
- * longer" signal — the bar would render near-identical widths for values
- * that differ 4x, which is a worse read than no bar. 1s is the same
- * order-of-magnitude floor `formatDuration` switches from decimal seconds
- * to whole seconds at, i.e. the point where a duration starts being a
- * human-meaningful span rather than noise. Below it, every node still shows
- * its own honest duration text (never dropped) — only the comparative
- * bar/legend, which stops being honest at this scale, goes away.
+ * A bar chart (and its legend) implies the differences it's drawing are worth comparing; at
+ * sub-second magnitudes across a handful of subagent calls, a few milliseconds of spread is
+ * scheduler/clock-resolution noise, not a real "this one took visibly longer" signal. 1s is the same
+ * order-of-magnitude floor `formatDuration` switches from decimal seconds to whole seconds at. Below
+ * it, every node still shows its own honest duration text — only the comparative bar/legend goes away.
  */
 const hasMeaningfulDurationSpread = computed(() => maxDurationMs.value >= 1000)
 

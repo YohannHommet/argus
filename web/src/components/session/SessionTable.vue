@@ -24,9 +24,8 @@ interface Column {
   class?: string
 }
 
-// Magnitude columns (SPEC gap: "numeric columns should be right-aligned with tabular figures so
-// magnitudes compare down a column") get `text-right` on both header and cell so the digits stack.
-// Reject % is deliberately excluded — it renders as a badge/chip, not a bare number.
+// Magnitude columns get `text-right` on both header and cell so digits stack down a column. Reject %
+// is deliberately excluded — it renders as a badge/chip, not a bare number.
 const NUMERIC_COLUMN_CLASS = 'text-right'
 
 const COLUMNS: Column[] = [

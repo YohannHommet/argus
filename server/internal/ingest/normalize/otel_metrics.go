@@ -11,72 +11,33 @@ import (
 	"github.com/YohannHommet/argus/server/internal/model"
 )
 
-// Argus's own closed vocabulary for metric_samples.temporality (SPEC §2.3's
-// column comment: "delta|cumulative|gauge"). This is not a vendor
-// vocabulary — OTel wire values are mapped onto it, never rejected — so a Go
-// constant set here does not violate SPEC §0 the way a Kind- or
-// event-name-shaped enum over vendor text would.
+// Closed vocabulary for metric_samples.temporality (SPEC §2.3).
+// OTel values mapped onto this (not rejected), so constants don't violate SPEC §0.
 const (
 	temporalityDelta      = "delta"
 	temporalityCumulative = "cumulative"
 	temporalityGauge      = "gauge"
 
-	// temporalityUnspecified is a fourth, Argus-defined value for OTLP's
-	// AGGREGATION_TEMPORALITY_UNSPECIFIED (lead note 3: "must still map to
-	// something honest rather than being dropped"). SPEC §2.3's column
-	// comment only lists three values, but metric_samples.temporality
-	// carries no CHECK constraint (SPEC §2.1: "No CHECK constraint anywhere
-	// on a vendor-supplied vocabulary" — and this column is Argus's own
-	// taxonomy, so even that rule doesn't apply, but the DDL indeed has no
-	// CHECK on this column either way). Silently forcing UNSPECIFIED to
-	// "delta" or "cumulative" would tell Phase 3's rollup job (P3-05) a
-	// concrete lie about whether consecutive points should be diffed;
-	// "unspecified" preserves the honest fact that the exporter did not say,
-	// leaving the choice of how to treat it to the rollup job that actually
-	// needs to decide.
+	// temporalityUnspecified maps OTLP UNSPECIFIED (lead note 3: map to something
+	// honest, not drop). Silently forcing to "delta"/"cumulative" would lie to
+	// Phase 3's rollup job about whether points should be diffed; "unspecified"
+	// preserves that the exporter did not say.
 	temporalityUnspecified = "unspecified"
 )
 
-// metricSeriesHashSeparator joins a metric name and its canonical attribute
-// JSON before hashing (seriesHash). SPEC §2.3 describes the formula as
-// "sha256(name + sorted attrs)" without specifying a byte-exact join; a
-// separator is used here (rather than bare concatenation) so that, e.g., a
-// metric literally named `foo{` can never collide with a differently-named
-// metric whose canonical attrs JSON happens to start the same way. This
-// byte-for-byte shape is an Argus-internal implementation detail: series_hash
-// is consumed only by Argus's own rollup job and metric_series_state (both
-// Phase 3), never compared against a value computed outside this codebase.
+// metricSeriesHashSeparator joins metric name and attrs JSON before hashing.
+// SPEC §2.3 says "sha256(name + sorted attrs)" without specifying join. Separator
+// prevents collisions (e.g. "foo{" metric + attrs starting "{..." from colliding).
+// Argus-internal implementation detail; series_hash consumed only internally.
 const metricSeriesHashSeparator = "|"
 
-// FromOTLPMetrics implements ticket P2-04 (SPEC §1.8, §2.3, §1.7 rule 2) end
-// to end for one decoded OTLP MetricsData payload: it walks
-// ResourceMetrics -> ScopeMetrics -> Metric -> data point, supports the
-// Sum (delta and cumulative), Gauge, and Histogram aggregation types,
-// computes each point's series identity and idempotency key, and applies the
-// SPEC §1.8 "store raw, store everything" policy — an unrecognized metric
-// name is stored exactly like a documented one, just never fed to a rollup
-// (rollup eligibility is Phase 3's concern, not this function's).
-//
-// It never returns a Go error, for the same SPEC §0 reason FromOTLPLogs
-// doesn't: no vendor-supplied *value* — including a metric name — can be
-// rejected. Unlike FromOTLPLogs, an absent session.id is *not* a rejection
-// here (SPEC's explicit AC: "a metric with no session.id is accepted with
-// session_id = NULL" — §1.8 already documents that
-// OTEL_METRICS_INCLUDE_SESSION_ID can be false). The only two things this
-// function does decline to turn into a MetricSample, surfaced as a
-// Rejection exactly like FromOTLPLogs's "no session.id" case, are
-// structurally undecodable shapes, never vendor values:
-//   - a Metric whose populated data-oneof variant is neither Sum, Gauge, nor
-//     Histogram (i.e. ExponentialHistogram or Summary, or no variant set at
-//     all) — this ticket's scope is the three types SPEC's ticket text
-//     names, and storing "some rows for this metric" under a type we cannot
-//     interpret would be worse than declining the whole metric honestly;
-//   - a NumberDataPoint (from a Sum or a Gauge) whose value oneof has
-//     neither AsDouble nor AsInt set — OTLP's own spec calls this data point
-//     "invalid" (see NumberDataPoint's doc comment), so there is no double,
-//     int, or vendor-string value here to coerce, unlike attrs.go's typed
-//     accessors which coerce every observed representation of a *present*
-//     value.
+// FromOTLPMetrics implements P2-04 (SPEC §1.8, §2.3, §1.7 rule 2) end-to-end:
+// walk ResourceMetrics/ScopeMetrics/Metric/data point, support Sum/Gauge/Histogram,
+// compute series identity and dedup_key, apply "store raw everything" (unrecognized
+// names stored like documented ones, never fed to rollup per SPEC §1.8).
+// Never errors (SPEC §0: no value rejected). Missing session.id ≠ rejection
+// (SPEC §1.8: NULL accepted). Only rejects structurally undecodable: unsupported
+// aggregation type (Exponential/Summary/empty) or NumberDataPoint with no value.
 func (n *Normalizer) FromOTLPMetrics(data *metricspb.MetricsData) ([]model.MetricSample, []Rejection) {
 	var samples []model.MetricSample
 	var rejections []Rejection
@@ -130,22 +91,15 @@ func (n *Normalizer) FromOTLPMetrics(data *metricspb.MetricsData) ([]model.Metri
 					}
 
 				default:
-					// ExponentialHistogram, Summary, or an empty oneof
-					// (SPEC's ticket scope is Sum/Gauge/Histogram only).
+					// ExponentialHistogram/Summary/empty oneof (ticket scope: Sum/Gauge/Histogram).
 					rejections = append(rejections, Rejection{
 						Reason: "unsupported metric aggregation type (only Sum, Gauge, and Histogram are decoded)",
 						Record: map[string]any{
 							"metric.name":     name,
 							"resource.vendor": vendor,
 						},
-						// audit finding m14 (your half): this Rejection
-						// discards every data point the unsupported metric
-						// carried, not just "the metric" as one unit — an
-						// ExponentialHistogram with 50 points must report
-						// 50 here, not 1, or the handler's
-						// rejectedDataPoints (otlp/metrics.go, ticket W7's
-						// half) undercounts by summing len(rejections)
-						// instead of summing Count.
+						// audit finding m14: Count is point count, not 1 (ExponentialHistogram w/50 points
+						// reports 50, not 1, or rejectedDataPoints undercounts).
 						Count: unsupportedMetricDataPointCount(metric),
 					})
 				}

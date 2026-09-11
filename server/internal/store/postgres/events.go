@@ -18,17 +18,14 @@ import (
 	"github.com/YohannHommet/argus/server/internal/model"
 )
 
-// insertedEvent is one row insertEvents actually persisted: enough to build
-// model.EventRef and the rollup_dirty hour marks.
+// insertedEvent represents one row insertEvents persisted, for EventRef and dirty marks.
 type insertedEvent struct {
 	TS  time.Time
 	Seq int64
 }
 
-// insertEvents bulk-inserts candidates (already too_old-filtered by the
-// caller) into `events`, sorted by (ts, dedup_key) ascending, and returns
-// exactly the rows the parent-level UNIQUE (ts, dedup_key) constraint
-// actually admitted.
+// insertEvents bulk-inserts candidates (pre-filtered, sorted by ts then dedup_key)
+// into `events` and returns the rows the UNIQUE (ts, dedup_key) constraint admitted.
 func insertEvents(ctx context.Context, tx pgx.Tx, candidates []model.Event) (map[string]insertedEvent, error) {
 	if len(candidates) == 0 {
 		return map[string]insertedEvent{}, nil

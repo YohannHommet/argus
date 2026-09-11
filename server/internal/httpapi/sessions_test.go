@@ -18,12 +18,7 @@ import (
 	storetest "github.com/YohannHommet/argus/server/internal/store/testing"
 )
 
-// fakeReader is this package's shared httpapi.Reader/httpapi.AnalyticsReader
-// test double: storetest.Fake (P3-09's shared in-memory store.Reader
-// double), consolidating what used to be three near-identical local doubles
-// here, in events_test.go, and in toolcalls_test.go (P3-07/P3-08). Aliased
-// under the pre-P3-09 name so every existing `&fakeReader{...}` literal in
-// this package keeps working unchanged.
+// fakeReader is a test double for Reader (alias of storetest.Fake).
 type fakeReader = storetest.Fake
 
 // newTestSession is a minimal, valid *model.SessionDetail for handlers that

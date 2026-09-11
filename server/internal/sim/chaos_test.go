@@ -10,11 +10,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestApplyChaosOrphans_MovesSessionStartPastTurnHooks asserts the
-// --chaos-orphans transform's core contract (chaos.go): SessionStart ends
-// up chaosOrphanShift hooks later in the slice, every other hook keeps its
-// relative order, and no hook's own payload/timestamp is mutated —
-// SessionStart is delivered late, not rewritten.
+// TestApplyChaosOrphans_MovesSessionStartPastTurnHooks asserts chaos-orphans
+// transform: SessionStart moves chaosOrphanShift positions later, other hooks
+// keep order, no payloads/timestamps mutated (late delivery, not rewrite).
 func TestApplyChaosOrphans_MovesSessionStartPastTurnHooks(t *testing.T) {
 	t.Parallel()
 
@@ -45,9 +43,8 @@ func TestApplyChaosOrphans_MovesSessionStartPastTurnHooks(t *testing.T) {
 	require.Equal(t, "Stop", out.Hooks[4].Payload["hook_event_name"])
 }
 
-// TestApplyChaosOrphans_ClampsToSliceLength covers a session with fewer
-// hooks after SessionStart than chaosOrphanShift: SessionStart must end up
-// last, not panic on an out-of-range slice.
+// TestApplyChaosOrphans_ClampsToSliceLength covers short hook slices:
+// SessionStart must clamp to last (not panic on out-of-range).
 func TestApplyChaosOrphans_ClampsToSliceLength(t *testing.T) {
 	t.Parallel()
 

@@ -605,17 +605,62 @@ paths:
                     clock_skewed: false
                 session:
                   summary: "event: session"
+                  description: >-
+                    The full SessionSummary projection row (SPEC §5.1 shows
+                    a 4-field subset for brevity; see StreamSessionFrame's
+                    own description for why the real frame is the whole
+                    row).
                   value:
                     id: "3f7a3b1e-0000-0000-0000-000000000001"
+                    vendor: "claude_code"
+                    project: "argus"
+                    cwd: "/home/y/Labs/argus"
                     status: "active"
+                    start_type: "fresh"
+                    started_at: "2026-08-11T09:02:11.412Z"
+                    ended_at: null
+                    last_event_at: "2026-08-11T09:31:44.900Z"
+                    duration_ms: 1773488
                     turn_count: 12
+                    event_count: 480
+                    tool_call_count: 96
+                    tool_reject_count: 3
+                    subagent_count: 2
+                    error_count: 1
+                    tokens: { input: 41233, output: 18944, cache_read: 1204331, cache_creation: 88210 }
                     cost: { usd: 4.27, reported_usd: 4.27, estimated_usd: 0, estimated_share: 0, by_query_source: {}, dominant_query_source: "", other_query_source_usd: 0 }
+                    models: ["claude-opus-5", "claude-sonnet-4-5"]
+                    partial: false
+                    app_version: "2.1.220"
+                    entrypoint: "cli"
+                    terminal_type: "wsl-Ubuntu"
         "404":
           $ref: "#/components/responses/NotFound"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
+        "503":
+          description: >-
+            Too many live SSE subscribers (ARGUS_STREAM_MAX_SUBSCRIBERS,
+            SPEC §5.3), or the server is shutting down. Inline, not a shared
+            component: Argus has no ServiceUnavailable component analogous
+            to the OTLP operations' OTLPUnavailable (their body is
+            google.rpc.Status, not problem+json), so this repeats the
+            readyz-style problem+json shape verbatim on both stream
+            operations instead.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+              examples:
+                tooManySubscribers:
+                  value:
+                    type: "urn:argus:error:too-many-subscribers"
+                    title: "Service Unavailable"
+                    status: 503
+                    detail: "too many live SSE subscribers"
+                    instance: "/api/v1/sessions/3f7a3b1e-0000-0000-0000-000000000001/stream"
 
   /api/v1/events:
     get:
@@ -1109,6 +1154,27 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
+        "503":
+          description: >-
+            Too many live SSE subscribers (ARGUS_STREAM_MAX_SUBSCRIBERS,
+            SPEC §5.3), or the server is shutting down. Inline, not a shared
+            component: Argus has no ServiceUnavailable component analogous
+            to the OTLP operations' OTLPUnavailable (their body is
+            google.rpc.Status, not problem+json), so this repeats the
+            readyz-style problem+json shape verbatim on both stream
+            operations instead.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+              examples:
+                tooManySubscribers:
+                  value:
+                    type: "urn:argus:error:too-many-subscribers"
+                    title: "Service Unavailable"
+                    status: 503
+                    detail: "too many live SSE subscribers"
+                    instance: "/api/v1/stream"
 
   /v1/logs:
     post:
@@ -2514,16 +2580,16 @@ components:
       description: "event: event — a persisted event, slim shape (SPEC §5.1). Carries `id:` (the event_ref) on the SSE frame."
 
     StreamSessionFrame:
-      type: object
-      description: "event: session — debounced (500ms/session) projection snapshot (SPEC §5.1). No `id:` line."
-      required: [id, status, turn_count, cost]
-      properties:
-        id: { type: string }
-        status:
-          $ref: "#/components/schemas/SessionStatus"
-        turn_count: { type: integer }
-        cost:
-          $ref: "#/components/schemas/SessionCost"
+      allOf:
+        - $ref: "#/components/schemas/SessionSummary"
+      description: >-
+        event: session — debounced (500ms/session) projection snapshot (SPEC
+        §5.1). No `id:` line. SPEC §5.1's own example shows a 4-field subset
+        ({id, status, turn_count, cost}) for brevity, but the handler emits
+        the full SessionSummary row: the client provably needs more than
+        four fields (the KPI strip and SessionTable both re-render from this
+        frame), and internal/stream's own Filter.MatchSession filters on
+        project/vendor, which the 4-field subset does not carry.
 
     StreamStatsFrame:
       type: object

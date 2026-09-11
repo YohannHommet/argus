@@ -207,10 +207,7 @@ func setRebuildWatermark(ctx context.Context, tx pgx.Tx, ts time.Time, seq int64
 	return nil
 }
 
-// fetchEventPage reads up to rebuildPageSize events strictly after
-// (afterTS, afterSeq) in (ts, seq) order — the global replay order SPEC
-// §1.6 requires — reusing read_events.go's eventColumnsFull/scanEvent so
-// this file does not hand-roll a second 34-column scan.
+// fetchEventPage reads the next page of events in (ts, seq) order, reusing eventColumnsFull/scanEvent.
 func fetchEventPage(ctx context.Context, pool interface {
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 }, afterTS time.Time, afterSeq int64, limit int) ([]model.Event, error) {
@@ -239,14 +236,7 @@ func fetchEventPage(ctx context.Context, pool interface {
 	return events, nil
 }
 
-// fetchEventPageForSessions is fetchEventPage's session-scoped sibling (M12):
-// it reads up to rebuildPageSize events strictly after (afterTS, afterSeq),
-// restricted to sessionIDs, in the same global (ts, seq) order. Deliberately
-// NO lower bound on ts beyond the (afterTS, afterSeq) cursor — the whole
-// point of the M12 fix is that a scoped rebuild replays each affected
-// session's events from that session's true start, not from fromTS, so a
-// straddling session's pre-fromTS events are included exactly like its
-// post-fromTS ones (see package doc).
+// fetchEventPageForSessions is the session-scoped variant: reads events after (afterTS, afterSeq) restricted to sessionIDs. No ts lower bound (M12: scoped rebuild replays each session from its true start, not fromTS).
 func fetchEventPageForSessions(ctx context.Context, pool interface {
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 }, sessionIDs []string, afterTS time.Time, afterSeq int64, limit int) ([]model.Event, error) {
@@ -275,14 +265,7 @@ func fetchEventPageForSessions(ctx context.Context, pool interface {
 	return events, nil
 }
 
-// acquireRebuildLock takes pg_try_advisory_lock(rebuildLockKey) on a
-// dedicated connection and returns a release func, or an error if the lock
-// is already held (M13; see package doc — today this only rejects a
-// CONCURRENT REBUILD, since write.go does not yet take ARGUS03 in shared
-// mode). Non-blocking (pg_try_advisory_lock, not pg_advisory_lock) so a
-// second invocation fails loudly and immediately instead of queuing behind
-// the first and silently serialising two rebuilds that might disagree about
-// fromTS.
+// acquireRebuildLock takes pg_try_advisory_lock(rebuildLockKey) non-blocking; returns release func or error if locked (M13).
 func acquireRebuildLock(ctx context.Context, pool *pgxpool.Pool) (release func(), err error) {
 	conn, err := pool.Acquire(ctx)
 	if err != nil {
@@ -311,14 +294,7 @@ func acquireRebuildLock(ctx context.Context, pool *pgxpool.Pool) (release func()
 	}, nil
 }
 
-// truncateProjections empties the four SPEC §1.6 projection tables in full —
-// the unscoped path, used when fromTS.IsZero() (see package doc). All four in
-// one statement: Postgres allows a single TRUNCATE to name tables on both
-// sides of a foreign key (tool_calls/subagents/turns all REFERENCE sessions),
-// so no CASCADE or per-table ordering is needed. RESTART IDENTITY is a no-op
-// here (none of the four tables has a serial/identity column) but is
-// included for clarity that this is a full reset, matching the "truncate"
-// language in this ticket's AC.
+// truncateProjections empties the four projection tables in one statement (unscoped fromTS.IsZero() path).
 func truncateProjections(ctx context.Context, pool interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 }) error {
@@ -343,11 +319,7 @@ func countProjectionRows(ctx context.Context, pool *pgxpool.Pool) (RebuildDestru
 	return r, nil
 }
 
-// affectedSessionIDs finds every session with at least one event at or after
-// fromTS — the session-scoping predicate this file's M12 fix uses in place of
-// a literal "replay events >= fromTS" (see package doc for why: it is the
-// only way to rebuild a straddling session from its true start rather than a
-// partial slice).
+// affectedSessionIDs finds sessions with events at or after fromTS (M12: scope predicate to avoid partial replays).
 func affectedSessionIDs(ctx context.Context, pool *pgxpool.Pool, fromTS time.Time) ([]string, error) {
 	rows, err := pool.Query(ctx, `SELECT DISTINCT session_id FROM events WHERE ts >= $1`, fromTS)
 	if err != nil {
@@ -369,22 +341,7 @@ func affectedSessionIDs(ctx context.Context, pool *pgxpool.Pool, fromTS time.Tim
 	return ids, nil
 }
 
-// M12's "oldest surviving events partition" guard reuses read_sessions.go's
-// oldestEventsPartitionStart (same package, already implements exactly this
-// pg_inherits lookup for SPEC's session-timeline-expiry rule) rather than
-// duplicating it a second time — unlike retention.go's listPartitionRanges,
-// which duplicates partitions.go's query because no ready-made helper
-// already existed with the right shape.
-
-// scopedDeleteSessions counts (for the RebuildDestructionReport) and then
-// deletes exactly the given sessions' projection rows, inside one
-// transaction so the report matches what is actually destroyed even under
-// concurrent activity. turns/tool_calls/subagents cascade off
-// `sessions(id) ON DELETE CASCADE` (001_core.sql, 003_projections.sql), so
-// deleting from `sessions` alone is sufficient — the same single-statement-
-// covers-the-FK-graph property truncateProjections's doc comment already
-// relies on for the unscoped path. A nil/empty sessionIDs is a no-op
-// (nothing to delete, nothing destroyed).
+// scopedDeleteSessions counts and deletes the given sessions' projection rows atomically; cascade handles FK graph.
 func scopedDeleteSessions(ctx context.Context, pool *pgxpool.Pool, sessionIDs []string) (RebuildDestructionReport, error) {
 	if len(sessionIDs) == 0 {
 		return RebuildDestructionReport{}, nil
@@ -416,11 +373,7 @@ func scopedDeleteSessions(ctx context.Context, pool *pgxpool.Pool, sessionIDs []
 	return r, nil
 }
 
-// replayPage folds and upserts one page of events into the four projection
-// tables inside its own transaction — exactly write.go's WriteBatch
-// projection half (see this file's package doc), minus insertIngestDedup/
-// insertEvents (events already exist and are never rebuilt) and
-// markRollupDirty (rollups are not one of the four projection tables).
+// replayPage folds and upserts one event page (WriteBatch's projection half without insert/rollup steps).
 func (s *Store) replayPage(ctx context.Context, events []model.Event) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -428,8 +381,19 @@ func (s *Store) replayPage(ctx context.Context, events []model.Event) error {
 	}
 	defer func() { _ = tx.Rollback(ctx) }() // no-op after a successful Commit
 
-	sessionAggs := foldSessionEvents(events)
-	turnAggs := foldTurnEvents(events)
+	// D-30 (docs/review/phase-4-gauntlet.md): a rebuild must reproduce
+	// exactly what WriteBatch would have produced (this file's package doc:
+	// "the 'rebuild produces identical rows' guarantee"), so it needs the
+	// same conditional price load WriteBatch's own D-30 fix uses
+	// (write.go's loadPricesIfNeeded) — skipping it here would silently
+	// zero out cost_estimated_usd on every rebuild, reintroducing the exact
+	// defect this ticket fixes.
+	prices, err := loadPricesIfNeeded(ctx, tx, events)
+	if err != nil {
+		return err
+	}
+	sessionAggs := foldSessionEvents(events, prices)
+	turnAggs := foldTurnEvents(events, prices)
 
 	if _, err := upsertSessions(ctx, tx, sessionAggs); err != nil {
 		return err
@@ -458,13 +422,7 @@ func (s *Store) replayPage(ctx context.Context, events []model.Event) error {
 	return nil
 }
 
-// RebuildProjections implements store.Maintenance (SPEC §1.6, §2.4, §3.8,
-// P3-10). It is the safe, force=false entry point: a --from-ts predating the
-// oldest surviving events partition is refused rather than silently
-// producing an incomplete rebuild (M12). See RebuildProjectionsForce for the
-// operator-facing variant with the --force escape hatch and the
-// RebuildDestructionReport preview, and this file's package doc for the
-// session-scoping/advisory-lock design both share.
+// RebuildProjections implements store.Maintenance (SPEC §1.6, §2.4, §3.8, P3-10); safe entry point refusing dangerous fromTS (M12).
 func (s *Store) RebuildProjections(ctx context.Context, fromTS time.Time) error {
 	_, err := s.RebuildProjectionsForce(ctx, fromTS, false)
 	return err

@@ -1,9 +1,4 @@
-// read_events_test.go is a black-box (package postgres_test) integration
-// suite for ListEvents/GetEvent (P3-03), following read_sessions_test.go's
-// convention (external test package; seeding helpers insert directly via
-// SQL for precise control over ts/vendor_seq/seq/attrs that the write path
-// would be awkward to steer). Reuses newStore/ensureRange/nextTestSessionID
-// from write_test.go/read_sessions_test.go rather than redefining them.
+// read_events_test.go is a black-box integration suite for ListEvents/GetEvent (P3-03); see read_sessions_test.go for conventions.
 package postgres_test
 
 import (
@@ -134,8 +129,6 @@ func seedFullEvent(t *testing.T, pool *pgxpool.Pool, seed eventSeed) {
 	require.NoError(t, err)
 }
 
-// --- ordering ACs ---------------------------------------------------------
-
 func TestListEvents_IdenticalTS_OrdersByVendorSeqNotSeq(t *testing.T) {
 	st, pool := newStore(t)
 	sessionID := nextTestSessionID("tie")
@@ -197,8 +190,6 @@ func TestListEvents_OrderDescIsExactReverseOfAsc(t *testing.T) {
 	}
 }
 
-// --- fields=slim|full ------------------------------------------------------
-
 func TestListEvents_FieldsSlimOmitsAttrs_MeasurablySmaller(t *testing.T) {
 	st, pool := newStore(t)
 	sessionID := nextTestSessionID("fields")
@@ -229,8 +220,6 @@ func TestListEvents_FieldsSlimOmitsAttrs_MeasurablySmaller(t *testing.T) {
 	require.NoError(t, err)
 	require.Greaterf(t, len(fullJSON), len(slimJSON), "full JSON (%d bytes) must be measurably larger than slim (%d bytes)", len(fullJSON), len(slimJSON))
 }
-
-// --- cross-partition keyset pagination -------------------------------------
 
 func TestListEvents_KeysetAcrossPartitionBoundary_EveryRowExactlyOnce(t *testing.T) {
 	st, pool := newStore(t)
@@ -280,8 +269,6 @@ func TestListEvents_KeysetAcrossPartitionBoundary_EveryRowExactlyOnce(t *testing
 	}
 }
 
-// --- GetEvent ---------------------------------------------------------------
-
 func TestGetEvent_NotFound(t *testing.T) {
 	st, _ := newStore(t)
 	_, err := st.GetEvent(context.Background(), model.EventRef{TS: time.Now().UTC(), Seq: 999999})
@@ -310,12 +297,7 @@ func TestGetEvent_ReturnsRowWithAttrs(t *testing.T) {
 	require.Equal(t, "reject", got.Attrs["tool_decision.decision"])
 }
 
-// TestGetEvent_IndexScanOnSinglePartition verifies SPEC §2.5's AC: GetEvent's
-// (ts, seq) PK lookup shows an Index Scan touching exactly one partition
-// (review M2: there is no events.id index, so a uuid lookup would have been
-// a full scan of every partition). Asserted on EXPLAIN plan text per the
-// ticket note (P3-02's equivalent AC used pg_stat_user_indexes deltas
-// instead, but this AC explicitly names EXPLAIN and "one partition").
+// TestGetEvent_IndexScanOnSinglePartition verifies SPEC §2.5: an Index Scan on exactly one partition (not a full scan, since there is no events.id index).
 func TestGetEvent_IndexScanOnSinglePartition(t *testing.T) {
 	st, pool := newStore(t)
 	sessionID := nextTestSessionID("explain-getevent")
@@ -372,12 +354,7 @@ func TestGetEvent_IndexScanOnSinglePartition(t *testing.T) {
 	}
 }
 
-// TestListEvents_SessionTimeline_IndexScanWithPartitionPruning verifies SPEC
-// §2.5's AC for the session timeline: an index scan on
-// `events_*(session_id, ts, seq)` with partition pruning. Built from the
-// exact filter/page ListEvents itself uses (store.EventFilter.SessionID),
-// EXPLAINed directly rather than through the store method, since Store
-// exposes no EXPLAIN hook.
+// TestListEvents_SessionTimeline_IndexScanWithPartitionPruning verifies SPEC §2.5: an index scan on (session_id, ts, seq) with partition pruning.
 func TestListEvents_SessionTimeline_IndexScanWithPartitionPruning(t *testing.T) {
 	st, pool := newStore(t)
 	sessionID := nextTestSessionID("explain-timeline")
@@ -429,8 +406,6 @@ func TestListEvents_SessionTimeline_IndexScanWithPartitionPruning(t *testing.T) 
 	expectedIndex := fmt.Sprintf("events_%04d_%02d_session_ts_seq_idx", month.Year(), month.Month())
 	require.Contains(t, plan, expectedIndex, "the session timeline must ride the (session_id, ts, seq) index")
 }
-
-// --- cursor codec (verified through the exported API only) ----------------
 
 func TestListEvents_CursorRejectsWrongOrder(t *testing.T) {
 	st, pool := newStore(t)
@@ -503,8 +478,6 @@ func TestListEvents_KeysetPagination_DescOrder_ZeroDuplicatesZeroOmissions(t *te
 	}
 }
 
-// --- filter fields ----------------------------------------------------------
-
 func TestListEvents_EveryFilterField(t *testing.T) {
 	st, pool := newStore(t)
 	sessionID := nextTestSessionID("filters")
@@ -561,8 +534,6 @@ func TestListEvents_FromToBoundsTS(t *testing.T) {
 	require.Equal(t, int64(13002), got[0].Seq)
 }
 
-// --- GetEvent nullable-field round-trip -------------------------------------
-
 func TestGetEvent_NullableNumericAndBooleanFields(t *testing.T) {
 	st, pool := newStore(t)
 	sessionID := nextTestSessionID("getevent-numeric")
@@ -597,4 +568,144 @@ func TestGetEvent_NullableNumericAndBooleanFields(t *testing.T) {
 	require.Nil(t, got2.InputTokens)
 	require.Nil(t, got2.CostUSD)
 	require.Nil(t, got2.Success)
+}
+
+// TestEventsSince_StrictTSSeqOrdering_NoDupesNoGaps is the case a naive
+// `ts > $x` predicate gets wrong: two rows share the same ts and differ only
+// in seq. EventsSince(after=(ts, lower seq)) must return the row with the
+// same ts and the higher seq, and must not return the row `after` itself
+// names (SPEC §5.2's exact row-comparison predicate, not a ts-only bound).
+func TestEventsSince_StrictTSSeqOrdering_NoDupesNoGaps(t *testing.T) {
+	st, pool := newStore(t)
+	sessionID := nextTestSessionID("since-tsseq")
+	seedSession(t, pool, sessionSeed{ID: sessionID})
+	ts := time.Now().UTC().Truncate(time.Millisecond)
+	ensureRange(t, st, ts, ts)
+
+	seedFullEvent(t, pool, eventSeed{Seq: 20001, SessionID: sessionID, TS: ts, Kind: "tool.pre"})
+	seedFullEvent(t, pool, eventSeed{Seq: 20002, SessionID: sessionID, TS: ts, Kind: "tool.post"})
+
+	got, err := st.EventsSince(context.Background(), model.EventRef{TS: ts, Seq: 20001}, ts, 10)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Equal(t, int64(20002), got[0].Seq, "same-ts row with the higher seq must be returned")
+}
+
+// TestEventsSince_WindowStartExcludesOlderEvents proves windowStart is a
+// real second bound, not redundant with the (ts, seq) > (after.ts, after.seq)
+// predicate: an event strictly newer than `after` but strictly older than
+// windowStart must still be excluded (SPEC §5.2's windowStart =
+// max(ts, now - ARGUS_STREAM_REPLAY_WINDOW) is what keeps a stale
+// Last-Event-ID from replaying more than the configured window).
+func TestEventsSince_WindowStartExcludesOlderEvents(t *testing.T) {
+	st, pool := newStore(t)
+	sessionID := nextTestSessionID("since-window")
+	seedSession(t, pool, sessionSeed{ID: sessionID})
+	base := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	ensureRange(t, st, base, base.Add(time.Hour))
+
+	afterTS := base
+	windowStart := base.Add(10 * time.Minute)
+	excludedTS := base.Add(5 * time.Minute)  // > after, but < windowStart
+	includedTS := base.Add(15 * time.Minute) // >= windowStart
+
+	seedFullEvent(t, pool, eventSeed{Seq: 21001, SessionID: sessionID, TS: afterTS, Kind: "tool.pre"})
+	seedFullEvent(t, pool, eventSeed{Seq: 21002, SessionID: sessionID, TS: excludedTS, Kind: "tool.pre"})
+	seedFullEvent(t, pool, eventSeed{Seq: 21003, SessionID: sessionID, TS: includedTS, Kind: "tool.pre"})
+
+	got, err := st.EventsSince(context.Background(), model.EventRef{TS: afterTS, Seq: 21001}, windowStart, 10)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Equal(t, int64(21003), got[0].Seq, "the event between after and windowStart must be excluded by windowStart, not just returned because it is newer than after")
+}
+
+// TestEventsSince_LimitReturnsOldestFirst is the P5-01a AC that replay
+// resumes forward chronologically rather than jumping to the newest rows:
+// with N seeded events past `after` and limit=k<N, exactly the k OLDEST
+// come back, in ascending order.
+func TestEventsSince_LimitReturnsOldestFirst(t *testing.T) {
+	st, pool := newStore(t)
+	sessionID := nextTestSessionID("since-limit")
+	seedSession(t, pool, sessionSeed{ID: sessionID})
+	base := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	ensureRange(t, st, base, base.Add(time.Hour))
+
+	const n = 10
+	seq := int64(22000)
+	seeds := make([]eventSeed, 0, n)
+	for i := 0; i < n; i++ {
+		seeds = append(seeds, eventSeed{Seq: seq + int64(i), SessionID: sessionID, TS: base.Add(time.Duration(i) * time.Second), Kind: "tool.pre"})
+	}
+	seedFullEventsBulk(t, pool, seeds)
+
+	const limit = 3
+	got, err := st.EventsSince(context.Background(), model.EventRef{TS: base, Seq: seq}, base, limit)
+	require.NoError(t, err)
+	require.Len(t, got, limit)
+	for i, e := range got {
+		require.Equal(t, seq+1+int64(i), e.Seq, "must resume forward from just after `after`, oldest-first, not jump to the newest rows")
+	}
+}
+
+// TestEventsSince_EmptyResult_AtOrPastNewest is the P5-01a AC that a
+// caller reconnecting with nothing new to replay gets a non-nil empty slice
+// and a nil error — never an ambiguous nil-slice-nil-error result, and never
+// an error, for the ordinary "you are caught up" case.
+func TestEventsSince_EmptyResult_AtOrPastNewest(t *testing.T) {
+	st, pool := newStore(t)
+	sessionID := nextTestSessionID("since-empty")
+	seedSession(t, pool, sessionSeed{ID: sessionID})
+	ts := time.Now().UTC().Truncate(time.Millisecond)
+	ensureRange(t, st, ts, ts)
+
+	seedFullEvent(t, pool, eventSeed{Seq: 23001, SessionID: sessionID, TS: ts, Kind: "tool.pre"})
+
+	gotAtNewest, err := st.EventsSince(context.Background(), model.EventRef{TS: ts, Seq: 23001}, ts, 10)
+	require.NoError(t, err)
+	require.NotNil(t, gotAtNewest, "must be a non-nil empty slice, not nil")
+	require.Empty(t, gotAtNewest)
+
+	gotPastNewest, err := st.EventsSince(context.Background(), model.EventRef{TS: ts.Add(time.Hour), Seq: 999999}, ts, 10)
+	require.NoError(t, err)
+	require.NotNil(t, gotPastNewest, "must be a non-nil empty slice, not nil")
+	require.Empty(t, gotPastNewest)
+}
+
+// TestEventsSince_SlimShape verifies EventsSince returns the slim shape (no attrs per SPEC §5.1).
+func TestEventsSince_SlimShape(t *testing.T) {
+	st, pool := newStore(t)
+	sessionID := nextTestSessionID("since-slim")
+	seedSession(t, pool, sessionSeed{ID: sessionID})
+	ts := time.Now().UTC().Truncate(time.Millisecond)
+	ensureRange(t, st, ts, ts)
+
+	seedFullEvent(t, pool, eventSeed{
+		Seq: 24001, SessionID: sessionID, TS: ts, Kind: "tool.decision",
+		ToolName: ptrString("Edit"), DecisionSource: ptrString("user_reject"),
+		Attrs: map[string]any{"tool_decision.decision": "reject"},
+	})
+	_, err := pool.Exec(context.Background(), `
+		UPDATE events SET input_tokens = 42, cost_usd = 0.05, success = true
+		WHERE seq = 24001`)
+	require.NoError(t, err)
+
+	got, err := st.EventsSince(context.Background(), model.EventRef{TS: ts.Add(-time.Second), Seq: 0}, ts.Add(-time.Second), 10)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+
+	e := got[0]
+	require.Equal(t, int64(24001), e.Seq)
+	require.Equal(t, sessionID, e.SessionID)
+	require.Equal(t, model.Kind("tool.decision"), e.Kind)
+	require.NotNil(t, e.ToolName)
+	require.Equal(t, "Edit", *e.ToolName)
+	require.NotNil(t, e.DecisionSource)
+	require.Equal(t, "user_reject", *e.DecisionSource)
+	require.NotNil(t, e.InputTokens)
+	require.Equal(t, int64(42), *e.InputTokens)
+	require.NotNil(t, e.CostUSD)
+	require.InDelta(t, 0.05, *e.CostUSD, 0.0000001)
+	require.NotNil(t, e.Success)
+	require.True(t, *e.Success)
+	require.Nil(t, e.Attrs, "EventsSince is the slim shape — attrs must never be populated")
 }

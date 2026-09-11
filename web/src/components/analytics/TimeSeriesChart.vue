@@ -87,19 +87,13 @@ const option = computed<TimeSeriesOption>(() => {
     return { backgroundColor: t.cardBackgroundColor, textStyle: t.textStyle, series: [] }
   }
 
-  // A chart with exactly one series and no `other` bucket (e.g. "Tokens over
-  // time" with no group_by dimension) has nothing for that lone series to be
-  // distinguished FROM — dashing/muting it the way a real "unattributed
-  // amongst named series" gets treated would read as a placeholder instead
-  // of the metric's own data (round-3 UI pass gap: "near-invisible dashed
-  // white token line"). Only the multi-series case still mutes+dashes
-  // "unattributed" so it stays visually subordinate to real, named series.
+  // A chart with exactly one series and no `other` bucket has nothing for that lone series to be
+  // distinguished from — dashing/muting it would read as a placeholder instead of the metric's own
+  // data. Only the multi-series case mutes+dashes "unattributed" so it stays visually subordinate.
   const isSoloSeries = d.series.length === 1 && !d.other
 
-  // A palette index is only ever spent on a real, named series — "unattributed" (`key === ''`)
-  // always renders muted/dashed, the same treatment `other` gets below, so blue (palette index 0)
-  // means the same thing in every chart on this screen: a real, named entity, never "no model"
-  // (round-5 UI pass, gap: "blue means different things in adjacent charts").
+  // A palette index is only ever spent on a real, named series — "unattributed" always renders
+  // muted/dashed (like `other` below), so a given palette color means the same thing in every chart.
   let paletteIndex = 0
   const series: LineSeriesOption[] = d.series.map((point) => {
     const isUnattributed = point.key === '' && !isSoloSeries
@@ -158,10 +152,8 @@ const option = computed<TimeSeriesOption>(() => {
       axisLine: { show: false },
       axisTick: { show: false },
       axisLabel: { color: t.mutedColor, fontSize: 11, formatter: (value: number) => valueFormatter.value(value) },
-      // Lighter/thinner than `t.borderColor`'s own 10% alpha (round-3 UI pass:
-      // the grid must sit visually *below* a solid, weighted series line, not
-      // compete with it) — `withAlpha` replaces rather than stacks the
-      // border token's own baked-in alpha.
+      // Lighter/thinner than `t.borderColor`'s own 10% alpha — the grid must sit visually below a
+      // solid series line, not compete with it; `withAlpha` replaces rather than stacks the baked-in alpha.
       splitLine: { lineStyle: { color: withAlpha(t.borderColor, 6), type: 'dashed', width: 1 } },
     },
     series,

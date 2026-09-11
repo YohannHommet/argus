@@ -1,4 +1,4 @@
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { defineStore } from 'pinia'
 import { useRoute, useRouter } from 'vue-router'
 import type { LocationQuery, LocationQueryRaw } from 'vue-router'
@@ -7,6 +7,7 @@ import { unwrap } from '@/api/client'
 import { useApiClient } from '@/api/context'
 import { ApiError } from '@/api/errors'
 import type { components } from '@/api/schema'
+import { useLiveStore } from '@/stores/live'
 
 export type SessionSummary = components['schemas']['SessionSummary']
 export type SessionStatus = components['schemas']['SessionStatus']
@@ -213,9 +214,8 @@ export const useSessionsStore = defineStore('sessions', () => {
     error.value = null
 
     const client = useApiClient()
-    // Only an explicit 'append' (the "load more" button) ever sends a cursor — a filter/sort change
-    // already cleared nextCursor synchronously in scheduleFetch, well before this call, so a stale
-    // cursor from a previous filter state can never reach the request that follows it.
+    // Only an explicit 'append' ever sends a cursor — a filter/sort change already cleared
+    // nextCursor synchronously in scheduleFetch, so a stale cursor can never reach this call.
     const cursor = mode === 'append' ? nextCursor.value : null
 
     try {
@@ -250,9 +250,8 @@ export const useSessionsStore = defineStore('sessions', () => {
 
   function scheduleFetch(delayMs: number): void {
     clearDebounce()
-    // A filter/sort change invalidates pagination the instant it happens, not when the debounced
-    // fetch eventually fires — sending a cursor minted under the old filters is a 400
-    // (urn:argus:error:invalid-cursor, SPEC §4.1).
+    // A filter/sort change invalidates pagination immediately, not when the debounced fetch fires —
+    // a cursor minted under the old filters would otherwise be sent as a 400 (SPEC §4.1).
     nextCursor.value = null
     hasMore.value = false
     debounceTimer = setTimeout(() => {
@@ -316,6 +315,29 @@ export const useSessionsStore = defineStore('sessions', () => {
     next[index] = session
     sessions.value = next
   }
+
+  /**
+   * SPEC §6.4 / PLAN.md P5-06: "applies live `session` frames to rows already in the list." The
+   * connection itself is `SessionListView.vue`'s responsibility (it calls `useLiveStore().subscribe`
+   * while mounted, per that ticket's own file split) — this store only reacts to whatever lands in
+   * `liveStore.sessions`, which is always safe to watch even when nobody has subscribed to anything
+   * yet (the Map is simply empty, and stays empty).
+   *
+   * Depends on `.values()` (not e.g. `.get(id)` per row), so this reruns once per incoming frame
+   * regardless of how many rows are currently loaded — `applySessionUpdate` itself is what makes that
+   * a no-op for every id besides the one that actually changed, and the AC's own "never inserts a row
+   * outside the loaded page" already lives entirely in that function (see its doc comment).
+   * `Array.from(...)` deliberately materialises a fresh array reference on every dependency change so
+   * `watch`'s default (non-deep) comparison always finds "changed" — comparing two Map instances by
+   * `.values()` reference would never fire otherwise.
+   */
+  const live = useLiveStore()
+  watch(
+    () => Array.from(live.sessions.values()),
+    (frames) => {
+      for (const frame of frames) applySessionUpdate(frame)
+    },
+  )
 
   // Initial load: the very first render already has a filter/sort state (parsed from route.query
   // above), so it fetches immediately rather than waiting for a caller to kick it off.

@@ -10,26 +10,15 @@ import (
 	"time"
 )
 
-// RunCLI implements the flat-flag `sim` subcommand SPEC §7 describes,
-// shared verbatim by cmd/argus-sim/main.go and argusd's `sim` case (SPEC
-// lead note 7: "two binaries, one implementation"). It returns a process
-// exit code, matching argusd's other run* functions' convention
-// (cmd/argusd/main.go) rather than calling os.Exit itself, so both callers
-// can decide how to exit.
+// RunCLI implements the sim subcommand (SPEC §7), returning exit code.
+// Shared by cmd/argus-sim/main.go and argusd (SPEC lead note 7).
 func RunCLI(args []string, stdout, stderr io.Writer) int {
 	code, _ := RunCLIWithReport(args, stdout, stderr)
 	return code
 }
 
-// RunCLIWithReport is RunCLI's superset: same flag parsing, same behaviour,
-// same exit code, but also returns the run's *Report (nil on a usage error
-// that never got as far as constructing a Runner). It exists for callers
-// that need the typed exit-report fields (Report.AllOK, Report.HookEvents,
-// Report.StatusHistogram, …) rather than re-parsing the text RunCLI prints
-// to stdout — P2-13's end-to-end test (internal/app/e2e_ingest_test.go) is
-// exactly such a caller: it drives the real `sim` subcommand end to end
-// (never a hand-assembled subset of it) but needs the report's fields for
-// its own assertions.
+// RunCLIWithReport is RunCLI's superset: same behavior plus returns *Report
+// for callers that need typed fields (P2-13's e2e_ingest_test.go).
 func RunCLIWithReport(args []string, stdout, stderr io.Writer) (code int, report *Report) {
 	fs := flag.NewFlagSet("sim", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -102,7 +91,7 @@ func RunCLIWithReport(args []string, stdout, stderr io.Writer) (code int, report
 	cfg.ApplyModeDefaults(sessionsSet, speedSet, backfillSet)
 
 	if cfg.Mode != ModeDemo && cfg.Mode != ModeLoad {
-		_, _ = fmt.Fprintf(stderr, "argus-sim: unknown --mode %q (want demo or load)\n", *mode) // best-effort write; a failed write to this stream has no recovery action here
+		_, _ = fmt.Fprintf(stderr, "argus-sim: unknown --mode %q (want demo or load)\n", *mode)
 		return 2, nil
 	}
 	if cfg.OTLPProtocol != OTLPProtocolProtobuf && cfg.OTLPProtocol != OTLPProtocolJSON {
@@ -135,11 +124,8 @@ func RunCLIWithReport(args []string, stdout, stderr io.Writer) (code int, report
 		transport = &HTTPTransport{Client: &http.Client{Timeout: 30 * time.Second}, Target: cfg.Target}
 	}
 
-	// --chaos-duplicates/--chaos-out-of-order decorate the Transport itself
-	// (chaos.go) rather than runner.go's send loop: every encoded payload
-	// already passes through Transport.Send* exactly once, so wrapping the
-	// interface here achieves the same "send-loop decorator" doc.go
-	// describes with zero change to runner.go.
+	// Chaos flags decorate Transport (not runner.go's send loop) to avoid
+	// changing runner.go for each new chaos concern (see chaos.go, doc.go).
 	if cfg.ChaosDuplicates || cfg.ChaosOutOfOrder {
 		transport = newChaosTransport(cfg, transport)
 	}
@@ -148,10 +134,8 @@ func RunCLIWithReport(args []string, stdout, stderr io.Writer) (code int, report
 	ctx := context.Background()
 	runErr := runner.Run(ctx)
 	if ct, ok := transport.(*chaosTransport); ok {
-		// Block until every --chaos-out-of-order held send has actually
-		// fired, so the exit report (and any caller polling the target
-		// right after RunCLI returns) reflects the run's true end state
-		// rather than a snapshot with stragglers still in flight.
+		// Wait until all held sends have fired so the exit report
+		// reflects the true end state (not a snapshot with stragglers).
 		ct.Wait()
 	}
 	if runErr != nil {

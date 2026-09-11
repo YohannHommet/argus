@@ -17,17 +17,11 @@ import (
 	"github.com/YohannHommet/argus/server/internal/store/postgres/gen"
 )
 
-// insertIngestDedup runs the SPEC §1.7 rule 2 gate for the given dedup keys
-// inside tx: keys are sorted ascending first (the lock-ordering invariant,
-// SPEC §1.6: "ingest_dedup (by dedup_key)"), then
-// `INSERT ... ON CONFLICT DO NOTHING RETURNING dedup_key` reports exactly
-// the keys not already in the ledger. Duplicate keys within dedupKeys
-// collapse to a single ledger row (Postgres's ON CONFLICT DO NOTHING has no
-// "cannot affect row a second time" restriction, unlike DO UPDATE), which is
-// exactly the semantics WriteBatch wants for a batch containing the same
-// event delivered twice.
-//
-// Returns the set of keys that survived the gate (i.e. are new).
+// insertIngestDedup runs the SPEC §1.7 rule 2 gate for dedup keys inside tx.
+// Keys are sorted ascending first (lock-ordering invariant SPEC §1.6), then
+// inserted with ON CONFLICT DO NOTHING RETURNING to report only new keys.
+// Duplicate keys within dedupKeys collapse to a single row—the semantics
+// WriteBatch needs for duplicate-event batches. Returns the set of new keys.
 func insertIngestDedup(ctx context.Context, tx pgx.Tx, dedupKeys []string) (map[string]bool, error) {
 	if len(dedupKeys) == 0 {
 		return map[string]bool{}, nil

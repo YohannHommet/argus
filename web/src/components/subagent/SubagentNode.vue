@@ -56,11 +56,9 @@ interface Props {
   /** Precomputed max duration (ms) across the whole visible tree, for sizing the duration bar. `null`/0 renders every bar as an indeterminate empty track. */
   maxDurationMs?: number | null
   /**
-   * Whether the tree's duration spread is large enough for a comparative
-   * bar to mean anything (round-5 critic gap: "0-4ms" scale is noise, not
-   * signal — see `SubagentTree`'s `hasMeaningfulDurationSpread`). `false`
-   * hides the bar/track for every node in the tree; the duration *text*
-   * still renders either way — only the visual comparison is withheld.
+   * Whether the tree's duration spread is large enough for a comparative bar to mean anything — see
+   * `SubagentTree`'s `hasMeaningfulDurationSpread`. `false` hides the bar/track for every node; the
+   * duration *text* still renders either way — only the visual comparison is withheld.
    */
   showDurationBar?: boolean
   /** Tooltip text for the (always-null, SPEC §1.9) cost column. Prefer `cost_attribution.note` when the caller has one. */
@@ -121,14 +119,11 @@ const toolBreakdownInlineText = computed(() => {
 const toolBreakdownFullText = computed(() => toolBreakdown.value.map((e) => `${e.name}×${e.count}`).join(', '))
 
 /**
- * Round-6 critic gap ("task label"): SubagentNode schema has no task/name
- * field to promote (SPEC §1.9 has none) — inventing one would violate the
- * project's own honesty rule. What *is* real and derivable without
- * inventing anything: when two-or-more of this node's own children share an
- * `agent_type` (e.g. two "explore" runs), their position among same-typed
- * siblings disambiguates them beyond the agent_type badge they'd otherwise
- * render identically under. A lone child of its type gets no ordinal — it
- * is already unambiguous.
+ * SubagentNode schema has no task/name field to promote (SPEC §1.9 has none) — inventing one would
+ * violate the project's own honesty rule. When two-or-more of this node's own children share an
+ * `agent_type` (e.g. two "explore" runs), their position among same-typed siblings disambiguates
+ * them beyond the agent_type badge they'd otherwise render identically under. A lone child of its
+ * type gets no ordinal — it is already unambiguous.
  */
 const childOrdinalLabel = computed<Record<string, string>>(() => {
   const totals: Record<string, number> = {}
@@ -223,14 +218,11 @@ function onChildSelect(agentId: string): void {
       </Badge>
 
       <!--
-        Sibling subagents of the same agent_type (e.g. two "explore" runs)
-        render as visually identical rows without something to tell them
-        apart — round-3 critic gap: "unnamed rows labeled only by
-        agent_type". There is no subagent *name* in this schema (honesty
-        limit — SPEC §1.9 has none to promote), so `agent_id` is the one
-        real distinguishing value every node already has; showing it
-        (truncated, full value on hover/copy) disambiguates without
-        inventing a name that isn't there.
+        Sibling subagents of the same agent_type (e.g. two "explore" runs) render as visually
+        identical rows without something to tell them apart. There is no subagent *name* in this
+        schema (honesty limit — SPEC §1.9 has none to promote), so `agent_id` is the one real
+        distinguishing value every node already has; showing it (truncated, full value on
+        hover/copy) disambiguates without inventing a name that isn't there.
       -->
       <span
         class="text-muted-foreground flex min-w-0 items-center gap-1 font-mono text-[0.6875rem]"

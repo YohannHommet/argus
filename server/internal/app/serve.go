@@ -16,6 +16,11 @@ import (
 // runs the SPEC §3.8 graceful-shutdown sequence in order:
 //
 //  1. /readyz starts failing (ReadyState flips false).
+//     1a. (P5-03) a.hub.Shutdown(): every live SSE subscriber gets a final
+//     `event: shutdown` and its handler returns. This MUST happen before
+//     step 2, not after — see shutdown's doc comment for why the naive
+//     "shut the HTTP server down first" order deadlocks an SSE connection
+//     for the entire grace period instead.
 //  2. http.Server.Shutdown, bounded by ARGUS_SHUTDOWN_GRACE, so in-flight
 //     requests finish.
 //  3. Close/drain the ingest queue (internal/ingest.Pipeline.Close, SPEC
@@ -57,6 +62,19 @@ func (a *App) Serve(ctx context.Context) error {
 		Reader:    a.store,
 		Analytics: a.store,
 
+		// Stream/Replay wire P5-03's SSE routes (SPEC §5) the exact same
+		// way Reader/Analytics wire P3-07/P3-08's: router.go's
+		// mountStreamRoutes only runs `if d.Stream != nil` (Deps.Stream's own
+		// doc comment), so leaving these two nil here would leave GET
+		// /api/v1/stream and /api/v1/sessions/{id}/stream absent from the
+		// running server while every httpapi-level SSE handler test still
+		// passes — the identical Phase-3 defect Reader/Analytics's comment
+		// above already names, for a different route group.
+		// TestServe_StreamRoutesAreMounted (stream_e2e_test.go) is this
+		// ticket's version of TestServe_ReadAPIRoutesAreMounted.
+		Stream: a.hub,
+		Replay: a.store,
+
 		// HookMounter wires P2-11's POST /ingest/hook onto the mount seam
 		// router.go already exposes; router.go itself is never touched.
 		HookMounter: a.hooks,
@@ -66,17 +84,9 @@ func (a *App) Serve(ctx context.Context) error {
 		OTLPMounter: a.otlp,
 	})
 
-	// The listener is bound synchronously, before Addr()/Listening() has any
-	// meaning to a caller, and before the accept loop's own goroutine
-	// starts — net.Listen is fast and this keeps "Serve has bound its
-	// listener" an unambiguous, race-free signal rather than something a
-	// caller has to poll for. Binding this way (rather than
-	// http.Server.ListenAndServe, which opens its own listener internally
-	// with no way to read back the resolved address) is what lets a caller
-	// pass HTTPAddr="127.0.0.1:0" and discover the OS-assigned port via
-	// Addr() instead of guessing a free one ahead of time and racing this
-	// bind (P2-13's end-to-end test needs exactly that: an ephemeral port,
-	// never a hardcoded one).
+	// Bind synchronously before accept loop: keeps "listener bound" an
+	// unambiguous, race-free signal. Also lets caller pass :0 and discover
+	// OS-assigned port via Addr() instead of guessing (P2-13's e2e test).
 	var lc net.ListenConfig
 	ln, err := lc.Listen(ctx, "tcp", a.cfg.HTTPAddr)
 	if err != nil {
@@ -89,23 +99,10 @@ func (a *App) Serve(ctx context.Context) error {
 	a.server = &http.Server{
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
-		// ReadTimeout/WriteTimeout bound the whole request/response
-		// lifecycle, not just the headers: chi's mw.Timeout (router.go, 30s)
-		// only cancels the request's context, which io.ReadAll(r.Body) in
-		// the hooks/OTLP handlers never observes, so a client that finishes
-		// headers and then trickles its body would otherwise hold the
-		// connection (and a goroutine) open indefinitely — on endpoints
-		// unauthenticated by default (ARGUS_INGEST_TOKEN's empty default).
-		// 30s matches chi's own request-context timeout so neither layer is
-		// the effectively-looser one.
-		//
-		// NOTE for whoever adds the Phase 5 SSE endpoint
-		// (/api/v1/sessions/{id}/stream): a fixed WriteTimeout is
-		// incompatible with a connection that must legitimately stay open
-		// far longer than 30s. Do not raise this global value for that —
-		// use http.ResponseController.SetWriteDeadline (or reset it
-		// per-write) on the SSE handler alone once it exists; every other
-		// handler should keep the bound this comment describes.
+		// ReadTimeout/WriteTimeout bound whole lifecycle: chi's mw.Timeout
+		// only cancels ctx, which io.ReadAll(r.Body) doesn't observe (M11 fix).
+		// SSE endpoints: use http.ResponseController.SetWriteDeadline per-write,
+		// don't raise global 30s for streaming connections.
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 30 * time.Second,
 		IdleTimeout:  60 * time.Second,
@@ -152,6 +149,24 @@ func (a *App) Serve(ctx context.Context) error {
 	// commits or doesn't, never leaving a session half-migrated.
 	go a.sweep.Run(ctx)
 
+	// P5-03: the ingest Publisher seam's real implementation (HubPublisher)
+	// runs its own debounce loop for `session` frames (SPEC §5.3). Same
+	// shutdown story as partitions/rollups/retention/sweep above: it watches
+	// ctx and needs no shutdown() step. Unlike them, an in-flight tick at
+	// shutdown does not even risk losing anything — HubPublisher.Publish
+	// itself never depends on this goroutine (its own doc comment: safe to
+	// call after Run's ctx is done), so stopping it early only means the
+	// last few dirty sessions never get one final `session` frame before the
+	// process exits, not that any `event` frame is lost.
+	go a.publisher.Run(ctx)
+
+	// P5-03: the 2s stats broadcaster (SPEC §5.1) follows the identical
+	// shutdown story: it watches ctx, needs no shutdown() step, and a tick
+	// in flight when ctx is cancelled just stops publishing —
+	// Hub.PublishStats on an already-shut-down hub is a documented no-op
+	// (Hub.PublishStats' own doc comment), never an error.
+	go a.stats.Run(ctx)
+
 	var serveErrOrNil error
 	select {
 	case serveErrOrNil = <-serveErr:
@@ -175,6 +190,38 @@ func (a *App) Serve(ctx context.Context) error {
 // ingest drain times out, so the pool is never leaked.
 func (a *App) shutdown() error {
 	a.ready.SetReady(false) // (1) /readyz starts failing
+
+	// P5-03: the hub is shut down BEFORE http.Server.Shutdown is even
+	// called — not after, and not concurrently with it racing to see which
+	// finishes first. This ordering is load-bearing, not stylistic:
+	//
+	// SPEC §3.8 step (2) says in-flight requests finish AND "SSE subscribers
+	// get a final event: shutdown". But http.Server.Shutdown blocks until
+	// every active handler returns, and an SSE handler's runLiveLoop
+	// (httpapi/sse.go) never returns on its own — it only returns when its
+	// subscription channel closes, which happens on ctx.Done() (the request
+	// context, only cancelled once Shutdown's grace period actually
+	// expires) or when the hub closes it. Calling server.Shutdown FIRST
+	// would therefore block for the entire ARGUS_SHUTDOWN_GRACE with every
+	// SSE connection still open and the shutdown frame never sent — exactly
+	// the failure mode SPEC §3.8 exists to prevent, not a corner case.
+	//
+	// Hub.Shutdown pushes one MessageShutdown to every subscriber and closes
+	// their channels synchronously before it returns (Hub.Shutdown's own
+	// doc comment), so every SSE handler's runLiveLoop wakes up on its next
+	// select iteration, writes its `event: shutdown` frame, and returns —
+	// well within the grace, in practice near-instantly. server.Shutdown
+	// below then only has to wait for ordinary (non-streaming) in-flight
+	// requests, which is what it was always meant to bound.
+	//
+	// A stream request that arrives in the gap between this call and
+	// server.Shutdown returning gets stream.ErrClosed from Subscribe, which
+	// the SSE handler already maps to a 503 (sse.go) — the correct answer
+	// for "the server is going down", not a bug this ordering introduces.
+	// TestE2E_ShutdownDeliversStreamFrame (stream_e2e_test.go) pins both
+	// halves: the client receives the frame, and Serve returns well inside
+	// the grace rather than blocking for the whole budget.
+	a.hub.Shutdown()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), a.cfg.ShutdownGrace)
 	defer cancel()

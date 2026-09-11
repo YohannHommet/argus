@@ -1,9 +1,11 @@
 package ingest
 
-import "github.com/prometheus/client_golang/prometheus"
+import (
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
+)
 
-// metricsNamespace/metricsSubsystem give every ingest metric the
-// "argus_ingest_*" prefix SPEC §3.6's self-metrics list names explicitly.
+// SPEC §3.6: self-metrics prefix ("argus_ingest_*").
 const (
 	metricsNamespace = "argus"
 	metricsSubsystem = "ingest"
@@ -17,75 +19,40 @@ const (
 // directly with prometheus/client_golang/prometheus/testutil rather than
 // scraping HTTP.
 type Metrics struct {
-	// QueueDepth is a per-lane gauge (label "lane": "event"|"metric") of how
-	// many batches are currently buffered, read straight off len(channel) —
-	// cheap enough to update on every enqueue/dequeue without a separate
-	// polling goroutine.
+	// QueueDepth is a per-lane gauge ("event"|"metric") of buffered batches.
 	QueueDepth *prometheus.GaugeVec
 
-	// BatchSize is shared by both lanes: the SPEC diagram's "accumulate
-	// until size or flush" threshold applies identically to events and
-	// metric samples, and a single unlabeled histogram avoids adding a
-	// label whose only two values would otherwise be a lane discriminator
-	// nobody queries by.
+	// BatchSize is shared by both lanes (same threshold, unlabeled).
 	BatchSize prometheus.Histogram
 
-	// Events counts persisted items by source (label "source", values from
-	// the closed model.Source set — never a vendor-supplied string, SPEC
-	// §0). Metric samples are counted under model.SourceOTelMetric since
-	// model.MetricSample carries no Source field of its own.
+	// Events counts persisted items by source (label "source" from model.Source set).
+	// Metric samples use model.SourceOTelMetric (no Source field on MetricSample).
 	Events *prometheus.CounterVec
 
-	// Dropped counts items that never made it to storage — queue-full
-	// shedding, a permanent write error, or a drain-deadline timeout — by
-	// the same "source" label as Events, so "how much of source X's
-	// traffic did we lose" is a single query. This is the metric SPEC §3.4
-	// names as argus_ingest_dropped_total{source="hook"}.
+	// Dropped counts items never reaching storage, by source (SPEC §3.4: argus_ingest_dropped_total).
 	Dropped *prometheus.CounterVec
 
 	// Deduped counts BatchResult.Deduped across every successful write —
 	// the ingest_dedup ledger doing its job, not a failure.
 	Deduped prometheus.Counter
 
-	// TooOld counts BatchResult.TooOld — SPEC §1.7 rule 3's
-	// argus_ingest_too_old_total, distinct from Dropped because "landed
-	// outside retention" and "never reached storage at all" are different
-	// operational conditions worth alerting on differently.
+	// TooOld counts items outside retention (SPEC §1.7 rule 3), distinct from Dropped.
 	TooOld prometheus.Counter
 
-	// WriteDuration times each store.WriteBatch/WriteMetrics call,
-	// successful or not (the timer starts before the retry loop and stops
-	// when it returns), so p99 write latency reflects what a real batch
-	// actually costs including any conflict backoff.
+	// WriteDuration times WriteBatch/WriteMetrics calls including retries.
 	WriteDuration prometheus.Histogram
 
-	// Retries counts each retried attempt by class ("conflict"|"transient")
-	// — incremented once per retry, not once per batch, so it reads as
-	// "how much contention/instability is happening" rather than "how many
-	// batches were affected".
+	// Retries counts retried attempts by class ("conflict"|"transient"), per-retry not per-batch.
 	Retries *prometheus.CounterVec
 
-	// WriteFailed counts batches that were ultimately dropped by the write
-	// path, by class ("conflict"|"transient"|"permanent") — SPEC §3.6 names
-	// argus_ingest_write_failed_total{class="permanent"} explicitly; the
-	// other two classes reuse the same metric for the (rarer) case where a
-	// conflict or transient error survives its whole retry budget.
+	// WriteFailed counts dropped batches by class ("conflict"|"transient"|"permanent"), per SPEC §3.6.
 	WriteFailed *prometheus.CounterVec
 
-	// Lag observes ingested_at-ts (SPEC §3.6) per persisted event/sample,
-	// not per batch: it is a single unlabeled histogram (no per-event
-	// label, so no cardinality concern, SPEC §0), and per-event observation
-	// gives an honest distribution — a per-batch average would hide a
-	// single straggler inside an otherwise-fast batch.
+	// Lag observes ingested_at-ts per-event (SPEC §3.6: per-event gives honest distribution).
 	Lag prometheus.Histogram
 }
 
-// NewMetrics registers the full metric set against reg. A nil reg uses
-// prometheus.DefaultRegisterer (the production default); tests that
-// construct more than one Pipeline in the same process must pass a fresh
-// prometheus.NewRegistry() per instance via WithRegisterer, since the
-// default registry is a package-level global and registering the same
-// metric name on it twice panics.
+// NewMetrics registers the metric set. Tests must pass a fresh registry via WithRegisterer.
 func NewMetrics(reg prometheus.Registerer) *Metrics {
 	if reg == nil {
 		reg = prometheus.DefaultRegisterer
@@ -141,4 +108,38 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		m.WriteDuration, m.Retries, m.WriteFailed, m.Lag,
 	)
 	return m
+}
+
+// EventsTotal sums events across all sources (SPEC §5.1: one fleet-wide rate).
+func (m *Metrics) EventsTotal() float64 { return sumCounterVec(m.Events) }
+
+// DroppedCount sums dropped items across all sources.
+func (m *Metrics) DroppedCount() float64 { return sumCounterVec(m.Dropped) }
+
+// sumCounterVec sums all label combinations. Collect closes synchronously, no reader wait.
+func sumCounterVec(v *prometheus.CounterVec) float64 {
+	ch := make(chan prometheus.Metric, 8)
+	v.Collect(ch)
+	close(ch)
+	var total float64
+	for metric := range ch {
+		var pb dto.Metric
+		_ = metric.Write(&pb)
+		total += pb.GetCounter().GetValue()
+	}
+	return total
+}
+
+// LagObservations reads the histogram's sum/count for mean-lag-over-window calculation.
+func (m *Metrics) LagObservations() (sum float64, count uint64) {
+	ch := make(chan prometheus.Metric, 1)
+	m.Lag.Collect(ch)
+	close(ch)
+	for metric := range ch {
+		var pb dto.Metric
+		_ = metric.Write(&pb)
+		h := pb.GetHistogram()
+		return h.GetSampleSum(), h.GetSampleCount()
+	}
+	return 0, 0
 }

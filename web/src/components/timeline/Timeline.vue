@@ -22,20 +22,12 @@
  *   events**, not the full 43-value `Kind` union — a session realistically
  *   emits a dozen or so kinds, and 43 chips would be an unusable wall (same
  *   reasoning as `DecisionMatrix`'s dynamic columns).
- * - **Grouping is by contiguous run of `prompt_id`** (including `null`,
- *   rendered as an explicit "No turn" header) — NOT a global bucket keyed by
- *   `prompt_id` across the whole session. A global bucket was tried first
- *   and was a real bug: `store.timelineItems` is chronological, but bucketing
- *   by "every item with this prompt_id, wherever it occurs" pulled a
- *   no-turn event that happened *after* a turn started into the leading
- *   no-turn block anyway, so that turn's header rendered below events later
- *   than its own — SPEC's whole point of a turn-grouped timeline is a
- *   readable top-to-bottom chronology, which a global bucket silently broke.
- *   Splitting on contiguous runs instead means groups render in exactly the
- *   input order; the (rare) session whose events for one turn are truly
- *   non-contiguous renders that turn as more than one block instead of
- *   reordering the timeline to hide it — an honest reflection of what
- *   happened, per SPEC's raw-data-first stance.
+ * - **Grouping is by contiguous run of `prompt_id`** (including `null`, rendered as an explicit "No
+ *   turn" header), NOT a global bucket keyed by `prompt_id` across the whole session: `store.timelineItems`
+ *   is chronological, and a global bucket can pull a later no-turn event into an earlier turn's block,
+ *   rendering that turn's header below events later than its own. Splitting on contiguous runs keeps
+ *   groups in input order; a (rare) session whose turn's events are truly non-contiguous renders as
+ *   more than one block instead of being silently reordered — honest per SPEC's raw-data-first stance.
  * - **`correlationFor` is a local proxy, not `ToolCall.correlation`.**
  *   Fetching the tool-calls list to join by `tool_use_id` is P4-06's
  *   endpoint, out of this ticket's scope. Here, an item's decision is
@@ -49,7 +41,7 @@
  *   the guaranteed-reliable, directly-testable trigger — jsdom has no
  *   `IntersectionObserver`, so the button is what the test suite drives.
  */
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { X } from '@lucide/vue'
 
 import { type TimelineItem, collapseEvents } from '@/lib/collapseEvents'
@@ -71,12 +63,9 @@ import TimelineGroup from './TimelineGroup.vue'
 const store = useSessionDetailStore()
 
 /**
- * Round-6 critic gap: an agent filter applied from the Subagents tree
- * (`?tab=timeline&agent_id=…`) had no visible chip and no way to clear it
- * short of editing the URL. Per the module doc above, `agentId` is the one
- * timeline filter this component does not own the source of — so clearing
- * it is an emit, not a direct `store.setTimelineFilters` call, exactly like
- * routing that filter in is SessionDetailView's job via the route watcher.
+ * Clearing the agent filter is an emit, not a direct `store.setTimelineFilters` call: per the module
+ * doc above, `agentId` is the one timeline filter this component doesn't own the source of — routing
+ * it in is `SessionDetailView`'s job via its route watcher, so routing it out is too.
  */
 const emit = defineEmits<{ 'clear-agent-filter': [] }>()
 
@@ -85,25 +74,18 @@ const collapseEnabled = ref(true)
 const items = computed<TimelineItem[]>(() => collapseEvents(store.timelineItems, { collapse: collapseEnabled.value }))
 
 /**
- * The shared duration-bar scale (round-4 critic ask) — computed over the
- * currently loaded/collapsed items, not the whole session's history the
- * server may hold: the bar is meant to make *this view* scannable, and a
- * scale drawn from pages not yet loaded would silently shrink as more pages
- * arrive, which is worse than a scale that's honest about what's on screen.
+ * The shared duration-bar scale — computed over the currently loaded/collapsed items, not the whole
+ * session's history the server may hold: a scale drawn from pages not yet loaded would silently
+ * shrink as more pages arrive, which is worse than a scale that's honest about what's on screen.
  */
 const maxDurationMs = computed(() => maxDuration(items.value))
 
 /**
- * The offset column's origin: the first event in the *currently loaded*
- * timeline, not `session.started_at` (round-5 critic gap — that anchor
- * produced multi-day offsets whenever a session's recorded start drifted
- * from its earliest event, e.g. a real capture with `started_at` ~11 days
- * after its own earliest events; every row read "+11d 0Xh ..." and the
- * offset column stopped being useful). `store.timelineItems` is
- * chronological (see module doc above), so the first collapsed item is
- * always the earliest one on screen — stable across `loadMoreTimeline`
- * (appends later items, never earlier ones) and naturally re-derived to a
- * new origin whenever a filter change resets the loaded set.
+ * The offset column's origin: the first event in the *currently loaded* timeline, not
+ * `session.started_at` — that anchor can drift multi-day from a session's earliest event, producing
+ * useless "+11d ..." offsets. `store.timelineItems` is chronological (module doc above), so the first
+ * collapsed item is always earliest on screen — stable across `loadMoreTimeline` and re-derived on a
+ * filter reset.
  */
 const originTs = computed<string | null>(() => items.value[0]?.ts ?? null)
 
@@ -117,12 +99,10 @@ interface Group {
 }
 
 /**
- * Contiguous runs of the same `prompt_id` — see the module doc for why this
- * is a run split, not a global bucket keyed by prompt_id. A second (or
- * later) run of the same non-null `prompt_id` is flagged `isContinuation`
- * so `TimelineGroup` can label it "Turn N · continued" instead of a bare
- * repeated "Turn N" header, which unlabelled reads as a bug (round-3
- * critic gap: "'Turn 0' appearing twice ... reads as broken").
+ * Contiguous runs of the same `prompt_id` — see the module doc for why this is a run split, not a
+ * global bucket keyed by prompt_id. A later run of the same non-null `prompt_id` is flagged
+ * `isContinuation` so `TimelineGroup` can label it "Turn N · continued" instead of an unlabelled
+ * repeated "Turn N" header, which would read as a bug.
  */
 const groups = computed<Group[]>(() => {
   const result: Group[] = []
@@ -182,9 +162,8 @@ function isKindActive(kind: Kind): boolean {
 }
 
 function toggleKind(kind: Kind) {
-  // An empty filter means "all" (server semantics — see store.loadTimeline).
-  // Clicking an inactive chip while "all" is selected narrows to just that
-  // kind rather than toggling it into a one-item exclusion list.
+  // An empty filter means "all" (server semantics) — clicking an inactive chip while "all" is
+  // selected narrows to just that kind rather than toggling it into a one-item exclusion list.
   const active = store.kinds.length === 0 ? new Set<Kind>() : new Set(store.kinds)
   if (active.has(kind)) {
     active.delete(kind)
@@ -251,6 +230,42 @@ watch(sentinelRef, (el, prev) => {
   if (prev) observer?.disconnect()
   if (el) setupObserver()
 })
+
+// --- scroll anchoring (PLAN.md P5-06 AC) -----------------------------------
+
+const scrollContainerRef = ref<HTMLElement | null>(null)
+
+/** Slack for "already at the bottom" (px) — real scroll positions rarely land on exactly 0. */
+const SCROLL_BOTTOM_THRESHOLD_PX = 4
+
+/**
+ * A live event append (or an out-of-order insert landing above the fold) must not yank whatever the
+ * user is currently reading. If they're already at the bottom, new rows extending the scrollable area
+ * below the fold is exactly what "following along live" means — nothing to compensate for. If they've
+ * scrolled up (reading history, or `order: 'desc'`'s newest-first insert landing near the top), the
+ * DOM growing *above or within* the visible area would otherwise shift already-read content out from
+ * under the viewport at the same pixel `scrollTop`, which reads as the page jumping. Compensating
+ * `scrollTop` by exactly however much `scrollHeight` grew keeps the same content under the same
+ * pixels — the standard reverse-infinite-scroll technique (chat logs, log tails).
+ *
+ * Captures `oldScrollHeight` synchronously, before `nextTick` — `watch`'s default `flush: 'pre'`
+ * timing runs this callback *before* Vue patches the DOM, so `el.scrollHeight` here is still the
+ * pre-insert layout; awaiting `nextTick()` is what advances to the post-patch one.
+ */
+watch(
+  () => items.value.length,
+  async (newLength, oldLength) => {
+    const el = scrollContainerRef.value
+    if (!el || newLength <= oldLength) return
+    const wasAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= SCROLL_BOTTOM_THRESHOLD_PX
+    if (wasAtBottom) return
+
+    const oldScrollHeight = el.scrollHeight
+    await nextTick()
+    const delta = el.scrollHeight - oldScrollHeight
+    if (delta > 0) el.scrollTop += delta
+  },
+)
 
 /**
  * `agentId` is the one timeline filter this component does not itself own:
@@ -322,10 +337,8 @@ watch(
       </Badge>
 
       <!--
-        Labels the per-row duration bar's scale (round-4 critic ask: "label
-        the scale") — only rendered once something has a measured duration
-        to scale against, so a session with none doesn't show a legend for a
-        feature that isn't drawing anything.
+        Labels the per-row duration bar's scale — only rendered once something has a measured
+        duration to scale against, so a session with none shows no legend for nothing drawn.
       -->
       <span
         v-if="maxDurationMs > 0"
@@ -380,6 +393,8 @@ watch(
 
       <div
         v-else
+        ref="scrollContainerRef"
+        data-testid="timeline-scroll-container"
         class="min-w-0 flex-1 overflow-auto"
       >
         <TimelineGroup

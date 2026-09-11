@@ -30,11 +30,8 @@ import (
 	"github.com/YohannHommet/argus/server/internal/model"
 )
 
-// fixedNow freezes the clock every test uses, mirroring
-// internal/ingest/normalize's own test convention (otel_logs_test.go), so
-// IngestedAt/clamp behaviour is deterministic and the two-wire-format
-// "byte-identical events" comparison (TestHandleLogs_ProtobufAndJSONAgree)
-// never flakes on a timestamp.
+// fixedNow freezes the clock for deterministic tests, matching normalize's
+// convention so "byte-identical events" comparisons never flake on timestamp.
 var fixedNow = time.Date(2026, 8, 12, 10, 0, 0, 0, time.UTC)
 
 const testRetention = 90 * 24 * time.Hour
@@ -44,10 +41,8 @@ func newTestNormalizer() *normalize.Normalizer {
 	return normalize.NewNormalizer(func() time.Time { return fixedNow }, testRetention)
 }
 
-// fakeEnqueuer is the Enqueuer test double every handler test constructs a
-// Handler with: it records every batch handed to it (so an AC like "2
-// events enqueued" is assertable) and, when err is set, fails exactly like
-// ingest.Pipeline does on backpressure (ingest.ErrQueueFull).
+// fakeEnqueuer is the Enqueuer test double: records every batch and, when err
+// is set, fails like ingest.Pipeline on backpressure (ingest.ErrQueueFull).
 type fakeEnqueuer struct {
 	mu      sync.Mutex
 	events  []model.Event
@@ -81,10 +76,8 @@ func (f *fakeEnqueuer) eventCount() int {
 	return len(f.events)
 }
 
-// newTestHandler builds a Handler wired to a fresh fakeEnqueuer and a fresh
-// prometheus.NewRegistry() (never the process-global DefaultRegisterer, per
-// lead note 5 — otherwise two Handlers in this one test binary would panic
-// on a duplicate "argus_otlp_traces_discarded_total" registration).
+// newTestHandler builds a Handler with a fresh fakeEnqueuer and registry
+// (never the process-global DefaultRegisterer, to avoid duplicate registration panics).
 func newTestHandler(t *testing.T, auth func(http.Handler) http.Handler) (*Handler, *fakeEnqueuer) {
 	t.Helper()
 	fe := &fakeEnqueuer{}
@@ -92,21 +85,9 @@ func newTestHandler(t *testing.T, auth func(http.Handler) http.Handler) (*Handle
 	return h, fe
 }
 
-// newTestServer mounts h on a fresh chi.Router and serves it over
-// httptest.NewServer (a random port, never :8080 — the host's port 8080 is
-// occupied by an unrelated stack per this ticket's environment notes).
-//
-// This is the ticket's "end-to-end-ish test through httpapi.New" (lead note
-// 6), adapted to what this package may actually import: depguard (SPEC
-// §3.1, internal/ingest/**) forbids internal/ingest/otlp — including this
-// _test.go file, which is not exempt from the glob — from importing
-// internal/httpapi at all, so a literal httpapi.New(...) call cannot live
-// here. Routing through chi.Router + h.Mount, exactly as internal/app will
-// do when it wires httpapi.Deps.OTLPMounter, exercises the identical mount
-// seam, auth middleware, and HTTP round trip; only the surrounding
-// ops/API/UI routes httpapi.New also attaches are absent. A true
-// httpapi.New-based integration belongs in internal/app (which may import
-// both httpapi and this package) — outside this ticket's file ownership.
+// newTestServer mounts h on a chi.Router and serves it via httptest.NewServer.
+// Depguard forbids importing internal/httpapi here, so we route through chi+Mount
+// (same seam as internal/app's OTLPMounter) for the integration test.
 func newTestServer(t *testing.T, h *Handler) *httptest.Server {
 	t.Helper()
 	r := chi.NewRouter()
@@ -116,18 +97,15 @@ func newTestServer(t *testing.T, h *Handler) *httptest.Server {
 	return srv
 }
 
-// --- fixture builders ---------------------------------------------------
+// Fixture builders
 
 func strAttr(key, value string) *commonpb.KeyValue {
 	return &commonpb.KeyValue{Key: key, Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: value}}}
 }
 
 // mkLogsData builds one LogsData with a single ResourceLogs/ScopeLogs
-// containing recs, wire-shape-identical to what a real
-// ExportLogsServiceRequest carries (both messages define the same field 1,
-// resource_logs/resourceLogs) — see codec.go's decodeExportRequest doc for
-// why this equivalence is exploited throughout this file instead of a
-// collector-package type.
+// containing recs, wire-shape-identical to ExportLogsServiceRequest
+// (both define field 1, resource_logs/resourceLogs).
 func mkLogsData(recs ...*logspb.LogRecord) *logspb.LogsData {
 	return &logspb.LogsData{
 		ResourceLogs: []*logspb.ResourceLogs{{
@@ -145,10 +123,8 @@ func mkLogRecord(eventName, sessionID string, extra ...*commonpb.KeyValue) *logs
 	}
 }
 
-// httpResult is doRequest's return shape: the response fully drained and
-// closed before doRequest returns, so no caller ever needs to (and
-// bodyclose has nothing to flag) — a cleaner fit for these tests than
-// handing back a live *http.Response none of them stream from.
+// httpResult is doRequest's return shape: response drained and closed,
+// avoiding bodyclose flags and live *http.Response handling.
 type httpResult struct {
 	status int
 	header http.Header
@@ -173,9 +149,7 @@ func doRequest(t *testing.T, srv *httptest.Server, path, contentType string, bod
 }
 
 // decodeStatus reverse-engineers the google.rpc.Status-shaped body
-// writeStatus produces (statusMessage/statusJSON), for assertions — see
-// codec.go's writeStatus doc for why there is no generated Go type to
-// unmarshal into instead.
+// that writeStatus produces, for assertions.
 func decodeStatus(t *testing.T, format string, body []byte) (code int32, message string) {
 	t.Helper()
 	if format == contentTypeJSON {
@@ -207,14 +181,10 @@ func decodeStatus(t *testing.T, format string, body []byte) (code int32, message
 	return code, message
 }
 
-// --- AC: byte-identical normalized events across wire formats -----------
+// AC: byte-identical normalized events across wire formats
 
-// TestHandleLogs_ProtobufAndJSONAgree covers the AC "a protobuf
-// ExportLogsServiceRequest and the equivalent JSON body produce
-// byte-identical normalized events": the same in-memory LogsData is
-// marshalled two ways and posted to two independently-constructed Handlers
-// (same frozen clock), and the events each one handed to its Enqueuer must
-// be equal.
+// TestHandleLogs_ProtobufAndJSONAgree: same LogsData marshalled two ways
+// to two Handlers (same frozen clock) produces equal enqueued events.
 func TestHandleLogs_ProtobufAndJSONAgree(t *testing.T) {
 	t.Parallel()
 
@@ -241,10 +211,8 @@ func TestHandleLogs_ProtobufAndJSONAgree(t *testing.T) {
 	require.Equal(t, "session-abc", feProto.events[0].SessionID)
 }
 
-// TestHandleLogs_ResponseUnmarshalsAsExportLogsServiceResponse covers the AC
-// "the response unmarshals as ExportLogsServiceResponse": full success ->
-// zero-length protobuf body (a fully-default/empty message, per protobuf's
-// own encoding rules) and "{}" JSON with no partial_success key.
+// TestHandleLogs_ResponseUnmarshalsAsExportLogsServiceResponse: full success
+// produces zero-length protobuf (fully-default message) and "{}" JSON.
 func TestHandleLogs_ResponseUnmarshalsAsExportLogsServiceResponse(t *testing.T) {
 	t.Parallel()
 

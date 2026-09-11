@@ -164,10 +164,8 @@ export const useToolsStore = defineStore('tools', () => {
     error.value = null
 
     const client = useApiClient()
-    // Only 'append' (the "load more" button) ever sends a cursor — a filter change already cleared
-    // nextCursor synchronously in setFilters, before this call, so a stale cursor from a previous
-    // filter state can never reach the request that follows it (SPEC §4.1: a mismatched cursor 400s
-    // as urn:argus:error:invalid-cursor).
+    // Only 'append' ever sends a cursor — a filter change already cleared nextCursor synchronously in
+    // setFilters, so a stale cursor can never reach this call (a mismatch 400s per SPEC §4.1).
     const cursor = mode === 'append' ? nextCursor.value : null
 
     try {
@@ -230,9 +228,8 @@ export const useToolsStore = defineStore('tools', () => {
     return fetchToolCalls('replace')
   }
 
-  // Initial load: the very first render already has a filter state (parsed from route.query above,
-  // which is how the DecisionMatrix deep link — exit criterion 5 — arrives already filtered), so it
-  // fetches immediately rather than waiting for a caller to kick it off.
+  // Initial load: the very first render already has a filter state (parsed from route.query, how the
+  // DecisionMatrix deep link arrives already filtered), so it fetches immediately.
   void fetchToolCalls('replace')
 
   return {

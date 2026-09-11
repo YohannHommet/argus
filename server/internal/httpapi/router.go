@@ -15,15 +15,13 @@ import (
 	"github.com/YohannHommet/argus/server/internal/model"
 	"github.com/YohannHommet/argus/server/internal/query"
 	"github.com/YohannHommet/argus/server/internal/store"
+	"github.com/YohannHommet/argus/server/internal/stream"
 )
 
-// requestTimeout bounds how long a single request may run before chi's
-// Timeout middleware cancels its context. SPEC §3.7 has no dedicated config
-// key for this yet, so it is a constant until one is added.
+// requestTimeout bounds single request duration. See middleware.go for why StreamAwareTimeout is used instead of plain chi.Timeout.
 const requestTimeout = 30 * time.Second
 
-// accessLogSampleRate mirrors SPEC §3.8's ingest-log sampling rule, applied
-// to the general access log.
+// accessLogSampleRate mirrors SPEC §3.8's ingest-log sampling rule.
 const accessLogSampleRate = 100
 
 // HealthChecker is the minimal capability httpapi needs from the storage
@@ -34,39 +32,20 @@ type HealthChecker interface {
 	Health(ctx context.Context) error
 }
 
-// MigrationsChecker is the second narrow, consumer-owned port GET /readyz
-// needs (SPEC §3.8's "migrations current" condition, closing Phase-1
-// deviation D-5): postgres.Store.MigrationsCurrent satisfies it
-// structurally, so httpapi never imports internal/store/postgres just to
-// name this method. A nil MigrationsChecker (the P1-05 default, and any
-// test that doesn't care) makes readyzHandler report "current" without a
-// live check — the same nil-safe convention HealthChecker already
-// establishes.
+// MigrationsChecker is the narrow port for GET /readyz's migrations check (SPEC §3.8).
+// Nil-safe: skips the live check (same convention as HealthChecker).
 type MigrationsChecker interface {
 	MigrationsCurrent(ctx context.Context) (bool, error)
 }
 
-// QueueSaturationChecker is the third narrow port GET /readyz needs (SPEC
-// §3.8's "queue not saturated" condition): internal/ingest.Pipeline
-// satisfies it structurally via QueueSaturated(). httpapi cannot import
-// internal/ingest directly (depguard: ingest must never import httpapi, and
-// keeping the dependency one-directional through a structurally-satisfied
-// port avoids even a docs-only coupling) — internal/app wires the concrete
-// *ingest.Pipeline into this interface field. A nil checker (P1-05's
-// default, before any pipeline exists) never fails readiness on this
-// ground.
+// QueueSaturationChecker is the narrow port for GET /readyz's queue check (SPEC §3.8).
+// Nil-safe: never fails readiness if absent.
 type QueueSaturationChecker interface {
 	QueueSaturated() bool
 }
 
-// Reader is the narrow read-store port GET /api/v1/sessions, /events, and
-// /tool-calls need (SPEC §3.1's httpapi -> query -> store direction):
-// internal/store.Store satisfies it structurally, but httpapi depends only
-// on the Reader methods P3-07 actually calls — not the analytics/facets/
-// quality methods P3-08 owns, which that ticket will likely add to a
-// sibling interface rather than widening this one. A nil Reader (P1-05's
-// default, and any test that doesn't care) mounts none of these routes,
-// the same nil-safe convention Mounter already establishes.
+// Reader is the narrow read-store port for P3-07's read API (sessions/events/tool-calls).
+// Nil-safe: mounts none of these routes if absent.
 type Reader interface {
 	ListSessions(ctx context.Context, f store.SessionFilter, p store.Page) ([]model.SessionSummary, store.Cursor, error)
 	GetSession(ctx context.Context, id string) (*model.SessionDetail, error)
@@ -77,26 +56,24 @@ type Reader interface {
 	SubagentTree(ctx context.Context, sessionID string) (model.SubagentTree, error)
 }
 
-// AnalyticsReader is the narrow read-store port GET /api/v1/analytics/*,
-// /facets, and /quality/* need (SPEC §3.1's httpapi -> query -> store
-// direction) — the "sibling interface" Reader's own doc comment anticipates
-// P3-08 adding rather than widening Reader itself: internal/store.Store
-// satisfies it structurally, but httpapi depends only on the methods
-// analytics.go/facets.go/quality.go/meta.go actually call. A nil
-// AnalyticsReader (P1-05/P3-07's default, and any test that doesn't care)
-// mounts none of these routes and leaves GET /api/v1/meta's P3-08 fields at
-// their zero values, the same nil-safe convention Reader already
-// establishes.
+// AnalyticsReader is the narrow read-store port for P3-08's analytics API.
+// Nil-safe: mounts none of these routes if absent.
 type AnalyticsReader interface {
 	query.AnalyticsReader
 	query.QualityReader
 }
 
-// Mounter lets a not-yet-built package attach its own routes to the router
-// without router.go ever being edited again. P2-10 (OTLP receivers under
-// /v1/*) and P2-11 (the hooks webhook under /ingest/hook) each implement
-// one. A nil Mounter in Deps defaults to a no-op so P1-05 compiles and
-// serves correctly with nothing mounted yet.
+// Streamer is the narrow hub port for P5-02's stream endpoints (SPEC §5.3).
+type Streamer interface {
+	Subscribe(topic stream.Topic, filter stream.Filter) (*stream.Subscription, error)
+}
+
+// Replayer is the narrow store port for SSE reconnect replay (SPEC §5.2, P5-02).
+type Replayer interface {
+	EventsSince(ctx context.Context, after model.EventRef, windowStart time.Time, limit int) ([]model.Event, error)
+}
+
+// Mounter lets packages attach their own routes without editing router.go.
 type Mounter interface {
 	Mount(r chi.Router)
 }
@@ -112,23 +89,21 @@ type Deps struct {
 	Logger *slog.Logger   // nil disables the access log
 	Ready  *ReadyState    // nil is treated as always-ready
 
-	// Migrations and Queue back GET /readyz's other two SPEC §3.8
-	// conditions. Both nil-safe (see their interface docs): P1-05's
-	// existing tests and any future test that only cares about the DB
-	// check keep working unchanged.
+	// Migrations and Queue back GET /readyz's other two SPEC §3.8 conditions (nil-safe).
 	Migrations MigrationsChecker
 	Queue      QueueSaturationChecker
 
-	// Reader backs the P3-07 read API (/sessions, /events, /tool-calls and
-	// their sub-resources). nil mounts none of those routes — see Reader's
-	// own doc comment.
+	// Reader backs the P3-07 read API (nil-safe).
 	Reader Reader
 
-	// Analytics backs the P3-08 read API (/analytics/*, /facets,
-	// /quality/*) and extends GET /meta. nil mounts none of those routes
-	// and leaves /meta's P3-08 fields at their zero values — see
-	// AnalyticsReader's own doc comment.
+	// Analytics backs the P3-08 read API (nil-safe).
 	Analytics AnalyticsReader
+
+	// Stream backs GET /api/v1/stream and /api/v1/sessions/{id}/stream (SPEC §5, P5-02; nil-safe).
+	Stream Streamer
+
+	// Replay backs SSE reconnect (SPEC §5.2, P5-02). Nil-safe: mounts SSE routes but answers with `event: reset`.
+	Replay Replayer
 
 	OTLPMounter Mounter // future P2-10 (POST /v1/logs, /v1/metrics, /v1/traces); nil = no-op
 	HookMounter Mounter // future P2-11 (POST /ingest/hook); nil = no-op
@@ -136,9 +111,7 @@ type Deps struct {
 	Assets fs.FS // nil uses the embedded web/dist build (assets.go)
 }
 
-// New builds the full Argus HTTP router: the middleware chain, ops
-// endpoints, the versioned read API, the ingest mount seams, and (if
-// ARGUS_UI_ENABLED) the embedded SPA.
+// New builds the Argus HTTP router with middleware, ops endpoints, read API, and (optionally) the embedded SPA.
 func New(d Deps) http.Handler {
 	if d.OTLPMounter == nil {
 		d.OTLPMounter = noopMounter{}
@@ -154,7 +127,7 @@ func New(d Deps) http.Handler {
 	r.Use(chimw.RequestID)
 	r.Use(chimw.Recoverer)
 	r.Use(chimw.RealIP) //nolint:staticcheck // deprecated (IP spoofing risk) with no chi-provided trusted-proxy replacement yet; acceptable for the Phase 1 single-host walking skeleton, revisit before exposing Argus behind an untrusted load balancer
-	r.Use(chimw.Timeout(requestTimeout))
+	r.Use(StreamAwareTimeout(requestTimeout))
 	if d.Logger != nil {
 		r.Use(AccessLog(d.Logger, accessLogSampleRate))
 	}
@@ -162,14 +135,7 @@ func New(d Deps) http.Handler {
 		r.Use(CORS(d.Config.CORSOrigins))
 	}
 
-	// m18 audit finding: the problem+json NotFound/MethodNotAllowed
-	// handlers used to be installed only on the /api and /api/v1
-	// subrouters below, so a wrong-method request against a root-mounted
-	// route (the OTLP receivers' /v1/logs|metrics|traces, the hooks
-	// webhook's /ingest/hook) got chi's bodyless default 405 instead of
-	// the problem+json body openapi.yaml declares for all four. Root
-	// MethodNotAllowed is installed once, here, before either ingest mount
-	// seam registers its own routes.
+	// Root MethodNotAllowed installed here ensures problem+json response (m18 audit finding).
 	r.MethodNotAllowed(problemMethodNotAllowedHandler)
 
 	r.Get("/healthz", healthzHandler)
@@ -208,6 +174,13 @@ func New(d Deps) http.Handler {
 				mountAnalyticsRoutes(v1, d.Analytics, d.Logger)
 				mountFacetRoutes(v1, d.Analytics, d.Logger)
 				mountQualityRoutes(v1, d.Analytics, d.Logger)
+			}
+
+			// P5-02's SSE routes (SPEC §5). A nil Stream (P1-05 through
+			// Phase-4's default) mounts neither, matching Reader/
+			// Analytics' own nil-safe convention above.
+			if d.Stream != nil {
+				mountStreamRoutes(v1, d.Stream, d.Replay, d.Config, d.Logger)
 			}
 		})
 	})

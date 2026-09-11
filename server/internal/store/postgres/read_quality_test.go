@@ -1,9 +1,4 @@
-// read_quality_test.go is a black-box (package postgres_test) integration
-// suite for Facets/DataQuality/UnknownKinds/HookLatency (P3-08), following
-// read_analytics_test.go/read_sessions_test.go's convention: seeding
-// helpers insert directly via SQL for precise control over the columns
-// these reads depend on. Reuses newStore/ensureRange/nextTestSessionID/
-// seedSession/seedToolCall/ptrString from write_test.go/read_sessions_test.go.
+// read_quality_test.go is a black-box integration suite for Facets/DataQuality/UnknownKinds/HookLatency (P3-08); see read_analytics_test.go for conventions.
 package postgres_test
 
 import (
@@ -19,8 +14,6 @@ import (
 	"github.com/YohannHommet/argus/server/internal/model"
 	"github.com/YohannHommet/argus/server/internal/store"
 )
-
-// --- Facets ----------------------------------------------------------------
 
 func TestFacets_DistinctValuesAcrossDimensions(t *testing.T) {
 	st, pool := newStore(t)

@@ -5,12 +5,8 @@ import (
 	"math/rand/v2"
 )
 
-// sessionRNG bundles a session's *rand.Rand with a uuid minting helper
-// (attrs.go's uuid method), so every synthetic identifier this package
-// mints stays inside the seeded PCG stream instead of reaching for
-// crypto/rand or math/rand/v2's unseeded global source — either of which
-// would break SPEC §7.2's "identical seed ⇒ byte-identical payloads"
-// guarantee.
+// sessionRNG bundles *rand.Rand with uuid helper to keep synthetic
+// identifiers in the seeded PCG stream (SPEC §7.2 determinism).
 type sessionRNG struct {
 	*rand.Rand
 }
@@ -27,10 +23,8 @@ type sessionRNGReader struct {
 	r *rand.Rand
 }
 
-// Read fills p with bytes drawn from the wrapped *rand.Rand's stream,
-// eight at a time via Uint64, matching the deterministic-fill pattern
-// crypto/rand-free RNG adapters commonly use. Never returns an error: a
-// math/rand/v2 source cannot fail to produce a value.
+// Read fills p from the wrapped *rand.Rand, eight bytes at a time.
+// Never returns an error (math/rand/v2 cannot fail).
 func (s sessionRNGReader) Read(p []byte) (int, error) {
 	n := 0
 	for n < len(p) {
@@ -44,13 +38,8 @@ func (s sessionRNGReader) Read(p []byte) (int, error) {
 	return n, nil
 }
 
-// sessionRand derives a session's own *rand.Rand from the run's --seed and
-// that session's 0-based ordinal (SPEC §7.2: "per-session generators are
-// derived by rand.NewPCG(seed, sessionOrdinal) so a session's content is
-// independent of concurrency"). Two runs with the same --seed therefore
-// produce byte-identical per-session content regardless of how many workers
-// generated them or in what order, which is the property golden_test.go's
-// determinism AC depends on.
+// sessionRand derives per-session RNG from seed + ordinal (SPEC §7.2):
+// same seed ⇒ byte-identical per-session content regardless of concurrency.
 func sessionRand(seed uint64, sessionOrdinal int) *rand.Rand {
 	return rand.New(rand.NewPCG(seed, uint64(sessionOrdinal))) //nolint:gosec // sessionOrdinal is always >=0 by construction (loop counter)
 }

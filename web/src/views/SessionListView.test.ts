@@ -4,8 +4,18 @@ import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import SessionListView from './SessionListView.vue'
-import { getFacets200Default, getMeta200Default, listSessions200Default } from '@/test/fixtures'
 import { CAPTURE_READY_ATTR } from '@/composables/useCaptureReady'
+import { resetEventSourceFactory, setEventSourceFactory } from '@/lib/sse'
+import type { EventSourceLike } from '@/lib/sse'
+import { getFacets200Default, getMeta200Default, listSessions200Default } from '@/test/fixtures'
+
+// PLAN.md P5-06: this view now subscribes to the firehose while mounted, which would otherwise
+// construct a real `EventSource` — unavailable in jsdom. A trivial stub is enough for every test in
+// this file: none of them drive a live frame through it (that wiring is asserted at the store level
+// in stores/__tests__/sessions.spec.ts, and via a mounted view in views/SessionDetailView.test.ts).
+function stubEventSource(): EventSourceLike {
+  return { readyState: 0, addEventListener: () => {}, close: () => {}, onopen: null, onerror: null }
+}
 
 let getSessions: ReturnType<typeof vi.fn>
 let getMeta: ReturnType<typeof vi.fn>
@@ -52,6 +62,7 @@ async function mountAt(path = '/sessions'): Promise<{ router: Router; wrapper: R
 describe('SessionListView (PLAN.md P4-10)', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
+    setEventSourceFactory(stubEventSource)
     document.documentElement.removeAttribute(CAPTURE_READY_ATTR)
     getSessions = vi.fn(() => okResponse(listSessions200Default))
     getMeta = vi.fn(() => okResponse(getMeta200Default))
@@ -59,6 +70,7 @@ describe('SessionListView (PLAN.md P4-10)', () => {
   })
 
   afterEach(() => {
+    resetEventSourceFactory()
     vi.restoreAllMocks()
   })
 

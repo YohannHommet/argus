@@ -16,15 +16,9 @@ import (
 )
 
 // TestPartitionJob_TickReachesBackToRetentionHorizon pins P3-12's actual
-// change: the *caller* (this job, and App.New's startup call, which computes
-// the same range) passes `from = now - ARGUS_RETENTION_RAW_DAYS` rather than
-// `from = now`, so the months an in-retention backfill can land in already
-// exist (SPEC §2.4 "Backward creation", deviation D-14).
-//
-// It asserts on the caller rather than on EnsurePartitions because
-// EnsurePartitions already honoured any [from, to] range before P3-12 — a
-// test that calls it directly with a backward range passes on either side of
-// this change and so proves nothing about it.
+// change: caller passes `from = now - ARGUS_RETENTION_RAW_DAYS` to ensure
+// backward partitions exist (SPEC §2.4, deviation D-14). Asserts on caller,
+// not EnsurePartitions directly, to prove the change at the job level.
 func TestPartitionJob_TickReachesBackToRetentionHorizon(t *testing.T) {
 	pool := storetesting.NewPool(t)
 	store := postgres.New(pool)
@@ -79,12 +73,9 @@ func TestRetentionJob_NextRun(t *testing.T) {
 	require.True(t, job.nextRun(exactHour).Equal(wantTomorrow), "exactly at the hour must schedule tomorrow, not immediately")
 }
 
-// TestRetentionJob_TickDropsExpiredPartitionAndPrunesDedup is the AC that
-// RetentionJob.tick (the daily job's actual pass) both drops a fully-expired
-// partition (store.ApplyRetention) and prunes ingest_dedup
-// (store.PruneDedup) in one call — exercised directly, the same way
-// TestPartitionJob_TickReachesBackToRetentionHorizon calls job.tick rather
-// than waiting on Run's real-time scheduling loop.
+// TestRetentionJob_TickDropsExpiredPartitionAndPrunesDedup: one tick both
+// drops expired partitions and prunes ingest_dedup. Exercised directly, not
+// via Run's real-time loop.
 func TestRetentionJob_TickDropsExpiredPartitionAndPrunesDedup(t *testing.T) {
 	pool := storetesting.NewPool(t)
 	st := postgres.New(pool)

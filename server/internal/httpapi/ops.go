@@ -7,15 +7,8 @@ import (
 	"sync/atomic"
 )
 
-// ReadyState is the atomic readiness flag internal/app flips during the
-// SPEC §3.8 graceful-shutdown sequence: step (1) is "/readyz starts
-// failing", which must take effect before the HTTP server even stops
-// accepting new connections so a load balancer polling /readyz sees the
-// node draining immediately.
-//
-// The zero value reports not-ready; construct with NewReadyState to start
-// ready. A nil *ReadyState (e.g. a test that doesn't care about draining)
-// is treated as always-ready.
+// ReadyState is the atomic readiness flag (SPEC §3.8 graceful-shutdown).
+// Zero value is not-ready; nil *ReadyState is treated as always-ready.
 type ReadyState struct {
 	ready atomic.Bool
 }
@@ -27,8 +20,7 @@ func NewReadyState() *ReadyState {
 	return s
 }
 
-// SetReady flips the readiness flag. internal/app calls SetReady(false) as
-// the first step of Serve's shutdown sequence.
+// SetReady flips the readiness flag (called during graceful shutdown).
 func (s *ReadyState) SetReady(v bool) {
 	s.ready.Store(v)
 }
@@ -47,16 +39,8 @@ func healthzHandler(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// readyzHandler reports SPEC §3.8's full readiness contract: draining
-// state, DB ping, migrations current, and queue not saturated (the last two
-// gained real checks in P2-09; Phase 1 asserted "migrations":"current"
-// without checking it, recorded as deviation D-5).
-//
-// mc and qc are both nil-safe (their interface docs explain why): a nil
-// MigrationsChecker reports "current" unconditionally, matching Phase 1's
-// existing test contract, and a nil QueueSaturationChecker never fails
-// readiness on that ground — both are the P1-05 default until internal/app
-// wires the real store and pipeline in.
+// readyzHandler reports full readiness (SPEC §3.8): draining, DB ping, migrations, queue.
+// mc and qc are nil-safe: nil values report ready/pass unconditionally.
 func readyzHandler(hc HealthChecker, mc MigrationsChecker, qc QueueSaturationChecker, rs *ReadyState, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !rs.Ready() {

@@ -7,16 +7,13 @@
  * few pixels tall, and a `<path>` is trivial to assert against in a mount
  * test without mocking a chart library.
  *
- * Colors still come from `useChartTheme` (SPEC §6.1: charts and the rest
- * of the UI must never drift), but a sparkline's hue is picked by
- * `metricColor(theme, metricKey)` (never `paletteColor`'s categorical
- * cycle) — round-3 UI pass gap: "sparklines ... are all rendered in one
- * undifferentiated blue/gray". `metricKey` says *which* KPI this tile
- * trends (cost/tokens/requests neutral-primary, errors/rejects
- * destructive, the rest a muted secondary hue — see `echartsTheme.ts`'s
- * `METRIC_SEMANTICS` table), so the same hue means the same thing in every
- * tile it appears in, unlike a multi-series chart's palette index, which
- * means a different model/project/vendor depending on which panel it's in.
+ * Colors still come from `useChartTheme` (SPEC §6.1: charts and the rest of the UI must never
+ * drift), but a sparkline's hue is picked by `metricColor(theme, metricKey)` (never `paletteColor`'s
+ * categorical cycle): `metricKey` says *which* KPI this tile trends (cost/tokens/requests
+ * neutral-primary, errors/rejects destructive, the rest a muted secondary hue — see
+ * `echartsTheme.ts`'s `METRIC_SEMANTICS` table), so the same hue means the same thing in every tile
+ * it appears in, unlike a chart's palette index, which means a different model/project depending on
+ * which panel it's in.
  */
 import { computed } from 'vue'
 

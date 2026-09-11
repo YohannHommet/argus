@@ -22,7 +22,15 @@ import (
 	"github.com/YohannHommet/argus/server/internal/ingest/normalize"
 	"github.com/YohannHommet/argus/server/internal/ingest/otlp"
 	"github.com/YohannHommet/argus/server/internal/store/postgres"
+	"github.com/YohannHommet/argus/server/internal/stream"
 )
+
+// statsBroadcastInterval is SPEC §5.1's fixed 2s `event: stats` cadence.
+// Config's table (SPEC §3.7) is normative and complete and lists no key for
+// it — same reasoning as jobs.go's partitionJobInterval and New's own
+// ImportPrices call below ("adding an unlisted ARGUS_* key would be the
+// larger deviation") — so this is a constant, not a config field.
+const statsBroadcastInterval = 2 * time.Second
 
 // Option configures an optional aspect of New's construction. The zero
 // value (no options passed) is production behaviour in every case.
@@ -61,6 +69,22 @@ type App struct {
 	hooks      *hooks.Mounter   // P2-11: POST /ingest/hook, wired into httpapi.Deps.HookMounter by Serve
 	otlp       *otlp.Handler    // P2-10: POST /v1/{logs,metrics,traces}, wired into httpapi.Deps.OTLPMounter by Serve
 
+	// hub is P5-03's live-stream broker (SPEC §5.3), wired into
+	// httpapi.Deps.Stream by Serve and shut down FIRST in shutdown() — see
+	// serve.go's shutdown ordering doc comment for why that order (not the
+	// SPEC §3.8 step numbering's literal order) is load-bearing.
+	hub *stream.Hub
+
+	// publisher is the ingest Publisher seam's (pipeline.go:108-148) real
+	// implementation: it fans persisted events into hub as they're flushed,
+	// and separately runs its own debounced `session`-frame loop (Run,
+	// started by Serve alongside the other scheduler-shaped jobs).
+	publisher *ingest.HubPublisher
+
+	// stats is the SPEC §5.1 2s `event: stats` broadcaster; Run started by
+	// Serve alongside publisher.
+	stats *stream.StatsBroadcaster
+
 	server *http.Server // set by Serve
 
 	// listenAddr/addrReady let a caller that started Serve on an ephemeral
@@ -93,9 +117,8 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, opts ...O
 		return nil, fmt.Errorf("app: connecting to database: %w", err)
 	}
 
-	// WithRollupSessionRemarkMax threads ARGUS_ROLLUP_SESSION_REMARK_MAX
-	// (SPEC §2.4, §3.7) into the store without postgres importing
-	// internal/config (depguard, SPEC §3.1) — see pool.go's Option doc.
+	// Thread ARGUS_ROLLUP_SESSION_REMARK_MAX into the store without postgres
+	// importing internal/config (depguard, SPEC §3.1).
 	st := postgres.New(pool, postgres.WithRollupSessionRemarkMax(cfg.RollupSessionRemarkMax))
 
 	if cfg.AutoMigrate {
@@ -105,27 +128,10 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, opts ...O
 		}
 	}
 
-	// Seed model_prices from the price table embedded in this binary
-	// (db/prices/*.json), immediately after migrations and for the same
-	// reason: without it the table is empty on every fresh deployment, and an
-	// empty table means pricing.Estimate can never resolve a price, so
-	// cost_estimated_usd and estimated_share are silently 0 forever — the
-	// exact silent zero SPEC §4.1 exists to forbid, on the one number the UI
-	// uses to flag that a cost is estimated rather than reported.
-	//
-	// `argusd prices import` (SPEC §3.8) stays as the operator-facing way to
-	// re-import or update, but it cannot be the only way: nothing in
-	// docker-compose or the quickstart runs it, and a `docker compose up`
-	// deployment reported estimated_usd = 0 with a populated events table
-	// until this call existed. The import is idempotent (ON CONFLICT with an
-	// IS DISTINCT FROM guard, so a re-run touches no rows) and only writes
-	// the repo-sourced rows, leaving operator-supplied ones alone.
-	//
-	// Not gated behind a new config key: SPEC §3.7's table is normative and
-	// complete, and adding an unlisted ARGUS_* key would be the larger
-	// deviation. A failure here is fatal for the same reason a failed
-	// migration is — starting up with prices missing produces wrong numbers
-	// rather than an obvious error.
+	// Seed model_prices from the embedded price table on startup: empty table
+	// means cost_estimated_usd silently stays 0 (SPEC §4.1 forbids this).
+	// Not gated behind a config key: SPEC §3.7's table is normative. Fatal
+	// on failure, like migrations.
 	priceSummary, priceErr := st.ImportPrices(ctx)
 	if priceErr != nil {
 		pool.Close()
@@ -152,7 +158,22 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, opts ...O
 	}
 	rollupJob := NewRollupJob(st, logger, rollupMetrics, cfg.RollupInterval, cfg.RollupMaxBuckets)
 
-	ingestOpts := []ingest.Option{ingest.WithLogger(logger)}
+	// P5-03: the hub must exist BEFORE the ingest pipeline (HubPublisher needs
+	// it at construction time). Use dedicated registerer to avoid duplicate
+	// metric panic in multi-App tests.
+	hubOpts := []stream.Option{
+		stream.WithBuffer(cfg.StreamBuffer),
+		stream.WithMaxSubscribers(cfg.StreamMaxSubscribers),
+		stream.WithLogger(logger),
+	}
+	if o.registerer != nil {
+		hubOpts = append(hubOpts, stream.WithRegisterer(o.registerer))
+	}
+	hub := stream.New(hubOpts...)
+
+	publisher := ingest.NewHubPublisher(hub, st, ingest.WithHubPublisherLogger(logger))
+
+	ingestOpts := []ingest.Option{ingest.WithLogger(logger), ingest.WithPublisher(publisher)}
 	if o.registerer != nil {
 		ingestOpts = append(ingestOpts, ingest.WithRegisterer(o.registerer))
 	}
@@ -170,14 +191,8 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, opts ...O
 	//nolint:contextcheck // the pipeline's lifetime is owned by Close, not by New's caller — see above
 	ing := ingest.New(st, ingestPipelineConfig(cfg), ingestOpts...)
 
-	// P2-11: the hooks webhook (SPEC §3.5). hookNormalizer is built here
-	// (not inside internal/ingest/hooks) because it needs
-	// ARGUS_RETENTION_RAW_DAYS/ARGUS_INGEST_HOOK_ALLOW_MESSAGE_DISPLAY —
-	// internal/ingest/hooks must not import internal/config (same
-	// config-free-at-the-leaf convention ing's construction above follows).
-	// ing satisfies hooks.Enqueuer structurally via EnqueueEvents; passing
-	// it here rather than *ingest.Pipeline directly would gain nothing
-	// since httpapi.RequireIngestToken already closes the httpapi seam.
+	// P2-11: the hooks webhook (SPEC §3.5). hookNormalizer built here because
+	// it needs config keys; internal/ingest/hooks stays config-free (depguard).
 	hookNormalizer := normalize.NewHookNormalizer(
 		time.Now,
 		time.Duration(cfg.RetentionRawDays)*24*time.Hour,
@@ -190,12 +205,18 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, opts ...O
 	hookHandler := hooks.NewHandler(ing, hookNormalizer, cfg.IngestMaxBodyBytes, hookHandlerOpts...)
 	hookMounter := hooks.NewMounter(hookHandler, httpapi.RequireIngestToken(cfg.IngestToken))
 
-	// P2-10: the OTLP/HTTP receiver (SPEC §3.4). otlpNormalizer is built
-	// here for the same config-free-at-the-leaf reason as hookNormalizer
-	// above (internal/ingest/otlp must not import internal/config); ing
-	// satisfies otlp.Enqueuer structurally via EnqueueEvents/EnqueueMetrics.
+	// P2-10: the OTLP/HTTP receiver (SPEC §3.4). otlpNormalizer built here;
+	// internal/ingest/otlp stays config-free (depguard).
 	otlpNormalizer := normalize.NewNormalizer(time.Now, time.Duration(cfg.RetentionRawDays)*24*time.Hour)
 	otlpHandler := otlp.New(ing, otlpNormalizer, cfg.IngestMaxBodyBytes, httpapi.RequireIngestToken(cfg.IngestToken), logger, o.registerer)
+
+	// P5-03: the 2s stats broadcaster (SPEC §5.1). Its SnapshotFunc closure
+	// is what lets internal/stream stay ignorant of *ingest.Pipeline/
+	// *postgres.Store (depguard) while still combining pipeline metrics,
+	// queue depth, active-session count, and BOTH drop counters into one
+	// Snapshot — see newStatsSnapshotFunc's own doc comment for the
+	// DroppedTotal-is-a-sum reasoning.
+	statsBroadcaster := stream.NewStatsBroadcaster(hub, newStatsSnapshotFunc(ing, st.ActiveSessionCount), statsBroadcastInterval, logger)
 
 	return &App{
 		cfg:        cfg,
@@ -209,8 +230,64 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, opts ...O
 		ingest:     ing,
 		hooks:      hookMounter,
 		otlp:       otlpHandler,
+		hub:        hub,
+		publisher:  publisher,
+		stats:      statsBroadcaster,
 		addrReady:  make(chan struct{}),
 	}, nil
+}
+
+// newStatsSnapshotFunc closes over the ingest pipeline and the store's
+// active-session count — internal/app is the only package allowed to know
+// about both at once (package doc comment), which is exactly why
+// internal/stream's SnapshotFunc/Snapshot types exist: StatsBroadcaster
+// itself never imports internal/ingest or internal/store/postgres (SPEC §3.1
+// depguard).
+//
+// activeSessions is taken as a function rather than the *postgres.Store it
+// comes from so this composition is unit-testable without a live database.
+// That matters more than it looks: the DroppedTotal decision documented below
+// has no observable consequence anywhere else, so without a test able to call
+// this function directly, a future edit could silently change the meaning of
+// an operator-facing metric with the whole suite still green.
+func newStatsSnapshotFunc(ing *ingest.Pipeline, activeSessions func(context.Context) (int64, error)) stream.SnapshotFunc {
+	return func(ctx context.Context) (stream.Snapshot, error) {
+		active, err := activeSessions(ctx)
+		if err != nil {
+			return stream.Snapshot{}, fmt.Errorf("app: stats snapshot: active session count: %w", err)
+		}
+		lagSum, lagCount := ing.Metrics().LagObservations()
+		return stream.Snapshot{
+			QueueDepth:     ing.QueueDepth(),
+			EventsTotal:    ing.Metrics().EventsTotal(),
+			LagSum:         lagSum,
+			LagCount:       lagCount,
+			ActiveSessions: int(active),
+			// DroppedTotal is ingest drops ONLY — events that never reached
+			// storage at all (queue-full shedding, a permanent write error, a
+			// drain-deadline timeout; see Metrics.Dropped's own doc comment).
+			// It deliberately does NOT include hub.DroppedTotal(), even though
+			// that is also real loss, because the two are not the same kind of
+			// fact and this field is the one an operator alerts on:
+			//
+			//   - an ingest drop is permanent. No reconnect can recover it,
+			//     because nothing was ever stored to replay.
+			//   - a hub drop means the event IS stored and this subscriber's
+			//     own SSE buffer merely fell behind. SPEC §5.1 already gives
+			//     that its own dedicated channel — `event: lag`, "{dropped: N}
+			//     when a subscriber's buffer overflowed" — which the client
+			//     answers by refetching, and it is per-subscriber, which the
+			//     process-wide hub counter is not.
+			//
+			// Summing them would make a self-healing display-layer condition
+			// indistinguishable from permanent data loss in the single number
+			// the data-quality screen's dropped tile reports (deviation D-28
+			// names StreamStatsFrame.dropped_total as that tile's future
+			// backing field). Fleet-wide hub-drop health remains available to
+			// an operator as argus_stream_dropped_total on /metrics.
+			DroppedTotal: int64(ing.Metrics().DroppedCount()),
+		}, nil
+	}
 }
 
 // ingestPipelineConfig maps the ARGUS_INGEST_* config keys onto the ingest

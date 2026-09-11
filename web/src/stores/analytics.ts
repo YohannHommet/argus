@@ -235,9 +235,8 @@ function createResource<T>(): ResourceState<T> & {
   skip: () => void
   abort: () => void
 } {
-  // Cast rather than `reactive<ResourceState<T>>(...)`: `T` is a plain OpenAPI response shape (no
-  // refs ever nest inside it), but TS's generic `UnwrapNestedRefs<T>` can't know that structurally,
-  // so it refuses to unify `UnwrapRef<T> | null` back with the declared `T | null`.
+  // Cast rather than `reactive<ResourceState<T>>(...)`: `T` is a plain OpenAPI shape with no nested
+  // refs, but TS's generic `UnwrapNestedRefs<T>` can't know that structurally to unify with `T | null`.
   const state = reactive({ data: null, loading: false, error: null, notAttributable: false }) as ResourceState<T>
 
   let controller: AbortController | null = null

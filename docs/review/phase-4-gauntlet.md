@@ -119,7 +119,13 @@ The four Phase-4 deviations needing an owner ruling were recorded before the gau
 
 ---
 
-## New finding at the exit gate — RULING NEEDED (candidate D-30)
+## New finding at the exit gate — D-30, **accepted 2026-08-18**
+
+**Ruling (2026-08-18): accepted, first option, fixed in Phase 5 ticket 0.** The sessions *and* turns
+projections now run the same `internal/pricing` estimator `rollup_hourly` already runs, so
+`cost_estimated_usd` is a real figure rather than a structural zero, and both the KPI strip and
+`CostAttributionCard` mark an estimated cost as estimated. Making `usd` nullable was rejected: the
+number is knowable, so refusing to compute it would trade one dishonesty for another.
 
 Verifying exit criterion 8 needed `--cost-mode=omit` data, which the default demo seed does not
 produce, so a second sim was run against a live stack

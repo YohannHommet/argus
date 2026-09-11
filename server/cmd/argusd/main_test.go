@@ -13,10 +13,6 @@ import (
 	"github.com/YohannHommet/argus/server/internal/config"
 )
 
-// --- m36: healthURL must correctly parse every ARGUS_HTTP_ADDR shape ------
-// --- net.Listen accepts, including bracketed IPv6 forms, and route to ----
-// --- whichever endpoint --endpoint selected (m37). ------------------------
-
 func TestHealthURL(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -51,10 +47,6 @@ func TestHealthURL(t *testing.T) {
 		})
 	}
 }
-
-// --- m35: healthcheckHTTPAddr must resolve ARGUS_HTTP_ADDR without --------
-// --- requiring ARGUS_DATABASE_URL, unlike the full config.Load merge it ---
-// --- otherwise mirrors (defaults -> YAML file -> env, env wins). ----------
 
 // withoutEnv unsets name for the duration of the test (restoring whatever
 // was there before, if anything) — t.Setenv can only set a value, never
@@ -108,18 +100,11 @@ func TestHealthcheckHTTPAddr_YAMLFileOverridesDefaultAndEnvWinsOverYAML(t *testi
 	require.Equal(t, "0.0.0.0:6060", addr)
 }
 
-// --- m35 (regression guard): confirm the problem this ticket fixes is ----
-// --- real — config.Load itself DOES require ARGUS_DATABASE_URL, which is --
-// --- exactly why runHealthcheck can no longer go through it directly. ----
-
 func TestConfigLoad_StillRequiresDatabaseURL(t *testing.T) {
 	withoutEnv(t, "ARGUS_DATABASE_URL")
 	_, _, err := config.Load("")
 	require.Error(t, err, "config.Load must still require ARGUS_DATABASE_URL for every OTHER subcommand — only the healthcheck path may skip it")
 }
-
-// --- m37: --endpoint accepts exactly healthz/readyz, defaulting to -------
-// --- healthz, and rejects anything else without touching the network. ----
 
 func TestRunHealthcheck_EndpointFlag(t *testing.T) {
 	withoutEnv(t, "ARGUS_DATABASE_URL")
@@ -155,10 +140,6 @@ func TestRunHealthcheck_EndpointFlag(t *testing.T) {
 		})
 	}
 }
-
-// --- m35 (end-to-end): runHealthcheck succeeds with no ARGUS_DATABASE_URL -
-// --- set at all, proving the healthcheck subcommand no longer goes -------
-// --- through config.Load's required-key validation.
 
 func TestRunHealthcheck_SucceedsWithoutDatabaseURL(t *testing.T) {
 	withoutEnv(t, "ARGUS_DATABASE_URL")

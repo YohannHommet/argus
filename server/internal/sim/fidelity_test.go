@@ -9,12 +9,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// generateManySessions builds enough sessions (spanning the full project
-// set, several turns, tool calls, and subagents each) that the low-
-// probability draws this test cares about (an invented query_source,
-// api_request/tool_result attribute shape, etc.) are virtually certain to
-// appear at least once, without relying on a hand-picked seed that happens
-// to roll a rare value on the first try.
+// generateManySessions builds enough sessions to ensure low-probability
+// draws (invented query_source, attribute shapes) appear at least once.
 func generateManySessions(t *testing.T, n int) []sessionResult {
 	t.Helper()
 	cfg := DefaultConfig()
@@ -27,13 +23,8 @@ func generateManySessions(t *testing.T, n int) []sessionResult {
 	return out
 }
 
-// TestFidelity_NoAgentIDOnAPIRequestOrToolResult is the ticket's B3 AC:
-// "a test asserts no emitted OTel api_request/tool_result payload contains
-// agent_id" (SPEC §1.9, live capture §3: "No agent_id / parent_agent_id /
-// subagent attribute" on api_request; §1.5.1: OTel tool_result likewise
-// never carries it). This is the load-bearing fidelity check — a
-// regression here would make the demo lie about per-subagent cost
-// attribution.
+// TestFidelity_NoAgentIDOnAPIRequestOrToolResult asserts no agent_id on
+// api_request/tool_result (SPEC §1.9 §1.5.1; load-bearing fidelity check).
 func TestFidelity_NoAgentIDOnAPIRequestOrToolResult(t *testing.T) {
 	t.Parallel()
 

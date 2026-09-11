@@ -9,7 +9,16 @@ import { createMemoryHistory, createRouter } from 'vue-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import SessionDetailView from './SessionDetailView.vue'
+import { resetEventSourceFactory, setEventSourceFactory } from '@/lib/sse'
+import type { EventSourceLike } from '@/lib/sse'
 import { getSession200Default } from '@/test/fixtures'
+
+// PLAN.md P5-06: SessionDetailView now subscribes to its session's live stream on mount (before the
+// session fetch even resolves), which would otherwise construct a real `EventSource` — unavailable in
+// jsdom. This test only asserts skeleton/ready timing, so a trivial stub is enough.
+function stubEventSource(): EventSourceLike {
+  return { readyState: 0, addEventListener: () => {}, close: () => {}, onopen: null, onerror: null }
+}
 
 let getSession: ReturnType<typeof vi.fn>
 
@@ -27,10 +36,12 @@ vi.mock('@/api/context', () => ({
 describe('SessionDetailView skeleton (PLAN.md P4-10)', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
+    setEventSourceFactory(stubEventSource)
     document.documentElement.removeAttribute('data-capture-ready')
   })
 
   afterEach(() => {
+    resetEventSourceFactory()
     vi.restoreAllMocks()
   })
 
