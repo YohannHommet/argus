@@ -27,6 +27,12 @@ npm-debug.log*
 /screenshots/
 /web/screenshots/
 
+# Playwright E2E output (scripts/e2e.sh / web/playwright.config.ts) — the HTML
+# report, traces, and per-run artifacts are never committed.
+/web/playwright-report/
+/web/test-results/
+/web/.playwright/
+
 # Env
 .env
 .env.*

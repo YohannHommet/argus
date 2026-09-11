@@ -46,6 +46,19 @@ export default tseslint.config(
     },
   },
   {
+    // web/e2e/* is the Playwright assertion suite + its config. It runs under
+    // Node (Playwright's own runner), not in the browser: `process`, `URL`,
+    // `console` are Node globals, and the test API (`test`, `expect`) is
+    // imported from '@playwright/test', not a global.
+    name: 'app/e2e',
+    files: ['e2e/**/*.ts', 'playwright.config.ts'],
+    languageOptions: {
+      globals: {
+        ...globals.node,
+      },
+    },
+  },
+  {
     name: 'app/rules',
     rules: {
       'vue/multi-word-component-names': 'off',
