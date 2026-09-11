@@ -80,6 +80,6 @@ describe('TimelineGroup', () => {
     const event = makeTimelineEvent({ prompt_id: 'p_1', tool_use_id: null, kind: 'llm.request' })
     const items = collapseEvents([event])
     const wrapper = mount(TimelineGroup, { props: { promptId: 'p_1', items, selectedEventRef: event.event_ref } })
-    expect(wrapper.get('[data-testid="event-row"]').attributes('aria-selected')).toBe('true')
+    expect(wrapper.get('[data-testid="event-row"]').attributes('aria-current')).toBe('true')
   })
 })

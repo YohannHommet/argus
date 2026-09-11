@@ -165,7 +165,11 @@ function onSelectAgent(agentId: string): void {
         Duration scale: 0 – {{ formatDuration(maxDurationMs) }}
       </p>
 
-      <ul class="flex flex-col gap-0.5">
+      <ul
+        class="flex flex-col gap-0.5"
+        role="tree"
+        aria-label="Subagent tree"
+      >
         <SubagentNode
           v-for="root in nodes"
           :key="root.agent_id"

@@ -1,37 +1,177 @@
 # Argus
 
-> **status: pre-alpha** — Phase 1 (scaffold) is in progress. Nothing here works yet.
+**Argus is a self-hosted observability platform for Claude Code (and any OTel-emitting coding
+agent).** Where the usual dashboards stop at tokens and cost, Argus models the two things nobody
+else does: **permission/tool-decision provenance** — every accept/reject *and who decided it*
+(`config`, `hook`, or `user`) — and **subagent trees** as first-class objects, on a normalized,
+agent-agnostic event schema. It ingests OTLP logs/metrics and Claude Code hook events, stores them
+in Postgres, and serves a session explorer, cost/token analytics, a live view, and a data-quality
+surface.
 
-Argus is an observability backend + UI for Claude Code telemetry: it ingests OTLP logs/metrics
-and hook events, stores them in Postgres, and serves an analytics/session-explorer UI plus a
-live view — see `docs/SPEC.md` for the full design and `docs/PLAN.md` for the build sequence.
+> **Status: v0.1.0 — pre-alpha.** Dogfoodable and useful, but APIs, schemas, CLI flags, and the
+> data model may change without notice before 1.0. Self-hosted only; no auth, no multi-tenancy in
+> v1. Argus is an independent open-source project and is **not affiliated with or endorsed by
+> Anthropic**.
 
-## Quickstart (placeholder)
+![Session explorer](docs/img/sessions.png)
 
-This section is a placeholder outline. The real, verified quickstart lands in a later phase
-(P6-01) once `docker compose up` actually serves the app end to end.
+## Why Argus
+
+Grafana-style dashboards and `ccusage`-class tools answer "how many tokens, how much money".
+Argus answers questions about *what the agent actually did*:
+
+- **Decision provenance.** Every tool call carries its outcome and its decider. A reject auto-applied
+  by your `settings.json`, a reject from a hook, and a reject you clicked are three different facts —
+  Argus keeps them distinct, in the timeline and in the analytics.
+- **Subagent trees.** A session's subagents are modeled as a real tree (parent agent → children),
+  each with its own tool counts and status, not flattened into one stream.
+- **Agent-agnostic core.** Ingestion is OTLP-native, so any OTel-emitting agent works; Claude Code
+  is supported first and deepest. No vendor attribute vocabulary is ever constrained — a value the
+  agent invents next release still lands, surfaced under an `unknown` kind rather than dropped.
+
+![Session detail — subagent tree and cost attribution](docs/img/session-detail-subagents.png)
+
+## Quickstart
+
+A stranger should get from a clone to live data in about two minutes. Verified end-to-end from a
+clean checkout.
+
+### 1. Start the stack
 
 ```bash
-# 1. Clone
-git clone git@github.com:YohannHommet/argus.git && cd argus
-
-# 2. Start the stack (Postgres + argusd), once deploy/docker-compose.yml exists
-make compose-up
-
-# 3. Point Claude Code's OTLP exporter at argusd (exact env vars TBD, see docs/SPEC.md §8.2)
-# 4. Open the UI
-#    http://localhost:8080/
+git clone https://github.com/YohannHommet/argus.git
+cd argus
+docker compose -f deploy/docker-compose.yml up -d
 ```
 
-See `make help` for the full list of developer targets (`dev`, `build`, `test`, `lint`, `ci`,
-`gen`, `migrate`, `sim`, `compose-up`, `compose-smoke`).
+On first run this builds `argusd` from source (it compiles and embeds the Vue UI) and starts it
+alongside Postgres. Once v0.1.0 is published to GHCR, `docker compose pull` fetches the prebuilt
+image instead. If host port 8080 is taken, rebind it:
+
+```bash
+ARGUS_HTTP_PORT=18080 docker compose -f deploy/docker-compose.yml up -d
+```
+
+The UI is then at <http://localhost:8080> (or your `ARGUS_HTTP_PORT`).
+
+### 2. Point Claude Code at Argus
+
+Export the OpenTelemetry env vars in the shell you run Claude Code from (swap `http://localhost:8080`
+for your `ARGUS_HTTP_PORT` if you changed it):
+
+```bash
+export CLAUDE_CODE_ENABLE_TELEMETRY=1 \
+       OTEL_LOGS_EXPORTER=otlp OTEL_METRICS_EXPORTER=otlp \
+       OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf \
+       OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:8080 \
+       OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta \
+       OTEL_LOG_TOOL_DETAILS=1
+```
+
+`OTEL_LOG_TOOL_DETAILS=1` is what populates tool file paths, the `subagent_type` linkage, and the
+file-touch view — without it those fields stay empty. It also makes Claude Code log full tool
+parameters (including Bash command text) to your collector, so it is your call; Argus works without
+it, you just lose those three views.
+
+Then add the hook block to `~/.claude/settings.json` so hook-only events (session lifecycle,
+decisions) reach Argus too:
+
+```json
+{ "hooks": {
+  "PostToolUse": [ { "hooks": [
+    { "type": "http", "url": "http://localhost:8080/ingest/hook", "timeout": 5 } ] } ],
+  // SessionEnd hooks share a hard 1.5 s budget — keep this at 1.
+  "SessionEnd":  [ { "hooks": [
+    { "type": "http", "url": "http://localhost:8080/ingest/hook", "timeout": 1 } ] } ]
+} }
+```
+
+The `SessionEnd` timeout is 1 second on purpose: every `SessionEnd` hook shares one hard 1.5 s
+budget, and Argus acks in milliseconds, so a larger value only eats into other hooks' share.
+
+### 3. Open the UI and use Claude Code
+
+Run a Claude Code session and open <http://localhost:8080>. Sessions, turns, tool decisions, and
+cost appear within one turn.
+
+### No real traffic yet? Generate demo data
+
+```bash
+docker compose -f deploy/docker-compose.yml exec argusd \
+  /argusd sim --mode=demo --seed=42
+```
+
+`--mode=demo` seeds a deterministic set of ~20 sessions with subagents, decisions, and cost so you
+can explore every view immediately. (`--mode=load` is the load generator — see
+[`docs/OPERATIONS.md`](docs/OPERATIONS.md).)
+
+## The six views
+
+| View | What it shows |
+|---|---|
+| **Sessions** | Session list with cost, tokens, tool counts, reject rate; filter by project, model, vendor, date, status. |
+| **Session detail** | Turn-by-turn timeline with decision badges, plus the subagent tree and per-source cost attribution. |
+| **Tools** | Tool-usage explorer: which tools, how often, accept/reject breakdown. |
+| **Analytics** | Cost/token/decision dashboards over a window, split by model and project. |
+| **Live** | The fleet-wide firehose — every event as it lands, active sessions, and ingest health, in real time (SSE). |
+| **Data quality** | Ingest health: dropped events, unrecognised event names, clock skew, hook latency. |
+
+| | |
+|:--:|:--:|
+| ![Timeline with decision provenance](docs/img/session-detail-timeline.png) | ![Analytics](docs/img/analytics.png) |
+| **Session timeline — decision provenance** | **Cost & token analytics** |
+| ![Live view](docs/img/live.png) | ![Data quality](docs/img/data-quality.png) |
+| **Live view (SSE)** | **Data-quality surface** |
+| ![Tools explorer](docs/img/tools.png) | |
+| **Tools explorer** | |
+
+## Performance
+
+The async, batched ingest path sustains the **1000 events/s** target with **zero dropped events**
+(and no `too_old` rejections or deadlock-retries) at ~20 ms median write latency. See the
+[load-test results](docs/OPERATIONS.md#load-test-results) for the full rate → latency/drops table, and
+`scripts/loadtest.sh` to reproduce.
+
+## Configuration
+
+Every setting is an `ARGUS_*` environment variable (or a YAML config file). The full, generated
+reference — key, default, and meaning — lives in
+[`docs/config-reference.md`](docs/config-reference.md), and the operational guidance (retention,
+backup/restore, upgrades, troubleshooting) is in [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
+
+Run `argusd config --markdown` to print the reference for your build, or `argusd config` to dump the
+effective configuration with secrets redacted.
+
+## What Argus does *not* do (v1)
+
+Deliberately out of scope for v1 — see [`docs/SPEC.md`](docs/SPEC.md) §9.1 for the full list and the
+reasoning:
+
+- **No per-subagent cost.** Claude Code does not emit cost per agent; `api_request` carries only a
+  `query_source`, so Argus attributes cost by query source and says so, rather than inventing a
+  per-subagent number.
+- No alerting, no fleet view, no auth, no retention UI (there is an auth-shaped middleware seam for
+  later).
+- No OTel *traces* ingestion and no local JSONL transcript enrichment — both are v2, behind the same
+  event model.
 
 ## Documentation
 
-- `docs/SPEC.md` — the spec (architecture, data model, API, deploy).
-- `docs/PLAN.md` — phased implementation plan and ticket breakdown.
-- `CONTRIBUTING.md` — contribution guidelines.
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — the design: system diagram, package map, and the
+  five invariants.
+- [`docs/OPERATIONS.md`](docs/OPERATIONS.md) — running Argus: config, retention, backup, upgrade,
+  troubleshooting.
+- [`docs/SPEC.md`](docs/SPEC.md) — the full v1 specification.
+- [`docs/DECISIONS.md`](docs/DECISIONS.md) — the binding design decisions.
+- [`CHANGELOG.md`](CHANGELOG.md) — release history.
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — how to build and contribute.
+
+## Development
+
+`argusd` is a single Go binary (stdlib `net/http` + chi, `pgx`/`sqlc`) with the Vue 3 + Vite UI
+embedded; storage is Postgres. See `make help` for the developer targets (`dev`, `build`, `test`,
+`lint`, `ci`, `gen`, `migrate`, `sim`, `compose-up`, `compose-smoke`).
 
 ## License
 
-MIT — see `LICENSE`.
+[MIT](LICENSE).

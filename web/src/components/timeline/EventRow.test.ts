@@ -43,15 +43,18 @@ describe('EventRow', () => {
 
   // Round-3 critic gap: "row selection state must be visible" — the
   // inspector can be open on some event, but nothing in the list shows
-  // which row that is without this.
-  it('marks the row selected via aria-selected/data-selected when selected is true, and not otherwise', () => {
+  // which row that is without this. `aria-current`, not `aria-selected`:
+  // this row's role is "button" (PLAN.md P6-04 axe fix), and `aria-selected`
+  // is not an allowed attribute on that role — `aria-current="true"` is the
+  // correct ARIA state for "the item currently shown elsewhere on the page".
+  it('marks the row selected via aria-current/data-selected when selected is true, and not otherwise', () => {
     const [item] = collapseEvents([otelToolResultEvent])
     const selected = mount(EventRow, { props: { item: item!, selected: true } }).get('[data-testid="event-row"]')
     const notSelected = mount(EventRow, { props: { item: item!, selected: false } }).get('[data-testid="event-row"]')
 
-    expect(selected.attributes('aria-selected')).toBe('true')
+    expect(selected.attributes('aria-current')).toBe('true')
     expect(selected.attributes('data-selected')).toBe('true')
-    expect(notSelected.attributes('aria-selected')).toBe('false')
+    expect(notSelected.attributes('aria-current')).toBeUndefined()
   })
 
   // Round-5 critic gap: no `sessionLabel` (the default, and every existing caller above) must

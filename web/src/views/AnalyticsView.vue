@@ -180,13 +180,19 @@ const rejectRateDeltaClass = computed(() => {
       data-testid="analytics-filter-bar"
     >
       <div class="flex flex-col gap-1">
-        <label class="text-muted-foreground text-xs">Window</label>
+        <label
+          id="analytics-filter-window-label"
+          class="text-muted-foreground text-xs"
+        >Window</label>
         <Select
           :model-value="analytics.preset"
           data-testid="filter-window"
           @update:model-value="onPresetChange"
         >
-          <SelectTrigger class="w-32">
+          <SelectTrigger
+            aria-labelledby="analytics-filter-window-label"
+            class="w-32"
+          >
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -236,14 +242,20 @@ const rejectRateDeltaClass = computed(() => {
       </template>
 
       <div class="flex min-w-36 flex-col gap-1">
-        <label class="text-muted-foreground text-xs">Project</label>
+        <label
+          id="analytics-filter-project-label"
+          class="text-muted-foreground text-xs"
+        >Project</label>
         <Select
           multiple
           :model-value="analytics.filters.project"
           data-testid="filter-project"
           @update:model-value="(v) => analytics.setFilters({ project: toStringArray(v) })"
         >
-          <SelectTrigger class="w-full">
+          <SelectTrigger
+            aria-labelledby="analytics-filter-project-label"
+            class="w-full"
+          >
             <SelectValue placeholder="All projects" />
           </SelectTrigger>
           <SelectContent>
@@ -259,14 +271,20 @@ const rejectRateDeltaClass = computed(() => {
       </div>
 
       <div class="flex min-w-36 flex-col gap-1">
-        <label class="text-muted-foreground text-xs">Model</label>
+        <label
+          id="analytics-filter-model-label"
+          class="text-muted-foreground text-xs"
+        >Model</label>
         <Select
           multiple
           :model-value="analytics.filters.model"
           data-testid="filter-model"
           @update:model-value="(v) => analytics.setFilters({ model: toStringArray(v) })"
         >
-          <SelectTrigger class="w-full">
+          <SelectTrigger
+            aria-labelledby="analytics-filter-model-label"
+            class="w-full"
+          >
             <SelectValue placeholder="All models" />
           </SelectTrigger>
           <SelectContent>
@@ -282,14 +300,20 @@ const rejectRateDeltaClass = computed(() => {
       </div>
 
       <div class="flex min-w-36 flex-col gap-1">
-        <label class="text-muted-foreground text-xs">Vendor</label>
+        <label
+          id="analytics-filter-vendor-label"
+          class="text-muted-foreground text-xs"
+        >Vendor</label>
         <Select
           multiple
           :model-value="analytics.filters.vendor"
           data-testid="filter-vendor"
           @update:model-value="(v) => analytics.setFilters({ vendor: toStringArray(v) })"
         >
-          <SelectTrigger class="w-full">
+          <SelectTrigger
+            aria-labelledby="analytics-filter-vendor-label"
+            class="w-full"
+          >
             <SelectValue placeholder="All vendors" />
           </SelectTrigger>
           <SelectContent>
@@ -515,7 +539,10 @@ const rejectRateDeltaClass = computed(() => {
             data-testid="filter-group-by"
             @update:model-value="onGroupByChange"
           >
-            <SelectTrigger class="w-32">
+            <SelectTrigger
+              aria-label="Group cost over time by"
+              class="w-32"
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent>

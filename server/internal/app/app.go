@@ -95,8 +95,9 @@ type App struct {
 	addrReady  chan struct{}
 }
 
-// New connects the database pool, wraps it in the postgres Store, and runs
-// migrations when ARGUS_AUTO_MIGRATE is true (SPEC §3.7, §3.8) — all before
+// New connects the database pool, waits (bounded, D-34) for it to actually
+// accept connections, wraps it in the postgres Store, and runs migrations
+// when ARGUS_AUTO_MIGRATE is true (SPEC §3.7, §3.8) — all before
 // the HTTP listener exists, so a `serve` that fails to migrate never starts
 // accepting traffic. It then ensures the retention-horizon-through-two-
 // months-ahead partitions exist (SPEC §2.4's "startup fails loudly if the
@@ -115,6 +116,15 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, opts ...O
 	pool, err := postgres.NewPool(ctx, cfg.DatabaseURL, cfg.DBMaxConns)
 	if err != nil {
 		return nil, fmt.Errorf("app: connecting to database: %w", err)
+	}
+
+	// D-34: NewPool's pgxpool connects lazily, so Migrate's pool.Acquire would
+	// otherwise be the first real TCP dial — and land during the official
+	// Postgres image's first-init restart beat, after it already passed its
+	// compose healthcheck. Absorb that here instead of failing startup on it.
+	if err := waitForDB(ctx, pool.Ping, dbConnectMaxWait, dbConnectRetryInterval, logger); err != nil {
+		pool.Close()
+		return nil, err
 	}
 
 	// Thread ARGUS_ROLLUP_SESSION_REMARK_MAX into the store without postgres

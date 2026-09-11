@@ -59,6 +59,35 @@ describe('SubagentTree', () => {
     expect(wrapper.findAll('[data-testid="subagent-node"]')).toHaveLength(3)
   })
 
+  // PLAN.md P6-04 AC: the tree exposes role="tree"/"treeitem" with correct aria-level so a screen
+  // reader announces the hierarchy the visual indentation only implies.
+  it('exposes role="tree" on the container and role="treeitem"/aria-level on each node (P6-04 AC)', async () => {
+    const { wrapper } = await mountTree({ nodes: getSessionSubagentsDepth2Live.data })
+
+    const tree = wrapper.get('[role="tree"]')
+    expect(tree.attributes('aria-label')).toBeTruthy()
+
+    const nodes = wrapper.findAll('[data-testid="subagent-node"]')
+    expect(nodes).toHaveLength(3)
+    for (const node of nodes) {
+      expect(node.attributes('role')).toBe('treeitem')
+    }
+
+    // Root is the tree's only depth-0 node (aria-level is 1-based); both explore children are its
+    // direct descendants, one level deeper.
+    const root = wrapper.get('[data-testid="subagent-node-main-badge"]').element.closest('[data-testid="subagent-node"]')!
+    expect(root.getAttribute('aria-level')).toBe('1')
+
+    const child = wrapper.get('[data-agent-id="agent-107d2cba-explore-1"]')
+    expect(child.attributes('aria-level')).toBe('2')
+
+    // The root has children and starts expanded (SubagentNode.vue's default) — aria-expanded reflects
+    // that; a childless node (the explore leaves) carries no aria-expanded at all, per the ARIA tree
+    // pattern (only a node that can expand/collapse states which).
+    expect(root.getAttribute('aria-expanded')).toBe('true')
+    expect(child.attributes('aria-expanded')).toBeUndefined()
+  })
+
   it('renders a 50-node fixture in full via the tree entrypoint', async () => {
     const { wrapper } = await mountTree({ nodes: getSessionSubagentsFiftyNodes.data })
 

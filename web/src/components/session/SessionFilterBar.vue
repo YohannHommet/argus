@@ -134,14 +134,20 @@ function hasActiveFilters(): boolean {
     </div>
 
     <div class="flex min-w-36 flex-col gap-1">
-      <label class="text-muted-foreground text-xs">Project</label>
+      <label
+        id="session-filter-project-label"
+        class="text-muted-foreground text-xs"
+      >Project</label>
       <Select
         multiple
         :model-value="sessions.filters.project"
         data-testid="filter-project"
         @update:model-value="(v) => sessions.setFilters({ project: toStringArray(v) })"
       >
-        <SelectTrigger class="w-full">
+        <SelectTrigger
+          aria-labelledby="session-filter-project-label"
+          class="w-full"
+        >
           <SelectValue placeholder="All projects" />
         </SelectTrigger>
         <SelectContent>
@@ -157,14 +163,20 @@ function hasActiveFilters(): boolean {
     </div>
 
     <div class="flex min-w-36 flex-col gap-1">
-      <label class="text-muted-foreground text-xs">Vendor</label>
+      <label
+        id="session-filter-vendor-label"
+        class="text-muted-foreground text-xs"
+      >Vendor</label>
       <Select
         multiple
         :model-value="sessions.filters.vendor"
         data-testid="filter-vendor"
         @update:model-value="(v) => sessions.setFilters({ vendor: toStringArray(v) })"
       >
-        <SelectTrigger class="w-full">
+        <SelectTrigger
+          aria-labelledby="session-filter-vendor-label"
+          class="w-full"
+        >
           <SelectValue placeholder="All vendors" />
         </SelectTrigger>
         <SelectContent>
@@ -180,14 +192,20 @@ function hasActiveFilters(): boolean {
     </div>
 
     <div class="flex min-w-36 flex-col gap-1">
-      <label class="text-muted-foreground text-xs">Model</label>
+      <label
+        id="session-filter-model-label"
+        class="text-muted-foreground text-xs"
+      >Model</label>
       <Select
         multiple
         :model-value="sessions.filters.model"
         data-testid="filter-model"
         @update:model-value="(v) => sessions.setFilters({ model: toStringArray(v) })"
       >
-        <SelectTrigger class="w-full">
+        <SelectTrigger
+          aria-labelledby="session-filter-model-label"
+          class="w-full"
+        >
           <SelectValue placeholder="All models" />
         </SelectTrigger>
         <SelectContent>
@@ -203,14 +221,20 @@ function hasActiveFilters(): boolean {
     </div>
 
     <div class="flex min-w-36 flex-col gap-1">
-      <label class="text-muted-foreground text-xs">Status</label>
+      <label
+        id="session-filter-status-label"
+        class="text-muted-foreground text-xs"
+      >Status</label>
       <Select
         multiple
         :model-value="sessions.filters.status"
         data-testid="filter-status"
         @update:model-value="(v) => sessions.setFilters({ status: toStatusArray(v) })"
       >
-        <SelectTrigger class="w-full">
+        <SelectTrigger
+          aria-labelledby="session-filter-status-label"
+          class="w-full"
+        >
           <SelectValue placeholder="All statuses" />
         </SelectTrigger>
         <SelectContent>

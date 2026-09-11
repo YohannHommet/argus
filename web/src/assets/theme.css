@@ -202,3 +202,21 @@
     @apply bg-background text-foreground;
   }
 }
+
+/*
+ * PLAN.md P6-04: non-essential motion (tw-animate-css's sheet/dialog slide-in-from-*, hover/focus
+ * color transitions, the Timeline's smooth scroll anchoring) is disabled for anyone who has asked the
+ * OS for less of it. `!important` matches the standard reduced-motion recipe (MDN/web.dev) — the
+ * point is to override every component's own animation/transition declaration unconditionally, not
+ * to compete with them on specificity one class at a time.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

@@ -21,6 +21,7 @@ import { ApiError } from '@/api/errors'
 import type { components } from '@/api/schema'
 import { formatterForMetric, useChartResize, VChart, type ChartMetricKind, type ResizableChart } from '@/lib/echarts'
 import { chartLegend, metricColor, paletteColor, slimDataZoom, useChartTheme, withAlpha, type MetricKey } from '@/lib/echartsTheme'
+import ChartDataTable from './ChartDataTable.vue'
 import ErrorState from '@/components/common/ErrorState.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -159,6 +160,29 @@ const option = computed<TimeSeriesOption>(() => {
     series,
   }
 })
+
+/**
+ * PLAN.md P6-04: the disclosure's table — one column per series (plus "Other"), one row per bucket,
+ * same `seriesLabel`/`valueFormatter` the chart itself uses so the table can never drift from what's
+ * drawn. `option`'s own per-series color/dash logic is irrelevant here — a table has no color to pick.
+ */
+const dataTableColumns = computed<string[]>(() => {
+  const d = props.data
+  if (!d) return []
+  const names = d.series.map((point) => seriesLabel(point.key))
+  return ['Time', ...names, ...(d.other ? ['Other'] : [])]
+})
+
+const dataTableRows = computed<(string | number)[][]>(() => {
+  const d = props.data
+  if (!d) return []
+  const labels = axisLabels(d)
+  return labels.map((label, index) => [
+    label,
+    ...d.series.map((point) => valueFormatter.value(point.values[index] ?? 0)),
+    ...(d.other ? [valueFormatter.value(d.other.values[index] ?? 0)] : []),
+  ])
+})
 </script>
 
 <template>
@@ -175,16 +199,23 @@ const option = computed<TimeSeriesOption>(() => {
     v-else-if="isEmpty"
     title="No data for this range"
   />
-  <div
-    v-else
-    ref="containerRef"
-    class="h-64 w-full"
-  >
-    <VChart
-      ref="chartRef"
-      class="h-full w-full"
-      :option="option"
-      :autoresize="false"
+  <div v-else>
+    <div
+      ref="containerRef"
+      class="h-64 w-full"
+    >
+      <VChart
+        ref="chartRef"
+        class="h-full w-full"
+        :option="option"
+        :autoresize="false"
+      />
+    </div>
+    <ChartDataTable
+      caption="The chart's underlying data, as a table"
+      summary="Show data table"
+      :columns="dataTableColumns"
+      :rows="dataTableRows"
     />
   </div>
 </template>

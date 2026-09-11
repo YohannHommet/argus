@@ -107,6 +107,25 @@ describe('BreakdownChart', () => {
     document.documentElement.style.removeProperty('--foreground')
   })
 
+  // PLAN.md P6-04 AC: the chart's data isn't chart-only — a disclosure behind the canvas exposes the
+  // same rows as a real <table>.
+  it('renders a data-table toggle whose table has one row per Breakdown row (P6-04 AC)', () => {
+    const { wrapper } = mountChart({ data: getAnalyticsBreakdown200Default })
+
+    expect(wrapper.find('[data-testid="chart-data-table-toggle"]').exists()).toBe(true)
+
+    const table = wrapper.get('[data-testid="chart-data-table"]')
+    const rows = table.findAll('tbody tr')
+    expect(rows).toHaveLength(getAnalyticsBreakdown200Default.rows.length)
+    expect(rows[0]!.text()).toContain('Edit')
+    expect(rows[0]!.text()).toContain('812')
+  })
+
+  it('omits the data-table toggle when there is no data to show (empty state, no chart either)', () => {
+    const { wrapper } = mountChart({ data: { dimension: 'tool', rows: [] } })
+    expect(wrapper.find('[data-testid="chart-data-table-toggle"]').exists()).toBe(false)
+  })
+
   it('resizes the chart when its container is observed as resized (ResizeObserver stub)', () => {
     const { resize } = mountChart({ data: getAnalyticsBreakdown200Default })
     expect(resize).not.toHaveBeenCalled()

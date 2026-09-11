@@ -28,6 +28,7 @@ import SkeletonTable from '@/components/common/SkeletonTable.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { useCaptureReady } from '@/composables/useCaptureReady'
+import { useShortcuts } from '@/composables/useShortcuts'
 import type { LiveSubscription } from '@/stores/live'
 import { useLiveStore } from '@/stores/live'
 import { useMetaStore } from '@/stores/meta'
@@ -81,6 +82,32 @@ function onRetry(): void {
 function onLoadMore(): void {
   void sessions.loadMore()
 }
+
+/**
+ * PLAN.md P6-04: `/` focuses the filter bar's search field (matching `SessionFilterBar.vue`'s
+ * `id="session-search"`), `j`/`k` move real DOM focus between rendered `[data-testid="session-row"]`
+ * elements — plain focus, not a separate "selected index" concept, since every row is already a
+ * focusable, activatable `<tr>` (`SessionRow.vue`'s own `role="row"`/`tabindex="0"`/`@keydown.enter`)
+ * with a visible `focus-visible` ring; moving focus onto one both shows the same selection cue a
+ * mouse hover/click would and makes Enter immediately usable to open it.
+ */
+function focusSearch(): void {
+  document.getElementById('session-search')?.focus()
+}
+
+function moveRowFocus(direction: 1 | -1): void {
+  const rows = Array.from(document.querySelectorAll<HTMLElement>('[data-testid="session-row"]'))
+  if (rows.length === 0) return
+  const currentIndex = rows.indexOf(document.activeElement as HTMLElement)
+  const nextIndex = currentIndex === -1 ? 0 : Math.min(rows.length - 1, Math.max(0, currentIndex + direction))
+  rows[nextIndex]?.focus()
+}
+
+useShortcuts({
+  onFocusSearch: focusSearch,
+  onMoveNext: () => moveRowFocus(1),
+  onMovePrev: () => moveRowFocus(-1),
+})
 </script>
 
 <template>
