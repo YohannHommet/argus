@@ -125,6 +125,13 @@ can explore every view immediately. (`--mode=load` is the load generator — see
 | ![Tools explorer](docs/img/tools.png) | |
 | **Tools explorer** | |
 
+## Performance
+
+The async, batched ingest path sustains the **1000 events/s** target with **zero dropped events**
+(and no `too_old` rejections or deadlock-retries) at ~20 ms median write latency. See the
+[load-test results](docs/OPERATIONS.md#load-test-results) for the full rate → latency/drops table, and
+`scripts/loadtest.sh` to reproduce.
+
 ## Configuration
 
 Every setting is an `ARGUS_*` environment variable (or a YAML config file). The full, generated
