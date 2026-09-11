@@ -25,7 +25,19 @@ services:
     restart: unless-stopped
 
   argusd:
-    image: ghcr.io/yohannhommet/argus:latest # docker-compose.dev.yml adds `build:` for local dev
+    image: ghcr.io/yohannhommet/argus:latest
+    # `docker compose up` uses the published image when one is present locally;
+    # on a fresh clone with nothing pulled yet it builds from source instead
+    # (server/Dockerfile compiles + embeds the Vue SPA), so the README
+    # quickstart works before v0.1.0 is published to GHCR. Run
+    # `docker compose pull` to force the published image. The dev overlay pins
+    # VERSION/COMMIT and publishes 5432 on top of this.
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
+      args:
+        VERSION: ${VERSION:-dev}
+        COMMIT: ${COMMIT:-unknown}
     depends_on:
       postgres:
         condition: service_healthy
