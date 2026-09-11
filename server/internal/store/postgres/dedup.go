@@ -1,10 +1,4 @@
-// Package postgres — dedup.go implements SPEC §1.7 rule 2's idempotency
-// gate: the non-partitioned ingest_dedup ledger is the single mechanism for
-// deduplicating every source (otel_log, otel_metric, hook), because
-// receipt-time ts on hook events makes any ts-bearing unique key useless for
-// hook dedup. WriteBatch and WriteMetrics both call insertIngestDedup before
-// touching any projection table (the lock-ordering invariant, SPEC §1.6:
-// ingest_dedup is always first).
+// Package postgres implements dedup via ingest_dedup ledger (SPEC §1.7 rule 2, lock-ordering SPEC §1.6).
 package postgres
 
 import (
@@ -17,11 +11,7 @@ import (
 	"github.com/YohannHommet/argus/server/internal/store/postgres/gen"
 )
 
-// insertIngestDedup runs the SPEC §1.7 rule 2 gate for dedup keys inside tx.
-// Keys are sorted ascending first (lock-ordering invariant SPEC §1.6), then
-// inserted with ON CONFLICT DO NOTHING RETURNING to report only new keys.
-// Duplicate keys within dedupKeys collapse to a single row—the semantics
-// WriteBatch needs for duplicate-event batches. Returns the set of new keys.
+// insertIngestDedup runs the SPEC §1.7 rule 2 dedup gate, returning newly admitted keys.
 func insertIngestDedup(ctx context.Context, tx pgx.Tx, dedupKeys []string) (map[string]bool, error) {
 	if len(dedupKeys) == 0 {
 		return map[string]bool{}, nil

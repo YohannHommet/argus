@@ -9,22 +9,16 @@ import (
 	"github.com/YohannHommet/argus/server/internal/store"
 )
 
-// EventReader is the narrow store port ListEvents/GetEvent/ListToolCalls
-// need — the same consumer-owned-port convention as SessionReader.
-// ListEvents/ListToolCalls each serve two endpoints apiece (session-scoped
-// and cross-session — store.EventFilter.SessionID / store.
-// ToolCallFilter.SessionID is what distinguishes them, matching how
-// store.Reader itself shares one method per pair, SPEC §4.2/§4.3).
+// EventReader is the narrow store port for event/tool-call list operations.
+// ListEvents/ListToolCalls each serve two endpoints via filter.SessionID (session-scoped or cross-session).
 type EventReader interface {
 	ListEvents(ctx context.Context, f store.EventFilter, p store.Page) ([]model.Event, store.Cursor, error)
 	GetEvent(ctx context.Context, ref model.EventRef) (*model.Event, error)
 	ListToolCalls(ctx context.Context, f store.ToolCallFilter, p store.Page) ([]model.ToolCall, store.Cursor, error)
 }
 
-// ErrEventNotFound is query's own not-found sentinel for GetEvent (SPEC
-// §4.1's `GET /api/v1/events/{ref}` 404). Recognised from the seam-level
-// store.ErrEventNotFound, so this package needs no dependency on a concrete
-// backend — same rationale as ErrSessionNotFound in sessions.go.
+// ErrEventNotFound is query's not-found sentinel, recognised from seam-level store.ErrEventNotFound
+// (same rationale as ErrSessionNotFound: no concrete backend dependency).
 var ErrEventNotFound = errors.New("query: event not found")
 
 // EventsResult is ListEvents' result: the page of rows plus its pagination

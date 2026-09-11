@@ -40,14 +40,8 @@ type options struct {
 	registerer prometheus.Registerer
 }
 
-// WithRegisterer overrides the Prometheus registerer the ingest pipeline's
-// metrics register against (default: prometheus.DefaultRegisterer, via
-// ingest.NewMetrics's own nil-means-default convention). Production never
-// needs this; a test process that constructs more than one App (P2-13's
-// end-to-end test, which starts a second App with a deliberately tiny
-// ingest queue for its load-capacity check) does, since the default
-// registry is a package-level global and registering the same metric names
-// on it twice panics.
+// WithRegisterer overrides the Prometheus registerer to avoid duplicate-metric
+// panics when a test constructs multiple Apps (P2-13).
 func WithRegisterer(reg prometheus.Registerer) Option {
 	return func(o *options) { o.registerer = reg }
 }
@@ -247,19 +241,9 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, opts ...O
 	}, nil
 }
 
-// newStatsSnapshotFunc closes over the ingest pipeline and the store's
-// active-session count — internal/app is the only package allowed to know
-// about both at once (package doc comment), which is exactly why
-// internal/stream's SnapshotFunc/Snapshot types exist: StatsBroadcaster
-// itself never imports internal/ingest or internal/store/postgres (SPEC §3.1
-// depguard).
-//
-// activeSessions is taken as a function rather than the *postgres.Store it
-// comes from so this composition is unit-testable without a live database.
-// That matters more than it looks: the DroppedTotal decision documented below
-// has no observable consequence anywhere else, so without a test able to call
-// this function directly, a future edit could silently change the meaning of
-// an operator-facing metric with the whole suite still green.
+// newStatsSnapshotFunc closes over pipeline and store via SnapshotFunc seam
+// (depguard: internal/stream never imports internal/ingest or internal/store).
+// activeSessions is a func so this is testable without a live database.
 func newStatsSnapshotFunc(ing *ingest.Pipeline, activeSessions func(context.Context) (int64, error)) stream.SnapshotFunc {
 	return func(ctx context.Context) (stream.Snapshot, error) {
 		active, err := activeSessions(ctx)
@@ -273,28 +257,8 @@ func newStatsSnapshotFunc(ing *ingest.Pipeline, activeSessions func(context.Cont
 			LagSum:         lagSum,
 			LagCount:       lagCount,
 			ActiveSessions: int(active),
-			// DroppedTotal is ingest drops ONLY — events that never reached
-			// storage at all (queue-full shedding, a permanent write error, a
-			// drain-deadline timeout; see Metrics.Dropped's own doc comment).
-			// It deliberately does NOT include hub.DroppedTotal(), even though
-			// that is also real loss, because the two are not the same kind of
-			// fact and this field is the one an operator alerts on:
-			//
-			//   - an ingest drop is permanent. No reconnect can recover it,
-			//     because nothing was ever stored to replay.
-			//   - a hub drop means the event IS stored and this subscriber's
-			//     own SSE buffer merely fell behind. SPEC §5.1 already gives
-			//     that its own dedicated channel — `event: lag`, "{dropped: N}
-			//     when a subscriber's buffer overflowed" — which the client
-			//     answers by refetching, and it is per-subscriber, which the
-			//     process-wide hub counter is not.
-			//
-			// Summing them would make a self-healing display-layer condition
-			// indistinguishable from permanent data loss in the single number
-			// the data-quality screen's dropped tile reports (deviation D-28
-			// names StreamStatsFrame.dropped_total as that tile's future
-			// backing field). Fleet-wide hub-drop health remains available to
-			// an operator as argus_stream_dropped_total on /metrics.
+			// DroppedTotal: ingest-only (permanent loss); hub drops reported
+			// separately (per-subscriber lag, not process-wide data loss; D-28).
 			DroppedTotal: int64(ing.Metrics().DroppedCount()),
 		}, nil
 	}

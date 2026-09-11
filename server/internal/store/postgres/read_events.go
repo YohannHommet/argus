@@ -1,37 +1,5 @@
-// Package postgres — read_events.go implements store.Reader's ListEvents and
-// GetEvent (SPEC §3.3, §4.3, P3-03). ListEvents is one of the three
-// hand-built dynamic-filter/dynamic-sort queries SPEC §3.3 carves out of
-// sqlc (see filter.go's package doc), serving both the session-scoped
-// timeline (`GET /api/v1/sessions/{id}/timeline`) and the cross-session
-// search (`GET /api/v1/events`) through the same store.EventFilter.SessionID
-// switch. GetEvent is a fixed, single-statement PK lookup and goes through
-// sqlc (db/queries/read_events.sql), matching read_sessions.go's GetSession.
-//
-// Ordering vs keyset (SPEC §1.2, §4.3): the documented response order is
-// `(ts, vendor_seq NULLS LAST, seq)`, NOT the same order as the `(ts, seq)`
-// primary key. A keyset predicate built only from (ts, seq) — "continue past
-// the last row's ts/seq" — would silently skip or repeat rows whenever two
-// events share the same ts but differ in vendor_seq in a way that reorders
-// them relative to seq (e.g. seq=10/vendor_seq=5 and seq=11/vendor_seq=3 at
-// the same ts: the correct order is seq=11 before seq=10, but a (ts, seq)-
-// only predicate would treat seq=11's page boundary as "everything with
-// seq>11", dropping seq=10 entirely). So the keyset predicate here is the
-// exact 3-key lexicographic continuation of (ts, vendor_seq, seq), not a
-// (ts, seq) shortcut — see eventKeysetPredicate. This still rides the
-// `events (session_id, ts, seq)` index for the session-scoped case (SPEC
-// §2.5): the predicate's leading term is ts (the partition key and the
-// index's second column), so Postgres both prunes partitions and uses the
-// index for the session_id equality + ts range, applying the vendor_seq/seq
-// tiebreak as a filter — it does not need to avoid a Sort node to satisfy
-// the "index scan with partition pruning" AC.
-//
-// `order=desc` is the *exact reverse* of `order=asc`, not a naive `DESC` on
-// each column: SPEC's `vendor_seq NULLS LAST` ordering is the "NULL sorts as
-// +infinity" total order, and Postgres's own DESC default (NULLS FIRST) is
-// exactly that order's reverse traversal — a null vendor_seq is still the
-// largest possible value, so it appears first when descending. asc/desc
-// therefore share one predicate/comparison shape (vendorSeqCompare,
-// vendorSeqEqual), parameterized only by direction.
+// Package postgres implements store.Reader's ListEvents and GetEvent (SPEC §3.3, §4.3, P3-03).
+// Keyset predicates use (ts, vendor_seq, seq) for correct ordering with vendor_seq reordering (SPEC §1.2, §4.3).
 package postgres
 
 import (
@@ -77,13 +45,7 @@ const (
 // store.ErrEventNotFound rather than its own value.
 var ErrEventNotFound = store.ErrEventNotFound
 
-// eventCursorPayload is the wire shape SPEC §4.1 specifies:
-// `{"k":"<sort key>","v":[…]}`. V holds exactly three elements: ts,
-// vendor_seq (nullable), seq — the full (ts, vendor_seq, seq) tuple the
-// ordering AC requires (see package doc). K is the order ("asc"/"desc") the
-// cursor was minted under, rejecting a cursor replayed against the opposite
-// direction the same way sessionCursorPayload rejects a cursor replayed
-// against a different sort.
+// eventCursorPayload is the wire shape SPEC §4.1: {"k":"<sort order>","v":[ts,vendor_seq,seq]}.
 type eventCursorPayload struct {
 	K string            `json:"k"`
 	V []json.RawMessage `json:"v"`
@@ -145,15 +107,7 @@ func decodeEventCursor(c store.Cursor, order store.SortOrder) (ts time.Time, ven
 	return ts, vendorSeq, seq, nil
 }
 
-// vendorSeqCompare renders "vendor_seq is strictly further along than v0 in
-// the direction of travel" under the NULLS-are-+infinity total order the
-// package doc describes: for asc (continuing forward), nothing is "greater"
-// than a nil v0 since nil is already the maximum, so "" is returned (the
-// caller must fall through to the equality tier); for desc (continuing
-// backward) past a nil v0, every non-nil vendor_seq is "less than infinity".
-// For a non-nil v0, the nil column value always counts as satisfying "greater
-// than v0" (asc) since nil is the maximum, but never satisfies "less than
-// v0" (desc).
+// vendorSeqCompare renders vendor_seq comparison under NULLS-are-+infinity order (SPEC §4.3).
 func vendorSeqCompare(b *clauseBuilder, column string, v0 *int64, asc bool) string {
 	if v0 == nil {
 		if asc {
@@ -177,12 +131,7 @@ func vendorSeqEqual(b *clauseBuilder, column string, v0 *int64) string {
 	return fmt.Sprintf("%s = %s", column, b.placeholder(*v0))
 }
 
-// eventKeysetPredicate renders the "seek past the last row of the previous
-// page" WHERE fragment for the full (ts, vendor_seq NULLS LAST, seq) sort
-// key (SPEC §1.2, §4.3) — see package doc for why this must be the exact
-// 3-tuple continuation, not a (ts, seq) shortcut. asc/desc share this one
-// shape; only the comparison operator and vendorSeqCompare's direction
-// differ (package doc: desc is the tuple order's exact reverse).
+// eventKeysetPredicate renders "seek past last row" WHERE for (ts, vendor_seq, seq) keyset (SPEC §1.2, §4.3).
 func eventKeysetPredicate(b *clauseBuilder, order store.SortOrder, tsCol, vendorSeqCol, seqCol string, ts time.Time, vendorSeq *int64, seq int64) string {
 	asc := order != store.OrderDesc
 	op := ">"

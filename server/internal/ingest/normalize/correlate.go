@@ -100,10 +100,7 @@ func ExtractContribution(e model.Event) (ToolCallContribution, bool) {
 		FilePath:       e.FilePath,
 		DurationMS:     e.DurationMS,
 	}
-	// tool_input_size_bytes / tool_result_size_bytes: attrs-only fields
-	// (SPEC §1.3), read here regardless of Kind — only tool.result events
-	// carry them in practice (live capture), but a defensive read costs
-	// nothing and never invents a value Attrs doesn't have.
+	// tool_input_size_bytes / tool_result_size_bytes are attrs-only (SPEC §1.3).
 	c.InputSizeBytes = int64PtrToIntPtr(Int64(e.Attrs, "tool_input_size_bytes"))
 	c.ResultSizeBytes = int64PtrToIntPtr(Int64(e.Attrs, "tool_result_size_bytes"))
 	return c, true

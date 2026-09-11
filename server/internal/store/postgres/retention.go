@@ -1,27 +1,6 @@
 // Package postgres — retention.go implements store.Maintenance.ApplyRetention
-// and PruneDedup (SPEC §2.4 "Retention job", P3-10): dropping fully-expired
-// monthly `events`/`metric_samples` partitions (coarse, SPEC §2.2: "a
-// partition drops only when entirely older than the cutoff"), an additional
-// `--precise` batched-delete mode for the one boundary partition a coarse
-// drop cannot touch, and pruning `ingest_dedup` in bounded batches (SPEC
-// §1.7 rule 2's ledger retention).
-//
-// # Partition listing duplicates partitionCoverage's pg_inherits query
-//
-// partitions.go's partitionCoverage (P2-05) already lists a parent's
-// attached monthly partitions via pg_inherits and parses their [start, end)
-// range from the name via monthlyPartitionName — exactly what ApplyRetention
-// needs to decide which partitions are fully expired. This file reuses
-// monthlyPartitionName and monthRange (both already unexported package-level
-// symbols in partitions.go) rather than duplicating the regex, but it does
-// re-issue the pg_inherits query itself (listPartitionRanges below) instead
-// of calling partitionCoverage: this ticket's file-ownership boundary
-// (P3-10 owns retention.go/rebuild.go/explain_test.go plus the ApplyRetention/
-// PruneDedup/RebuildProjections stub lines in pool.go — partitions.go itself
-// is out of scope) rules out refactoring partitionCoverage into a shared
-// "list partitions with their ranges" helper both files could call. The
-// duplication is small (one query, one loop) and documented here rather than
-// silently repeated.
+// and PruneDedup (SPEC §2.4, P3-10): partition drops + dedup ledger retention.
+// Note: listPartitionRanges re-issues partitionCoverage's pg_inherits query (file ownership boundary).
 package postgres
 
 import (
@@ -36,17 +15,10 @@ import (
 // retentionPartitionParents are the two RANGE-partitioned tables (SPEC §2.2/§2.3).
 var retentionPartitionParents = []string{"events", "metric_samples"}
 
-// pruneDedupBatchSize bounds each PruneDedup DELETE (SPEC §2.4: "in bounded
-// batches"), mirroring rollups.go's ClaimDirtyBuckets/ARGUS_ROLLUP_MAX_BUCKETS
-// idiom of capping one statement's row count rather than deleting the whole
-// expired set in one unbounded statement, which could hold a lock for a long
-// time against a large backlog.
+// pruneDedupBatchSize bounds each PruneDedup DELETE in bounded batches (SPEC §2.4).
 const pruneDedupBatchSize = 5000
 
-// listPartitionRanges lists, inside tx, the monthly partitions currently
-// attached to parent ("events" or "metric_samples") and their [Start, End)
-// coverage, keyed by partition name. See this file's package doc for why
-// this duplicates (rather than calls) partitions.go's partitionCoverage.
+// listPartitionRanges lists monthly partitions and their [Start, End) coverage.
 func listPartitionRanges(ctx context.Context, tx pgx.Tx, parent string) (map[string]monthRange, error) {
 	rows, err := tx.Query(ctx, `
 		SELECT c.relname

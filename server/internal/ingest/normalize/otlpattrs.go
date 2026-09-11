@@ -68,33 +68,9 @@ func otlpBodyString(v *commonpb.AnyValue) (s string, ok bool) {
 }
 
 // sanitizeAttrString and sanitizeAttrFloat are the package's single sanitization
-// point for vendor scalars (audit finding M5): every string/float64 attribute,
-// wherever decoded (otlpAnyValueToGo, otlpBodyString, hooks.go's sanitizeHookAttrs),
-// passes through before reaching model.Event.Attrs. Two independent failures:
-// - NUL byte in string → `attrs jsonb` cast raises SQLSTATE 22P05 (permanent).
-// - NaN/±Inf float → json.Marshal fails (transient per retry.go default).
-// Either takes out entire WriteBatch (one INSERT, 2xx already out to clients).
-// Sanitization is replacement never drop: key stays present so callers see
-// caller reading `attrs->>'…'` still gets a value, just not the poisoned
-// one.
-//   - sanitizeAttrString replaces a NUL byte and any invalid UTF-8 byte
-//     sequence with U+FFFD (the Unicode replacement character) — the
-//     standard "this byte was not valid text" signal, and the same
-//     substitution encoding/json itself already performs silently for
-//     invalid UTF-8 today (silently, because it is not the NUL case that
-//     breaks jsonb; NUL *is* valid UTF-8 and Postgres's jsonb type is the
-//     one that rejects it).
-//   - sanitizeAttrFloat replaces a non-finite float64 with its sign-aware
-//     string form ("NaN", "+Inf", "-Inf"): jsonb has no numeric
-//     representation for it, and turning the value into a string
-//     preserves that it was observed as non-finite rather than silently
-//     coercing it to 0 or dropping the key. This changes the value's Go
-//     type (float64 -> string), which is why it is applied at decode time
-//     rather than deeper in the pipeline: every typed accessor
-//     (attrs.go's Float64, etc.) already treats a wrong-typed attribute as
-//     absent, so a sanitized non-finite value simply stops being readable
-//     as a number, which is the correct outcome for a value that was
-//     never a valid number.
+// point (M5): replace poisoned vendor scalars before they reach model.Event.Attrs.
+// NUL bytes and NaN/±Inf floats cause silent WriteBatch failures; replaced with
+// U+FFFD and string form respectively, never dropped.
 func sanitizeAttrString(s string) string {
 	if !strings.ContainsRune(s, 0) && utf8.ValidString(s) {
 		return s

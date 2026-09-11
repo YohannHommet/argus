@@ -1,59 +1,6 @@
-// Package postgres — upsert_subagent.go builds the `subagents` upsert
-// (SPEC §1.6, §1.5.3, §1.9, §2.3): the P2-08 seam in write.go, filled in.
-//
-// # Winner is always hook (SPEC §1.5.3)
-//
-// Unlike sessions/tool_calls, subagents.* has exactly one possible source:
-// "OTel emits no subagent lifecycle event at all" (SPEC §1.5.3). There is
-// therefore nothing for a field_ranks precedence mechanism to arbitrate
-// between two sources — every merge below is a plain monotonic
-// COALESCE/LEAST/GREATEST, not a ranked comparison. field_ranks is still
-// written (as an empty object) purely because the column is NOT NULL; it is
-// never read back by this file.
-//
-// # NULL-vs-0 for tool_call_count (lead note 5, SPEC §1.9)
-//
-// tool_call_count is recomputed (not incremented, exactly like
-// sessions.tool_call_count) from tool_calls.agent_id — itself hook-only
-// (SPEC §1.5.3). Whether a session has ANY tool-level hook coverage at all
-// is judged independently, from tool_calls.correlation <> 'otel_only'
-// (db/queries/subagents.sql: SessionsWithToolHookCoverage): a session with
-// no such row could not possibly have a real "0 tool calls for this agent"
-// answer, because hooks were never on to report it. NULL is written for
-// every subagent in such a session, never 0 — the RecomputeSubagentToolCallCounts
-// query encodes this distinction directly in SQL so no Go code path can
-// accidentally collapse it (SPEC §1.9: "0 would be a lie").
-//
-// # depth: parent chain with a cap, out-of-order arrival (lead note 4)
-//
-// A SubagentStart may arrive before its own parent's SubagentStart (SPEC
-// §1.7: out-of-order arrival is normal, and stub-on-reference forbids
-// buffering). resolveDepths therefore does a SINGLE hop: it looks up the
-// parent's depth as currently stored (querying the database, plus this same
-// batch's own in-flight aggs for a parent created in the very same
-// WriteBatch call) and adds one, capped at subagentMaxDepth. When the
-// parent is not found in either place, depth defaults to 1 (as if the
-// subagent were a direct child of the synthetic root) — this is a
-// documented approximation, not a guess promoted to fact: the stored
-// `depth` column self-heals on a LATER write that still carries
-// parent_agent_id (the ON CONFLICT clause below only overwrites depth when
-// EXCLUDED.parent_agent_id is non-null), but a subagent whose only event
-// ever folded had no parent info keeps depth=1 forever in the stored
-// column. This is why SubagentTree (subagent_tree.go) does NOT trust the
-// stored depth column for its response: it recomputes depth from the LIVE
-// parent_agent_id chain via a recursive CTE at read time, which is always
-// correct regardless of write-time arrival order — the stored column here
-// is best-effort bookkeeping, not the read path's source of truth.
-//
-// # status derivation and the stub-on-reference default (lead note 7)
-//
-// The DDL default for `status` is 'running', but this file always writes
-// an explicit computed value on every INSERT — including a
-// SubagentStop-without-a-matching-SubagentStart, which computes 'unknown'
-// (started_at IS NULL, ended_at IS NOT NULL) — so the column default is
-// never actually reached by any row this code writes; it exists for the
-// (SPEC-permitted) case of a row created by a future code path that has
-// even less information than this one always has.
+// Package postgres — upsert_subagent.go builds the `subagents` upsert (SPEC §1.6, §1.5.3, §1.9, §2.3, P2-08).
+// Winner is always hook (SPEC §1.5.3); tool_call_count NULL-vs-0 per SPEC §1.9.
+// depth: one-hop resolution, self-heals on later writes; read path (subagent_tree.go) recomputes from live chain.
 package postgres
 
 import (
@@ -69,11 +16,7 @@ import (
 	"github.com/YohannHommet/argus/server/internal/store/postgres/gen"
 )
 
-// subagentMaxDepth is SPEC §2.3/§4.3's depth cap ("depth cap 16 so a
-// malformed parent_agent_id cycle cannot hang the query"), applied on both
-// the write side (this file, one hop at a time) and the read side
-// (subagent_tree.go's recursive CTE, which is the guard that actually
-// matters for the cycle AC — see that file's doc).
+// subagentMaxDepth is SPEC §2.3/§4.3's depth cap to prevent cycles (applied write+read sides).
 const subagentMaxDepth = 16
 
 // subagentKey identifies one subagents row, mirroring the table's PK

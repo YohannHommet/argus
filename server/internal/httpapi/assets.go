@@ -43,8 +43,7 @@ func mountSPA(r chi.Router, assets fs.FS) {
 			problemNotFoundHandler(w, req)
 			return
 		}
-		// Static assets with extensions (e.g. /favicon.svg) 404 if missing, not serve index.html.
-		// Client-side routes without extensions still fall through to index.html.
+		// Assets with extensions (e.g. /favicon.svg) 404 if missing; routes without extensions → index.html (client-side routing).
 		if isRootStaticAssetPath(req.URL.Path) {
 			if rootStaticAssetExists(assets, req.URL.Path) {
 				fileServer.ServeHTTP(w, req)

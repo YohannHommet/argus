@@ -1,9 +1,4 @@
-// Package postgres — events.go implements the bulk `events` insert (SPEC
-// §2.2, §1.6) WriteBatch issues after sessions/turns: one unnest-driven
-// INSERT for every candidate event, sorted by (ts, dedup_key) ascending
-// (the lock-ordering invariant, SPEC §1.6), with the parent-level
-// `ON CONFLICT (ts, dedup_key) DO NOTHING` SPEC §1.7 rule 2 calls "defence
-// in depth" behind the ingest_dedup ledger.
+// Package postgres implements bulk events insert with ON CONFLICT dedup defence (SPEC §1.6, §1.7 rule 2).
 package postgres
 
 import (
@@ -24,8 +19,7 @@ type insertedEvent struct {
 	Seq int64
 }
 
-// insertEvents bulk-inserts candidates (pre-filtered, sorted by ts then dedup_key)
-// into `events` and returns the rows the UNIQUE (ts, dedup_key) constraint admitted.
+// insertEvents bulk-inserts events sorted by (ts, dedup_key), returning admitted rows.
 func insertEvents(ctx context.Context, tx pgx.Tx, candidates []model.Event) (map[string]insertedEvent, error) {
 	if len(candidates) == 0 {
 		return map[string]insertedEvent{}, nil

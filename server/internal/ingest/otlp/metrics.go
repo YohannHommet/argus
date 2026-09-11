@@ -9,12 +9,7 @@ import (
 	"github.com/YohannHommet/argus/server/internal/ingest/normalize"
 )
 
-// handleMetrics implements POST /v1/metrics (SPEC §3.4): decodes
-// resource_metrics, runs through the normalizer (SPEC §1.8/§2.3), enqueues
-// samples, and returns the OTLP/HTTP response. Unlike handleLogs, rejections
-// are never about missing session.id (SPEC §1.8: acceptable) — they are
-// structurally-undecodable shapes (aggregation type, NumberDataPoint format).
-// partial_success.rejected_data_points reports them like handleLogs' rejected_log_records.
+// handleMetrics implements POST /v1/metrics (SPEC §3.4): decode, normalize, enqueue; rejections never about session.id.
 func (h *Handler) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	format, body, derr := readBody(w, r, h.maxBodyBytes)
 	if derr != nil {
@@ -35,9 +30,7 @@ func (h *Handler) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Sum Rejection.Count, not len(rejections): a single Rejection can stand for
-	// an entire Metric's worth of data points. FromOTLPMetrics emits one value
-	// for an unsupported aggregation type regardless of how many points it carried.
+	// Sum Rejection.Count, not len: one Rejection can stand for an entire Metric's worth of points.
 	var rejectedDataPoints int64
 	for _, rej := range rejections {
 		rejectedDataPoints += int64(rej.Count)
@@ -46,8 +39,7 @@ func (h *Handler) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	writeExportResult(w, format, "rejectedDataPoints", rejectedDataPoints, metricRejectionSummary(rejections))
 }
 
-// metricRejectionSummary is rejectionSummary's counterpart for FromOTLPMetrics'
-// Rejection list (rejections are never about session.id).
+// metricRejectionSummary renders rejection summary for metrics (structural only, never session.id).
 func metricRejectionSummary(rejections []normalize.Rejection) string {
 	if len(rejections) == 0 {
 		return ""

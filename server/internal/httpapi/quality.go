@@ -15,9 +15,7 @@ import (
 // defaultUnknownKindsSince is the documented default for the `since` parameter.
 const defaultUnknownKindsSince = "-24h"
 
-// unknownKindsListResponse is GET /api/v1/quality/unknown-kinds' body
-// (openapi.yaml's QualityUnknownKindsResponse): model.UnknownKindGroup
-// already carries the exact wire shape.
+// unknownKindsListResponse is GET /api/v1/quality/unknown-kinds' body (matches openapi.yaml schema exactly).
 type unknownKindsListResponse struct {
 	Rows []model.UnknownKindGroup `json:"rows"`
 }

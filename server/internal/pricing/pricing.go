@@ -1,28 +1,8 @@
-// Package pricing implements the cost-estimation half of docs/SPEC.md
-// §2.4: given a model name, a set of token counts, and the event's
-// timestamp, resolve the applicable model_prices row and compute a USD
-// cost. It is a pure computation package — no database, no
-// internal/store, no internal/httpapi import — so its tests run without a
-// live Postgres. internal/store/postgres/prices.go owns reading rows out
-// of model_prices and hands them to Estimate as a []Price.
+// Package pricing implements cost estimation from SPEC §2.4. It is a pure computation package
+// (no database, no other internal packages), so tests run without Postgres.
 //
-// # Why internal/pricing, not internal/query/pricing (deviation from SPEC §3.1)
-//
-// This package originally lived at internal/query/pricing. It moved here
-// (P3-05 defect 2) because .golangci.yml's depguard "store" rule denies
-// internal/store the whole internal/query subtree (SPEC §3.1: "store never
-// imports … query"), yet the rollup job in internal/store/postgres needs
-// this exact algorithm to compute cost_estimated_usd, and had a
-// byte-for-byte duplicate of it (estimateCost/resolvePriceRow/
-// bestCandidatePriceModel in rollups.go) as the only alternative. A leaf
-// package that imports nothing of Argus's own (like internal/model)
-// satisfies depguard's store rule, which only denies internal/httpapi and
-// internal/query specifically — so internal/pricing is importable from both
-// internal/query (the read API) and internal/store (the rollup job)
-// without duplicating the lookup. SPEC §3.1's layout listing does not
-// mention internal/pricing; this is a deliberate, minimal, documented
-// deviation, not an oversight — the alternative (two independent
-// implementations of money arithmetic) is worse.
+// Originally internal/query/pricing (P3-05 defect 2), moved here to allow both internal/query
+// and internal/store/postgres (rollup job) to import it without violating depguard's store rule.
 package pricing
 
 import (
@@ -60,14 +40,8 @@ type Tokens struct {
 	CacheWrite int64
 }
 
-// Estimate resolves the price row for model at the event date `at` and
-// returns the USD cost of tokens, per the SPEC §2.4 lookup rule: "latest
-// effective_from <= event date, exact model, else longest matching
-// prefix". Exact match always wins over any prefix match; among prefix
-// candidates the longest price-table model name that is a prefix of model
-// wins; within the chosen model, the row with the latest EffectiveFrom not
-// after `at` wins. Returns ErrNoPrice when nothing resolves at all — the
-// caller must never substitute zero or another model's price.
+// Estimate resolves the price row per SPEC §2.4 lookup rule and returns USD cost of tokens.
+// Returns ErrNoPrice when nothing resolves; callers must not substitute zero or another model's price.
 func Estimate(prices []Price, model string, tokens Tokens, at time.Time) (float64, error) {
 	p, ok := resolve(prices, model, at)
 	if !ok {
@@ -91,12 +65,8 @@ func resolve(prices []Price, model string, at time.Time) (Price, bool) {
 	return latestAtOrBefore(prices, candidate, at)
 }
 
-// bestCandidateModel returns, among the distinct model names present in
-// prices, the one that best matches the observed model per SPEC §2.4: an
-// exact match wins outright; otherwise the longest price-table model name
-// that is a prefix of model wins (the "versioned suffix" case, e.g. a
-// price row for "claude-sonnet-4-5" matching an observed
-// "claude-sonnet-4-5-20250929"). Returns "" when nothing matches.
+// bestCandidateModel returns the best matching model per SPEC §2.4: exact match wins,
+// else the longest prefix match (SPEC §2.4: "versioned suffix" case). Returns "" if no match.
 func bestCandidateModel(prices []Price, model string) string {
 	longestPrefix := ""
 	for _, p := range prices {
@@ -110,9 +80,7 @@ func bestCandidateModel(prices []Price, model string) string {
 	return longestPrefix
 }
 
-// latestAtOrBefore returns the row for the given model with the latest
-// EffectiveFrom not after at, or false if the model has no such row (e.g.
-// every row for it is dated after at).
+// latestAtOrBefore returns the row for the given model with the latest EffectiveFrom not after at.
 func latestAtOrBefore(prices []Price, model string, at time.Time) (Price, bool) {
 	var best Price
 	found := false

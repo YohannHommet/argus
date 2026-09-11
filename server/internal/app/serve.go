@@ -99,10 +99,8 @@ func (a *App) Serve(ctx context.Context) error {
 	a.server = &http.Server{
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
-		// ReadTimeout/WriteTimeout bound whole lifecycle: chi's mw.Timeout
-		// only cancels ctx, which io.ReadAll(r.Body) doesn't observe (M11 fix).
-		// SSE endpoints: use http.ResponseController.SetWriteDeadline per-write,
-		// don't raise global 30s for streaming connections.
+		// ReadTimeout/WriteTimeout bound whole lifecycle (M11: chi's
+		// mw.Timeout only cancels ctx, which io.ReadAll doesn't observe).
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 30 * time.Second,
 		IdleTimeout:  60 * time.Second,
@@ -181,7 +179,7 @@ func (a *App) Serve(ctx context.Context) error {
 	case <-ctx.Done():
 	}
 
-	//nolint:contextcheck // ctx is already Done() (or was never used) here; shutdown deliberately derives its own bounded context(s) from Background rather than a cancelled one
+	//nolint:contextcheck // shutdown derives independent timeout budgets from Background (M4, M11 fixes)
 	return errors.Join(serveErrOrNil, a.shutdown())
 }
 
@@ -191,36 +189,9 @@ func (a *App) Serve(ctx context.Context) error {
 func (a *App) shutdown() error {
 	a.ready.SetReady(false) // (1) /readyz starts failing
 
-	// P5-03: the hub is shut down BEFORE http.Server.Shutdown is even
-	// called — not after, and not concurrently with it racing to see which
-	// finishes first. This ordering is load-bearing, not stylistic:
-	//
-	// SPEC §3.8 step (2) says in-flight requests finish AND "SSE subscribers
-	// get a final event: shutdown". But http.Server.Shutdown blocks until
-	// every active handler returns, and an SSE handler's runLiveLoop
-	// (httpapi/sse.go) never returns on its own — it only returns when its
-	// subscription channel closes, which happens on ctx.Done() (the request
-	// context, only cancelled once Shutdown's grace period actually
-	// expires) or when the hub closes it. Calling server.Shutdown FIRST
-	// would therefore block for the entire ARGUS_SHUTDOWN_GRACE with every
-	// SSE connection still open and the shutdown frame never sent — exactly
-	// the failure mode SPEC §3.8 exists to prevent, not a corner case.
-	//
-	// Hub.Shutdown pushes one MessageShutdown to every subscriber and closes
-	// their channels synchronously before it returns (Hub.Shutdown's own
-	// doc comment), so every SSE handler's runLiveLoop wakes up on its next
-	// select iteration, writes its `event: shutdown` frame, and returns —
-	// well within the grace, in practice near-instantly. server.Shutdown
-	// below then only has to wait for ordinary (non-streaming) in-flight
-	// requests, which is what it was always meant to bound.
-	//
-	// A stream request that arrives in the gap between this call and
-	// server.Shutdown returning gets stream.ErrClosed from Subscribe, which
-	// the SSE handler already maps to a 503 (sse.go) — the correct answer
-	// for "the server is going down", not a bug this ordering introduces.
-	// TestE2E_ShutdownDeliversStreamFrame (stream_e2e_test.go) pins both
-	// halves: the client receives the frame, and Serve returns well inside
-	// the grace rather than blocking for the whole budget.
+	// P5-03: hub shut down BEFORE server.Shutdown (order is load-bearing:
+	// server.Shutdown blocks until every handler returns; SSE handlers never
+	// return until their subscription closes; hub closure sends final frame).
 	a.hub.Shutdown()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), a.cfg.ShutdownGrace)

@@ -112,11 +112,7 @@ func repeatedParam(r *http.Request, name string) []string {
 	return r.URL.Query()[name]
 }
 
-// castSessionStatuses casts repeated `status` values to model.SessionStatus
-// without validating against the closed set: an unrecognized value simply
-// matches no stored session (store's own filter is a plain column
-// equality), which is a friendlier failure mode than a 400 for what is,
-// after all, one of SessionFilter's OR-set fields.
+// castSessionStatuses casts repeated `status` values; unrecognized values match no sessions (friendly degradation).
 func castSessionStatuses(raw []string) []model.SessionStatus {
 	if len(raw) == 0 {
 		return nil
@@ -128,8 +124,7 @@ func castSessionStatuses(raw []string) []model.SessionStatus {
 	return out
 }
 
-// castKinds casts repeated `kinds` values to model.Kind — same
-// no-strict-validation reasoning as castSessionStatuses.
+// castKinds casts repeated `kinds` values to model.Kind (graceful degradation on unrecognized).
 func castKinds(raw []string) []model.Kind {
 	if len(raw) == 0 {
 		return nil
@@ -190,13 +185,7 @@ func writeBindError(w http.ResponseWriter, r *http.Request, err error) {
 	writeProblem(w, r, http.StatusBadRequest, "invalid-cursor", err.Error())
 }
 
-// writeSessionLookupError maps query.GetSession's error onto the right
-// problem+json response: query.ErrSessionNotFound is SPEC §4.3's `GET
-// /api/v1/sessions/{id}` 404 (and, by reuse, every session-scoped
-// sub-resource's own 404 — see each handler's existence-check comment);
-// anything else is an unexpected store failure (m2 audit finding: routed
-// through writeInternalError so it never echoes err's own text to the
-// client).
+// writeSessionLookupError maps GetSession errors: ErrSessionNotFound → 404; others → internal error (m2: no error text to client).
 func writeSessionLookupError(w http.ResponseWriter, r *http.Request, logger *slog.Logger, err error) {
 	if errors.Is(err, query.ErrSessionNotFound) {
 		writeProblem(w, r, http.StatusNotFound, "not-found", "no such resource")

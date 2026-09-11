@@ -101,11 +101,7 @@ func NewHandler(enqueuer Enqueuer, normalizer *normalize.HookNormalizer, maxBody
 	}
 }
 
-// ServeHTTP implements SPEC §3.5 end to end: cap the body, normalize
-// in-request (never touching the database), enqueue non-blockingly, and
-// respond. Every exit path — success, 400, 413, 429 — is timed by
-// argus_hook_handler_duration_seconds, since the SPEC's <20ms p99 budget
-// covers the whole handler, not just the happy path.
+// ServeHTTP implements SPEC §3.5: validate, normalize, enqueue, respond (all paths timed).
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	defer func() { h.metrics.Duration.Observe(time.Since(start).Seconds()) }()
@@ -122,43 +118,23 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Normalization is the whole of SPEC §3.5's validation ("validate
-	// session_id, compute the dedup key") and it happens before any
-	// enqueue attempt, per SPEC §3.6: "fails fast with a 400 and never
-	// occupies queue capacity". A missing/empty session_id, or one invalid
-	// element inside a batch array, is the only error FromHookPayload
-	// returns (normalize/hooks.go) — surfaced here as a single 400 for the
-	// whole request, never a partial 202.
+	// Validate before enqueue to fail fast per SPEC §3.6 (single 400, never partial 202).
 	events, err := h.normalizer.FromHookPayload(body)
 	if err != nil {
 		writeProblem(w, r, http.StatusBadRequest, "invalid-hook-payload", err.Error())
 		return
 	}
 
-	// EnqueueEvents is a non-blocking, in-memory handoff (SPEC §3.6) — the
-	// last thing this handler does before responding, and the only thing
-	// it does that leaves this package. A zero-length events slice (every
-	// element gated out, e.g. an all-MessageDisplay payload under the
-	// default config) is a documented EnqueueEvents no-op, never an error.
+	// Zero-length events is a documented no-op per SPEC §3.6, never an error.
 	if err := h.enqueuer.EnqueueEvents(events); err != nil {
 		if errors.Is(err, ingest.ErrQueueFull) {
-			// SPEC §3.5: "Claude Code does not retry hooks, so this is
-			// counted data loss" — already counted by
-			// argus_ingest_dropped_total{source="hook"} inside
-			// Pipeline.dropEvents (internal/ingest/pipeline.go) before
-			// ErrQueueFull is even returned here, so this handler adds no
-			// counter of its own (see the report for why: double-counting
-			// would make the health-strip number lie).
+			// Already counted by Pipeline.dropEvents; no counter here (avoid double-counting).
 			w.Header().Set("Retry-After", "1")
 			writeProblem(w, r, http.StatusTooManyRequests, "queue-full",
 				"ingest queue is full; hooks are not retried by Claude Code, so this request's events were dropped")
 			return
 		}
-		// Unreachable against the real Pipeline (its only non-nil
-		// EnqueueEvents error is ErrQueueFull), but the Enqueuer port is an
-		// interface an arbitrary caller could implement differently — fail
-		// loudly rather than silently swallow an unexpected error (global
-		// rule: no swallowed errors).
+		// Interface could be implemented differently; fail loudly (global rule: no swallowed errors).
 		h.logger.Error("hooks: enqueue failed", "error", err)
 		writeProblem(w, r, http.StatusInternalServerError, "enqueue-failed", "internal error enqueueing hook event")
 		return
@@ -167,19 +143,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	writeAccepted(w, echoedEventName(body))
 }
 
-// echoedEventName computes the `event` field of the 202 response body.
-// SPEC §3.5's wire example (`{"ok":true,"event":"<hook_event_name>"}`) is
-// written for the single-object case Claude Code always sends; for the
-// argus-sim batch-replay array case there is no single "the" event, so this
-// echoes every element's raw hook_event_name, comma-joined, in submission
-// order — full passthrough (SPEC §0: every vendor-supplied string is
-// unconstrained) rather than picking one element and discarding the rest of
-// the batch's identity. A single-object body therefore always yields
-// exactly `<hook_event_name>`, matching the SPEC example byte for byte; an
-// N-element array yields N comma-joined names. Decode failure here (should
-// be unreachable: FromHookPayload already proved body decodes) degrades to
-// an empty string rather than an error, since by this point the request has
-// already been accepted and must not fail on a response-cosmetics path.
+// echoedEventName echoes comma-joined hook_event_names (SPEC §3.5 covers single-object only; batch is passthrough).
 func echoedEventName(body []byte) string {
 	names, err := rawHookEventNames(body)
 	if err != nil || len(names) == 0 {
@@ -188,11 +152,7 @@ func echoedEventName(body []byte) string {
 	return strings.Join(names, ",")
 }
 
-// rawHookEventNames mirrors normalize/hooks.go's splitHookPayload sniff (an
-// array iff the first non-whitespace byte is `[`) rather than importing an
-// unexported helper from that package — this package intentionally reads
-// only the one field it needs (hook_event_name) via encoding/json's own
-// permissive decoding, ignoring every other key.
+// rawHookEventNames extracts hook_event_name; duplicates normalize/hooks logic to avoid cross-package import.
 func rawHookEventNames(body []byte) ([]string, error) {
 	trimmed := trimLeadingJSONSpace(body)
 	if len(trimmed) > 0 && trimmed[0] == '[' {
@@ -213,10 +173,7 @@ func rawHookEventNames(body []byte) ([]string, error) {
 	return []string{probe.HookEventName}, nil
 }
 
-// trimLeadingJSONSpace strips the JSON whitespace characters (RFC 8259 §2),
-// duplicated from normalize/hooks.go's unexported helper of the same name
-// rather than imported, since that package exports no such helper and this
-// one is three lines.
+// trimLeadingJSONSpace strips JSON whitespace (RFC 8259 §2); duplicated, not imported.
 func trimLeadingJSONSpace(body []byte) []byte {
 	i := 0
 	for i < len(body) {
@@ -230,17 +187,7 @@ func trimLeadingJSONSpace(body []byte) []byte {
 	return body[i:]
 }
 
-// problem is a duplicate of internal/httpapi.Problem (RFC 9457
-// problem+json, SPEC §4.1) — same field set, same JSON tags, same
-// "urn:argus:error:<slug>" type scheme and Content-Type. It is
-// deliberately re-declared here rather than imported: depguard forbids
-// internal/ingest importing internal/httpapi (SPEC §3.1's inward-only
-// dependency direction — httpapi.RequireIngestToken already has to arrive
-// as a plain func(http.Handler) http.Handler for the same reason, see
-// mount.go). Duplicating four struct fields and one helper function is
-// cheaper than the alternative of promoting problem+json into a third,
-// lower package both sides would depend on, for a wire shape unlikely to
-// change independently in the two places.
+// problem duplicates internal/httpapi.Problem (RFC 9457) to respect depguard (SPEC §3.1: inward-only).
 type problem struct {
 	Type     string `json:"type"`
 	Title    string `json:"title"`
@@ -249,11 +196,10 @@ type problem struct {
 	Instance string `json:"instance,omitempty"`
 }
 
-// problemURNPrefix mirrors internal/httpapi's constant of the same name.
+// problemURNPrefix is the URN prefix for problem types (RFC 9457).
 const problemURNPrefix = "urn:argus:error:"
 
-// writeProblem writes an RFC 9457 problem+json response, matching
-// internal/httpapi.writeProblem's wire shape exactly (see problem's doc).
+// writeProblem writes an RFC 9457 problem+json response (see problem struct).
 func writeProblem(w http.ResponseWriter, r *http.Request, status int, slug, detail string) {
 	w.Header().Set("Content-Type", "application/problem+json")
 	w.WriteHeader(status)
@@ -266,10 +212,7 @@ func writeProblem(w http.ResponseWriter, r *http.Request, status int, slug, deta
 	})
 }
 
-// acceptedResponse is the SPEC §3.5 202 body. Deliberately two fields only:
-// Argus is observe-only (SPEC §3.5's closing rule, and the ticket's own
-// AC), so there is no field here — and never will be — for a hook
-// decision, permission, or blocking verdict.
+// acceptedResponse is the SPEC §3.5 202 body (observe-only, no verdict field).
 type acceptedResponse struct {
 	OK    bool   `json:"ok"`
 	Event string `json:"event"`

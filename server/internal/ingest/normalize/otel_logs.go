@@ -176,17 +176,7 @@ func (n *Normalizer) buildEvent(sessionID, vendor, eventName string, attrs map[s
 
 	dedupKey, err := model.DedupKeyOTelLog(sessionID, vendorSeq, eventName, attrs)
 	if err != nil {
-		// M5 audit note: this used to be reachable (a NaN/±Inf attrs value
-		// makes canonicalJSON's json.Marshal fail) and the previous
-		// fallback here — a deterministic but unhashed key — was dead in
-		// effect anyway, because events.go re-marshals this same attrs map
-		// for the jsonb column and would fail identically, taking out the
-		// whole WriteBatch regardless of what DedupKey this function
-		// picked. Now that every string/float64 attribute is sanitized at
-		// decode time (otlpattrs.go), attrs always marshals, so this
-		// branch is provably unreachable — surfaced as an error to the
-		// caller (which turns it into a Rejection) rather than resurrected
-		// as a fallback key that solved nothing.
+		// (M5) unreachable post-sanitization; surfaced as Rejection not fallback.
 		return model.Event{}, err
 	}
 	evt.DedupKey = dedupKey
@@ -194,15 +184,9 @@ func (n *Normalizer) buildEvent(sessionID, vendor, eventName string, attrs map[s
 	return evt, nil
 }
 
-// resolveTimestamp implements SPEC §3.4: "LogRecord.TimeUnixNano is
-// preferred over the event.timestamp string (fewer parse failures);
-// disagreement > 5 s raises clock_skewed." tsSkew reports only that
-// disagreement; the caller ORs it with model.ClampTimestamp's independent
-// retention-window skew signal because both conditions set the same single
-// clock_skewed column (SPEC §1.3). When neither timestamp source is usable,
-// ts is the zero time, which model.ClampTimestamp will always find outside
-// its window and therefore clamp — a deliberate fail-safe rather than a
-// special case.
+// resolveTimestamp implements SPEC §3.4: prefer TimeUnixNano over
+// event.timestamp string; disagreement > 5 s raises clock_skewed flag.
+// Zero time falls back to ClampTimestamp for fail-safe clamping.
 func resolveTimestamp(rec *logspb.LogRecord, attrs map[string]any) (ts time.Time, tsSkew bool) {
 	var fromNano time.Time
 	haveNano := rec.GetTimeUnixNano() != 0
@@ -260,19 +244,7 @@ func applyKindMapping(eventName string, attrs map[string]any, evt *model.Event) 
 		evt.CacheCreationTokens = Int64(attrs, "cache_creation_tokens")
 		evt.DurationMS = int64PtrToIntPtr(Int64(attrs, "duration_ms"))
 		evt.CostUSD = resolveCostUSD(attrs)
-		// D-30 (docs/review/phase-4-gauntlet.md, owner-ratified 2026-08-18):
-		// cost_source must never claim "reported" when cost_usd is NULL — a
-		// {cost_usd: NULL, cost_source: "reported"} row asserts a reported
-		// cost that does not exist (SPEC §1.3 types cost_source `text
-		// null`). --cost-mode=omit (and any agent that just doesn't report
-		// cost) makes resolveCostUSD return nil here; before this fix the
-		// line below ran unconditionally, so upsert_session.go/
-		// upsert_turn.go's old cost_source=="estimated" check could never
-		// see a real "this needs estimating" signal in the first place —
-		// this fix's other half (their fold logic) now branches on
-		// evt.CostUSD instead, belt and braces, but a wrong cost_source
-		// would still be a lie on its own regardless of what any projection
-		// does with it.
+		// (D-30) cost_source="reported" only when cost_usd is known.
 		if evt.CostUSD != nil {
 			costSource := "reported"
 			evt.CostSource = &costSource

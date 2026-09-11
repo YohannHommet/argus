@@ -21,25 +21,17 @@ const (
 	contentTypeJSON     = "application/json"
 )
 
-// retryAfterSeconds is SPEC §3.4's fixed Retry-After value on a 503
-// queue-full response: "the SDK retries with backoff — exactly the desired
-// backpressure".
+// retryAfterSeconds: SPEC §3.4's fixed value (SDK backoff provides desired backpressure).
 const retryAfterSeconds = "1"
 
-// Canonical gRPC status codes (https://grpc.io/docs/guides/status-codes/),
-// used as google.rpc.Status.code below. These are small, well-known
-// integers with no dependency on any gRPC package — Argus has none in its
-// module graph (go.mod has no genproto/grpc entry).
+// Canonical gRPC status codes; duplicated to avoid genproto import (not in our module graph).
 const (
 	grpcCodeInvalidArgument   int32 = 3
 	grpcCodeResourceExhausted int32 = 8
 	grpcCodeUnavailable       int32 = 14
 )
 
-// wireFormat is the two encodings SPEC §3.4 negotiates: "application/
-// x-protobuf -> proto.Unmarshal; application/json -> protojson.Unmarshal
-// with DiscardUnknown: true". A handler always answers in the same format
-// the request used.
+// wireFormat: the two OTLP/HTTP encodings SPEC §3.4 negotiates (response format matches request).
 type wireFormat int
 
 const (
@@ -47,9 +39,7 @@ const (
 	wireJSON
 )
 
-// negotiateFormat maps a Content-Type header onto the wire format to
-// decode/encode with. Parameters (e.g. "; charset=utf-8") are ignored.
-// Anything other than the two SPEC §3.4 names is unsupported (415).
+// negotiateFormat maps Content-Type to wire format, ignoring parameters; unsupported → 415 per SPEC §3.4.
 func negotiateFormat(contentType string) (wireFormat, bool) {
 	mediaType := contentType
 	if i := strings.IndexByte(contentType, ';'); i >= 0 {
@@ -76,18 +66,11 @@ type decodeErr struct {
 
 func (e *decodeErr) Error() string { return e.message }
 
-// readBody applies SPEC §3.4's full request-body contract: Content-Type
-// negotiation, MaxBytesReader cap on wire bytes, and gzip decompression with
-// a separate io.LimitReader cap (maxBodyBytes+1). The dual cap is load-bearing
-// for the gzip-bomb AC: the outer bound only limits compressed bytes; the inner
-// bound rejects payloads that decompress to gigabytes after at most maxBodyBytes+1
-// materialized bytes.
+// readBody applies SPEC §3.4 (negotiate, cap compressed/decompressed separately for gzip-bomb AC).
 func readBody(w http.ResponseWriter, r *http.Request, maxBodyBytes int64) (wireFormat, []byte, *decodeErr) {
 	format, ok := negotiateFormat(r.Header.Get("Content-Type"))
 	if !ok {
-		// Response falls back to JSON — the one format guaranteed human-readable
-		// without a protobuf decoder — so a client that doesn't speak protobuf
-		// gets a readable diagnostic instead of binary.
+		// Fallback to JSON: human-readable for clients without protobuf decoder.
 		return wireJSON, nil, &decodeErr{
 			httpStatus: http.StatusUnsupportedMediaType,
 			grpcCode:   grpcCodeInvalidArgument,
@@ -108,8 +91,7 @@ func readBody(w http.ResponseWriter, r *http.Request, maxBodyBytes int64) (wireF
 			}
 		}
 		defer gz.Close() //nolint:errcheck // read-only decompressor on a request we're about to discard either way; a close error here carries no actionable information
-		// +1: lets the size check distinguish "exactly maxBodyBytes" from
-		// "more than maxBodyBytes" without materializing more than maxBodyBytes+1 bytes.
+		// +1 distinguishes "exactly maxBodyBytes" from "exceeds" without materializing extra bytes.
 		reader = io.LimitReader(gz, maxBodyBytes+1)
 	}
 
@@ -140,17 +122,8 @@ func readBody(w http.ResponseWriter, r *http.Request, maxBodyBytes int64) (wireF
 	return format, body, nil
 }
 
-// decodeExportRequest decodes one OTLP/HTTP Export*ServiceRequest body into
-// its resource-level elements (ResourceLogs, ResourceMetrics, or ResourceSpans).
-// Implemented by hand (not via go.opentelemetry.io/proto/otlp/collector/.../v1)
-// to avoid importing gRPC dependencies not in go.sum. Every Export*ServiceRequest
-// has identical shape: one repeated field 1 (resource_logs / resource_metrics /
-// resource_spans). Decoding by hand in both wire formats reproduces the same
-// semantics using only data-model subpackages (logs/v1, metrics/v1, trace/v1)
-// that normalize already imports.
-//
-// jsonKey is the top-level field's camelCase JSON name (e.g. "resourceLogs");
-// newElem constructs one empty element to unmarshal into.
+// decodeExportRequest decodes OTLP/HTTP Export*ServiceRequest into resource elements.
+// Hand-coded (no gRPC deps) using data-model imports; jsonKey is camelCase field name.
 func decodeExportRequest[T proto.Message](format wireFormat, body []byte, jsonKey string, newElem func() T) ([]T, error) {
 	if format == wireJSON {
 		return decodeExportRequestJSON(body, jsonKey, newElem)
@@ -158,10 +131,7 @@ func decodeExportRequest[T proto.Message](format wireFormat, body []byte, jsonKe
 	return decodeExportRequestProto(body, newElem)
 }
 
-// decodeExportRequestProto walks Export*ServiceRequest fields by hand:
-// field 1 (LEN-encoded) is unmarshalled with proto.Unmarshal (which tolerates
-// unknown fields inside, the "future OTLP version" AC). Other fields are
-// skipped forward-compatibly rather than failing the request.
+// decodeExportRequestProto: field 1 via proto.Unmarshal (tolerates unknown fields for forward compat).
 func decodeExportRequestProto[T proto.Message](body []byte, newElem func() T) ([]T, error) {
 	var out []T
 	for len(body) > 0 {
@@ -195,10 +165,7 @@ func decodeExportRequestProto[T proto.Message](body []byte, newElem func() T) ([
 	return out, nil
 }
 
-// decodeExportRequestJSON is decodeExportRequestProto's JSON counterpart:
-// parses the envelope (accepting both camelCase and snake_case keys, as
-// protojson does), then protojson.Unmarshal each element with DiscardUnknown
-// (SPEC §3.4), which lets elements with unknown fields still decode.
+// decodeExportRequestJSON: JSON counterpart; parses camelCase/snake_case keys, unmarshals with DiscardUnknown.
 func decodeExportRequestJSON[T proto.Message](body []byte, jsonKey string, newElem func() T) ([]T, error) {
 	var envelope map[string]json.RawMessage
 	if err := json.Unmarshal(body, &envelope); err != nil {
@@ -230,8 +197,7 @@ func decodeExportRequestJSON[T proto.Message](body []byte, jsonKey string, newEl
 	return out, nil
 }
 
-// snakeCase converts "resourceLogs" → "resource_logs", used by
-// decodeExportRequestJSON for leniency about proto field names.
+// snakeCase converts camelCase to snake_case (decodeExportRequestJSON uses for field leniency).
 func snakeCase(camel string) string {
 	var b strings.Builder
 	for _, r := range camel {

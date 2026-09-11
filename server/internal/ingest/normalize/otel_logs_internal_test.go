@@ -88,17 +88,8 @@ func TestResolveTimestamp(t *testing.T) {
 	})
 }
 
-// TestApplyKindMapping_CostSourceOnlyWhenCostKnown pins D-30's normalize-side
-// fix (docs/review/phase-4-gauntlet.md, candidate D-30): an api_request
-// event must never claim cost_source="reported" when cost_usd is NULL. The
-// pre-fix code stamped costSource := "reported" unconditionally, so a
-// --cost-mode=omit event (resolveCostUSD returns nil) landed as
-// {cost_usd: NULL, cost_source: "reported"} — a text column asserting a
-// reported cost that does not exist (SPEC §1.3 types cost_source `text
-// null`). upsert_session.go/upsert_turn.go's estimation branch keys off
-// e.CostUSD, not e.CostSource (belt and braces — see their doc comments),
-// but a wrong cost_source is still a lie on its own and must never be
-// written, regardless of what any projection folder does with it.
+// TestApplyKindMapping_CostSourceOnlyWhenCostKnown pins D-30's fix:
+// cost_source="reported" only when cost_usd is known (SPEC §1.3).
 func TestApplyKindMapping_CostSourceOnlyWhenCostKnown(t *testing.T) {
 	t.Parallel()
 

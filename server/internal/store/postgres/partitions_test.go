@@ -31,14 +31,7 @@ var wantMetricSamplesPartitionIndexSuffixes = []string{
 	"_series_hash_ts_idx",
 }
 
-// TestEnsurePartitions_CreatesMonthlyPartitionsAndIndexes is the P2-05 AC:
-// after EnsurePartitions over a 3-month range, pg_indexes on each events
-// partition shows exactly the 6 created indexes plus the inherited
-// `*_ts_dedup_key_key` unique index (from the parent-level UNIQUE (ts,
-// dedup_key) constraint, SPEC §2.2) — never a 7th created one, never the
-// unique index missing. The partition's own `*_pkey` index (inherited from
-// the parent PRIMARY KEY) is excluded from the comparison: it is not part
-// of this ticket's index set, just an unavoidable side effect of the PK.
+// TestEnsurePartitions_CreatesMonthlyPartitionsAndIndexes verifies 6 per-partition indexes plus inherited unique (SPEC §2.2).
 func TestEnsurePartitions_CreatesMonthlyPartitionsAndIndexes(t *testing.T) {
 	pool := storetesting.NewPool(t)
 	ctx := context.Background()
@@ -73,8 +66,7 @@ func TestEnsurePartitions_CreatesMonthlyPartitionsAndIndexes(t *testing.T) {
 	}
 }
 
-// TestEnsurePartitions_IsIdempotent is the P2-05 AC: calling EnsurePartitions
-// twice over the same range is a no-op (no error, no duplicate objects).
+// TestEnsurePartitions_IsIdempotent verifies calling EnsurePartitions twice is a no-op (P2-05 AC).
 func TestEnsurePartitions_IsIdempotent(t *testing.T) {
 	pool := storetesting.NewPool(t)
 	ctx := context.Background()
@@ -89,23 +81,10 @@ func TestEnsurePartitions_IsIdempotent(t *testing.T) {
 	require.Len(t, got, len(wantEventsPartitionIndexSuffixes)+1, "a second EnsurePartitions call must not duplicate indexes")
 }
 
-// backwardJobHorizon mirrors internal/app.partitionJobHorizon (~2 months
-// ahead) so this test computes the same [from, to] range PartitionJob now
-// passes to EnsurePartitions (internal/app/jobs.go's tick, P3-12): the
-// value can't be imported (internal/app is not importable from
-// internal/store/postgres — and shouldn't be, per the depguard boundary in
-// SPEC §3.1), so it is duplicated here as a literal.
+// backwardJobHorizonForTest mirrors internal/app.partitionJobHorizon (~2 months); duplicated due to depguard (SPEC §3.1).
 const backwardJobHorizonForTest = 2 * 30 * 24 * time.Hour
 
-// TestEnsurePartitions_BackwardCreation_BackfillCrossingMonthBoundary is the
-// P3-12 AC: on a freshly migrated database with no partitions pre-created,
-// calling EnsurePartitions with the same [now-retention, now+horizon] range
-// PartitionJob's tick now passes must create partitions back to the
-// retention floor, so a 14-day backfill whose events cross a month boundary
-// ingests with zero too_old drops through the real WriteBatch path — while
-// an event older than the retention horizon (backward creation does not
-// widen retention, only closes the in-window backfill gap) still comes back
-// too_old.
+// TestEnsurePartitions_BackwardCreation_BackfillCrossingMonthBoundary verifies backward partition creation to retention floor (P3-12 AC).
 func TestEnsurePartitions_BackwardCreation_BackfillCrossingMonthBoundary(t *testing.T) {
 	pool := storetesting.NewPool(t)
 	ctx := context.Background()

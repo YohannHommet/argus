@@ -1,6 +1,5 @@
 // sse.go implements P5-02: SSE routes for /stream and /sessions/{id}/stream (SPEC §5.1-§5.3).
-// serveStream implements the six-step sequence: bind params -> attach -> headers ->
-// replay backlog -> live select loop -> teardown. See sseWriter for the critical id-line invariant.
+// serveStream implements a six-step sequence (bind→attach→headers→replay→live→teardown); see sseWriter's id-line invariant.
 
 package httpapi
 
@@ -81,17 +80,9 @@ func streamAllHandler(streamer Streamer, replay Replayer, cfg *config.Config, lo
 	return func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		filter := stream.Filter{
-			Kinds: castKinds(repeatedParam(r, "kinds")),
-			// project/vendor bind a single value here, not repeatedParam's
-			// usual OR-set (contrast listEventsHandler's store.EventFilter,
-			// whose Project/Vendor are []string): internal/stream/filter.go's
-			// Filter.Project/Vendor are single strings by the hub's own
-			// already-landed design (this ticket does not own internal/stream),
-			// so the firehose can express only one project/one vendor per
-			// subscription — q.Get takes the first value if a client repeats
-			// the param, rather than silently dropping the request.
-			Project: q.Get("project"),
-			Vendor:  q.Get("vendor"),
+			Kinds:   castKinds(repeatedParam(r, "kinds")),
+			Project: q.Get("project"), // single value only (stream.Filter design; q.Get takes first if repeated)
+			Vendor:  q.Get("vendor"),  // single value only (stream.Filter design; q.Get takes first if repeated)
 		}
 		serveStream(w, r, streamer, replay, cfg, logger, stream.AllTopic(), filter)
 	}
@@ -121,12 +112,8 @@ func serveStream(
 		return
 	}
 
-	// Step 2: attach to the hub BEFORE writing any response byte (SPEC
-	// §5.2's attach-before-query ordering — see replayBacklog for the other
-	// half of this guarantee). Subscribing first is also what lets a
-	// Subscribe failure be an ordinary problem+json response rather than a
-	// text/event-stream carrying an error inside it: nothing has been
-	// written yet.
+	// Step 2: attach to hub BEFORE writing bytes (SPEC §5.2); lets Subscribe failures
+	// be problem+json, not text/event-stream with embedded error.
 	sub, err := streamer.Subscribe(topic, filter)
 	if err != nil {
 		switch {
@@ -159,10 +146,7 @@ func serveStream(
 		return
 	}
 
-	// Step 4: replay, if a position was requested. dedupe is bounded at
-	// streamReplayMax(cfg) entries: replayBacklog adds at most one entry
-	// per row EventsSince returns, which is itself capped at that same
-	// limit, and the live loop below only ever removes entries from it.
+	// Step 4: replay if requested; dedupe bounded by streamReplayMax (entries only removed, never added beyond).
 	dedupe := make(map[string]struct{}, streamReplayMax(cfg))
 	if hasAfter {
 		if !replayBacklog(r.Context(), sw, replay, cfg, afterRef, dedupe, logger) {
@@ -170,12 +154,8 @@ func serveStream(
 		}
 	}
 
-	// Step 5 (+ step 6, folded into sseWriter.write): the live select loop.
-	// Its own doc comment covers the two-value receive contract and the
-	// dedupe consult/shrink rule.
+	// Step 5: live select loop (see runLiveLoop doc); step 6 teardown is deferred sub.Close() above.
 	runLiveLoop(r.Context(), sw, sub, heartbeat, dedupe, logger)
-	// Step 6's teardown-on-disconnect is the deferred sub.Close() above,
-	// reached whichever way runLiveLoop returns.
 }
 
 // decodeReplayPosition implements `?after=` precedence: query param beats Last-Event-ID header.
@@ -299,11 +279,7 @@ func runLiveLoop(ctx context.Context, sw *sseWriter, sub *stream.Subscription, h
 				_ = sw.frame("shutdown", "", struct{}{})
 				return
 			default:
-				// exhaustive (golangci-lint) is satisfied by the four cases
-				// above listing every current stream.MessageType member;
-				// this default exists only so a future member this ticket
-				// doesn't know about logs instead of silently doing nothing
-				// or panicking.
+				// Future stream.MessageType member guard (exhaustive golangci-lint already satisfied).
 				if logger != nil {
 					logger.Warn("httpapi: sse: unknown stream.MessageType, ignoring", "type", msg.Type)
 				}
@@ -377,13 +353,8 @@ func (sw *sseWriter) heartbeatFrame() error {
 	return sw.write(": heartbeat\n\n")
 }
 
-// frame writes one named SSE frame (SPEC §5.1). id is emitted as an `id:`
-// line only when name == "event" — see sseWriter's own doc comment for why
-// that check lives here and nowhere else. payload is marshaled to JSON
-// directly; every call site in this file already passes the exact wire
-// shape openapi.yaml declares (timelineEvent, *model.SessionSummary,
-// *stream.Stats, lagFramePayload, resetFramePayload, struct{}{}), so no
-// further adaptation happens here.
+// frame writes one named SSE frame (SPEC §5.1). id is emitted only for name=="event" (see sseWriter doc).
+// payload is marshaled to JSON directly; call sites pass the exact openapi.yaml wire shapes.
 func (sw *sseWriter) frame(name, id string, payload any) error {
 	body, err := json.Marshal(payload)
 	if err != nil {

@@ -51,8 +51,7 @@ const transientAdminShutdown = "57P01"
 // permanentSQLSTATEPrefixes: SQLSTATE classes retry cannot fix (SPEC §3.6: 23, 42; added: 22 deviation).
 var permanentSQLSTATEPrefixes = []string{"22", "23", "42"}
 
-// ClassifyError applies SPEC §3.6 classification. Unknown/unspecified errors default to
-// ClassTransient (bounded retry): preserves data-loss-averse policy vs. dropping on first sight.
+// ClassifyError applies SPEC §3.6 classification (unknown errors → ClassTransient for data safety).
 func ClassifyError(err error) RetryClass {
 	if err == nil {
 		return ClassNone

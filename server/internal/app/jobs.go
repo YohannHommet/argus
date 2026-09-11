@@ -182,24 +182,14 @@ func (j *SweepJob) tick(ctx context.Context) {
 	}
 }
 
-// rollupMetricsNamespace/rollupMetricsSubsystem give every rollup-job
-// metric the "argus_rollup_*" prefix, matching internal/ingest/metrics.go's
-// "argus_ingest_*" convention for the pipeline's own self-observability
-// surface (SPEC §3.6 names this job's counters the same way).
+// rollupMetricsNamespace/rollupMetricsSubsystem prefix rollup-job metrics.
 const (
 	rollupMetricsNamespace = "argus"
 	rollupMetricsSubsystem = "rollup"
 )
 
-// RollupJobMetrics is RollupJob's Prometheus self-observability surface
-// (P3-05 ticket note: "buckets claimed/recomputed, duration, errors,
-// skipped-because-locked"). Kept in this package rather than in
-// internal/store/postgres: store.Maintenance.RunRollups's signature is
-// fixed (the P3-05 seam, SPEC §3.3) and must not grow a registerer
-// parameter, so the job wrapper that already owns "how often" and "single-
-// flight this tick" (mirroring PartitionJob) is also the natural owner of
-// "how do we observe it" — RunRollups's own store.RollupStats return value
-// already carries everything these metrics need per call.
+// RollupJobMetrics is RollupJob's Prometheus surface (P3-05). Kept in app/
+// since RunRollups's signature is fixed (SPEC §3.3) and cannot take a registerer.
 type RollupJobMetrics struct {
 	BucketsClaimed    prometheus.Counter
 	BucketsRecomputed prometheus.Counter
@@ -328,18 +318,8 @@ func (j *RollupJob) tick(ctx context.Context) {
 	}
 
 	if stats.BucketsClaimed == 0 && stats.BucketsRecomputed == 0 {
-		// RunRollups reports zero of everything in exactly two cases: a
-		// concurrent pass already held the advisory lock (SPEC §2.4's
-		// single-flight, "returns immediately with zero buckets claimed and
-		// no error"), or — vanishingly rarely, since the current/previous
-		// hour are always recomputed — genuinely nothing to do. Counting
-		// both as "skipped" would undercount real no-op ticks as lock
-		// contention, but a true zero-recompute tick without a concurrent
-		// rollup pass running is not a state this job can reach in
-		// practice (current-hour recomputation always includes at least the
-		// bucket check itself), so this metric is an accurate proxy for
-		// "another pass held the lock" without RunRollups needing to widen
-		// store.RollupStats to say so explicitly.
+		// Zero of both: likely held advisory lock (SPEC §2.4), rarely
+		// genuinely nothing to do (current hour always recomputes).
 		j.metrics.SkippedLocked.Inc()
 		return
 	}
@@ -457,12 +437,7 @@ func (j *RetentionJob) tick(ctx context.Context) {
 		j.logger.Info("retention job: pruned ingest_dedup rows", "count", pruned)
 	}
 
-	// ARGUS_RETENTION_SESSION_DAYS defaults to 0, meaning "never" (SPEC
-	// §3.7) — sessionRetention is the zero duration in that case, and this
-	// step is skipped entirely rather than calling DeleteExpiredSessions
-	// with a cutoff of "now", which would delete every session immediately
-	// (m11 fix: this key used to be parsed, validated, and documented but
-	// read by no code at all).
+	// ARGUS_RETENTION_SESSION_DAYS=0 means "never" (SPEC §3.7, m11 fix).
 	if j.sessionRetention > 0 {
 		deleted, err := j.store.DeleteExpiredSessions(ctx, now.Add(-j.sessionRetention))
 		if err != nil {

@@ -1,35 +1,4 @@
-// Package postgres — filter.go implements SPEC §3.3's "whitelist-based
-// clause builder ... placeholders only, never interpolation" for the three
-// dynamic-filter reads (ListSessions, this ticket; ListEvents and
-// ListToolCalls, P3-03). clauseBuilder is the reusable primitive: a set of
-// small methods that each append zero or one WHERE fragment plus its
-// positional args, using only `$n` placeholders. No caller-supplied string
-// is ever formatted into the returned SQL text — only into the parallel
-// args slice alongside a placeholder that stands in for it.
-//
-// Contract every method here follows:
-//
-//   - Column/table names are Go string literals supplied by the calling
-//     query-builder function (sessionWhereClause below, and its P3-03
-//     siblings later) — never derived from request input. That is what
-//     "whitelist" means: the set of columns a filter can touch is fixed by
-//     the code that calls clauseBuilder, not by anything a client sends.
-//   - A method that renders "OR within a field" (SPEC §4.1: repeated params
-//     OR) takes a []string of values and renders ONE placeholder holding
-//     the whole slice, matched with `= ANY($n)` / `&& $n`, never one
-//     placeholder per value — so query plans and this file's own
-//     placeholder-counting stay stable regardless of how many values a
-//     field carries.
-//   - Every method returns "" when it has nothing to contribute (nil/empty
-//     values, a nil time, an empty string) and appends nothing to args in
-//     that case — callers filter empty results out before joining "AND".
-//   - AND-across-fields (SPEC §4.1) is the caller's job: join the non-empty
-//     clauses with " AND ".
-//
-// filter_test.go feeds every SessionFilter permutation — including
-// adversarial, SQL-metacharacter-laden values — through sessionWhereClause
-// and asserts none of those values appear anywhere in the rendered SQL
-// text, only in args.
+// Package postgres implements SPEC §3.3's whitelist-based clause builder (placeholders only, never interpolation) for dynamic-filter reads (SPEC §4.1).
 package postgres
 
 import (

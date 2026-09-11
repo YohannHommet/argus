@@ -2,10 +2,7 @@ package model
 
 import "time"
 
-// Turn mirrors the turns table (SPEC §2.1) and is also the row shape for
-// Reader.ListTurns / GET /api/v1/sessions/{id}/turns (SPEC §4.2). Status is
-// Argus-computed and closed (SPEC §1.7's status rule extends to turns);
-// every other field is a plain aggregate, never vendor vocabulary.
+// Turn mirrors the turns table (SPEC §2.1) and is the row shape for GET /api/v1/sessions/{id}/turns (SPEC §4.2).
 type Turn struct {
 	SessionID         string     `json:"session_id"`
 	PromptID          string     `json:"prompt_id"`

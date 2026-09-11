@@ -1,26 +1,6 @@
-// Package testing — fake.go is the shared in-memory test double for
-// store.Reader (SPEC §3.3, ticket P3-09), replacing the three near-identical
-// local `fakeReader` doubles P3-07/P3-08 built inside internal/httpapi
-// (sessions_test.go/events_test.go/toolcalls_test.go/analytics_test.go)
-// before this package existed. It is also what internal/httpapi's
-// conformance_test.go wires into httpapi.New so the router's real handlers
-// run against a fake store instead of postgres (SPEC §4.4: "runs the real
-// router over the fake store").
-//
-// Fake follows the same per-method, settable-func convention every existing
-// consumer-owned port in this codebase already uses for its test doubles
-// (e.g. internal/ingest/otlp's fakeEnqueuer, httpapi_test's fakeReader): each
-// store.Reader method is backed by an exported `*Func` field a caller wires
-// up individually, and calling a method whose Func is nil panics loudly
-// rather than returning a silent zero value — a test that forgot to stub a
-// call path is caught immediately, never mistaken for "the store legitimately
-// returned nothing". This makes Fake equally usable two ways: as a
-// per-test, narrowly-stubbed mock (httpapi's existing convention, preserved
-// verbatim for the tests migrated onto it) and as a fully-populated,
-// deterministic fixture store (conformance_test.go's own use, built by
-// wiring every Func to return fixed, seeded data with no map-iteration
-// order and no time.Now() — SPEC's ticket note that a conformance table must
-// never flake).
+// Package testing provides Fake, a settable-func in-memory store.Reader
+// test double (P3-09), and NewPool/NewDSN, the integration test harness
+// (SPEC §8.4) for per-test, isolated Postgres schemas.
 package testing
 
 import (
@@ -61,8 +41,7 @@ type Fake struct {
 // store.ErrSessionNotFound exactly like postgres does.
 var _ store.Reader = (*Fake)(nil)
 
-// ListSessions delegates to f.ListSessionsFunc (see the type doc comment for
-// the nil-panics-loudly convention every method here follows).
+// ListSessions delegates to f.ListSessionsFunc.
 func (f *Fake) ListSessions(ctx context.Context, filter store.SessionFilter, p store.Page) ([]model.SessionSummary, store.Cursor, error) {
 	if f.ListSessionsFunc == nil {
 		panic("storetest.Fake.ListSessions not stubbed")

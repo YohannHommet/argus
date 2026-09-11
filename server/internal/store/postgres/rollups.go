@@ -168,30 +168,13 @@ func toTimestamptz(ts []time.Time) []pgtype.Timestamptz {
 	return out
 }
 
-// bucketRange returns the M9 sargable range [min(buckets), max(buckets)+
-// width) as pgtype.Timestamptz, for buckets already sorted ascending
-// (sortedTimes's contract). width is the bucket grain (time.Hour for every
-// caller today) — the range must be exactly one bucket wider than the last
-// entry so that bucket's own rows (which can carry any ts within
-// [bucket, bucket+width)) are not excluded by the range predicate before
-// the exact date_trunc(...) = ANY(buckets) equality gets a chance to
-// select them. Callers only invoke this with a non-empty buckets slice
-// (both call sites already return early on len(buckets) == 0).
+// bucketRange returns sargable range [min(buckets), max(buckets)+width) for equality predicate.
 func bucketRange(buckets []time.Time, width time.Duration) (from, to pgtype.Timestamptz) {
 	first, last := buckets[0], buckets[len(buckets)-1]
 	return pgtype.Timestamptz{Time: first, Valid: true}, pgtype.Timestamptz{Time: last.Add(width), Valid: true}
 }
 
-// filterPartitionCovered implements the m9 minor fix: it drops every bucket
-// in buckets (already hour-truncated, UTC) that falls outside every
-// currently-attached monthly partition of parent ("events" or
-// "metric_samples"), using the same partitionCoverage predicate
-// partitions.go's WriteBatch/WriteMetrics pre-flight check already relies
-// on (this ticket does not own partitions.go and makes no change there —
-// partitionCoverage is called, not modified). The order of buckets is
-// preserved (sortedTimes's ascending contract survives filtering), which is
-// what lets bucketRange's [min, max+width) computation stay correct on the
-// filtered slice.
+// filterPartitionCovered drops buckets not covered by any partition (m9 minor fix).
 func filterPartitionCovered(ctx context.Context, tx pgx.Tx, parent string, buckets []time.Time) ([]time.Time, error) {
 	if len(buckets) == 0 {
 		return buckets, nil
@@ -209,11 +192,7 @@ func filterPartitionCovered(ctx context.Context, tx pgx.Tx, parent string, bucke
 	return out, nil
 }
 
-// recomputeDaily implements SPEC §2.4 step 5 for one source: rollup_daily
-// is always derived from rollup_hourly, never from events/metric_samples
-// directly, and the affected days are re-derived fully (delete then
-// insert) for the same "a key that stopped existing must disappear"
-// reason DeleteRollupHourly's doc comment gives.
+// recomputeDaily implements SPEC §2.4 step 5 (delete-then-insert from rollup_hourly).
 func recomputeDaily(ctx context.Context, q *gen.Queries, sourceKind string, buckets []time.Time) error {
 	days := daysOf(buckets)
 	if len(days) == 0 {
@@ -231,61 +210,23 @@ func recomputeDaily(ctx context.Context, q *gen.Queries, sourceKind string, buck
 
 // --- source='event' pass -------------------------------------------------
 
-// eventGroupKey is rollup_hourly's primary key minus `source` (always
-// 'event' here) — shared by both AggregateEventRollup's and
-// AggregateToolCallRollup's groups so recomputeEventBuckets can merge them
-// (P3-05 defect 1) into one row per key before the single bulk insert.
+// eventGroupKey is rollup_hourly's primary key minus `source` (always 'event').
 type eventGroupKey struct {
 	bucket                 time.Time
 	project, vendor, model string
 }
 
-// eventGroupAgg accumulates one eventGroupKey's rollup_hourly columns from
-// whichever of AggregateEventRollup/AggregateToolCallRollup produced a row
-// for it. costReported/costEstimated stay pgtype.Numeric end-to-end (no
-// float round-trip) for the group AggregateEventRollup itself produced;
-// tool-call-only groups (a bucket with tool calls but no llm.request/
-// session.start/turn.start events for that project/vendor) get a valid
-// zero numeric via zeroNumeric so the NOT NULL columns are always
-// satisfied.
+// eventGroupAgg accumulates one eventGroupKey's rollup_hourly columns (costReported/costEstimated pgtype.Numeric end-to-end).
 type eventGroupAgg struct {
 	sessionsStarted, turns, apiRequests, apiErrors, toolCalls, toolRejects int32
 	inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens        int64
 	costReported, costEstimated                                            pgtype.Numeric
 }
 
-// recomputeEventBuckets implements SPEC §2.4 step 4's source='event' pass:
-// full delete-then-insert recompute of rollup_hourly for buckets. Two
-// queries feed it (db/queries/rollups.sql): AggregateEventRollup for
-// everything else SQL can compute directly over `events`, and (P3-05
-// defect 1) AggregateToolCallRollup for tool_calls/tool_rejects, sourced
-// from the `tool_calls` projection instead of the `tool.pre`-only `events`
-// count so it is correct on an OTel-only (hooks-disabled) deployment too —
-// see AggregateToolCallRollup's SQL comment for the full justification.
-// Both queries can produce a row for the very same (bucket, project,
-// vendor, model=”) key, and rollup_hourly's delete-then-insert recompute
-// has no ON CONFLICT to merge two separate INSERTs with, so this function
-// merges them into one eventGroupAgg per key in Go before building the
-// single bulk insert. prices (already resolved from model_prices within
-// this same transaction) turns each group's uncosted llm.request token
-// sums into cost_estimated_usd — the one piece of SPEC §2.4's cost split
-// with no SQL equivalent in this codebase.
+// recomputeEventBuckets implements SPEC §2.4 step 4's source='event' pass (P3-05 defect 1).
+// Merges AggregateEventRollup and AggregateToolCallRollup results in Go, then bulk-inserts.
 func recomputeEventBuckets(ctx context.Context, tx pgx.Tx, q *gen.Queries, prices []pricing.Price, buckets []time.Time) error {
-	// m9 minor fix (pre-Phase-4 audit wave, ticket W3): a claimed bucket
-	// with no covering `events` partition (the retention job dropped it
-	// between the dirty mark and this run — reachable via §2.4's
-	// project-change re-mark, which can dirty up to
-	// ARGUS_ROLLUP_SESSION_REMARK_MAX hours of past buckets) is dropped from
-	// this pass entirely, before DeleteRollupHourly ever runs for it. Without
-	// this, DeleteRollupHourly commits first, AggregateEventRollup/
-	// AggregateToolCallRollup then legitimately find zero rows (there is no
-	// partition left to read), and recomputeEventBuckets returns early with
-	// the delete already committed — permanently losing that bucket's
-	// rollup_hourly row instead of leaving it as the last known-good value.
-	// A bucket that IS covered but genuinely has no contributing data is a
-	// different, correct case (DeleteRollupHourly's own doc comment: "a key
-	// that no longer has any contributing data actually disappears") and is
-	// left untouched by this filter.
+	// m9 minor fix: skip buckets with no covering partition (retention may have dropped it).
 	buckets, err := filterPartitionCovered(ctx, tx, "events", buckets)
 	if err != nil {
 		return fmt.Errorf("postgres: run rollups: event partition coverage: %w", err)
@@ -366,12 +307,7 @@ func recomputeEventBuckets(ctx context.Context, tx pgx.Tx, q *gen.Queries, price
 		g.costEstimated = num
 	}
 
-	// P3-05 defect 1: tool_calls/tool_rejects always land in the model=''
-	// group (a tool call is never model-attributable, SPEC §2.4), merged
-	// additively into whatever eventGroupAgg that key already has (or a
-	// freshly zeroed one if AggregateEventRollup produced no row for it —
-	// e.g. a bucket with tool calls but no session.start/turn.start/
-	// llm.request events for that project/vendor).
+	// P3-05 defect 1: tool_calls/tool_rejects always land in model='' group (never model-attributable).
 	for _, r := range toolRows {
 		k := eventGroupKey{bucket: r.Bucket.Time, project: r.Project, vendor: r.Vendor, model: ""}
 		g := get(k)
@@ -427,16 +363,12 @@ func recomputeEventBuckets(ctx context.Context, tx pgx.Tx, q *gen.Queries, price
 	return nil
 }
 
-// costTokens is one group's uncosted llm.request token sums — the input to
-// estimateCost.
+// costTokens is one group's uncosted llm.request token sums (input to estimateCost).
 type costTokens struct {
 	input, output, cacheRead, cacheWrite int64
 }
 
-// toPricingPrices converts the []PriceRow this transaction already resolved
-// from model_prices into the []pricing.Price internal/pricing.Estimate
-// wants — the one pgtype/plain-Go-type boundary crossing this package's doc
-// comment describes, done once per RunRollups pass rather than per group.
+// toPricingPrices converts PriceRow to pricing.Price (pgtype/plain-Go-type boundary).
 func toPricingPrices(prices []PriceRow) []pricing.Price {
 	out := make([]pricing.Price, len(prices))
 	for i, p := range prices {
@@ -452,15 +384,7 @@ func toPricingPrices(prices []PriceRow) []pricing.Price {
 	return out
 }
 
-// estimateCost resolves model's price at `at` and prices tokens via
-// internal/pricing.Estimate (SPEC §2.4's lookup rule: "latest
-// effective_from <= event date, exact model, else longest matching
-// prefix") — the single implementation of that algorithm (see defect 2's
-// fix: this file used to duplicate it because depguard's "store" rule
-// denied internal/query/pricing to internal/store; internal/pricing is a
-// leaf package depguard permits, see its package doc). ok=false is exactly
-// pricing.ErrNoPrice's condition — the caller must never substitute zero or
-// another model's price.
+// estimateCost resolves model's price and estimates tokens via internal/pricing.Estimate (SPEC §2.4).
 func estimateCost(prices []pricing.Price, model string, tokens costTokens, at time.Time) (usd float64, ok bool) {
 	usd, err := pricing.Estimate(prices, model, pricing.Tokens{
 		Input: tokens.input, Output: tokens.output,
@@ -472,10 +396,7 @@ func estimateCost(prices []pricing.Price, model string, tokens costTokens, at ti
 	return usd, true
 }
 
-// eventRollupInsert holds the parallel column arrays insertEventRollupHourly
-// bulk-inserts via unnest — the same "build slices, one INSERT ... SELECT *
-// FROM unnest(...)" shape as insertMetricSamples (write_metrics.go) and
-// upsertSessions.
+// eventRollupInsert holds parallel column arrays for bulk insert via unnest.
 type eventRollupInsert struct {
 	bucket                                                                 []time.Time
 	project, vendor, model                                                 []string
@@ -484,14 +405,7 @@ type eventRollupInsert struct {
 	costReported, costEstimated                                            []pgtype.Numeric
 }
 
-// insertEventRollupHourly is the hand-written pgx counterpart of
-// AggregateEventRollup's SQL comment: sqlc v1.31.1 cannot resolve a
-// multi-array `unnest($1::t1[], …)` table function used as a FROM source
-// (see db/queries/rollups.sql), so this bulk insert is issued directly
-// against tx, exactly like insertMetricSamples/upsertSessions/
-// execToolCallUpsert already do for the same reason. No ON CONFLICT: the
-// matching bucket/source rows were deleted by DeleteRollupHourly earlier in
-// this same transaction.
+// insertEventRollupHourly: hand-written pgx (sqlc limitation with multi-array unnest).
 func insertEventRollupHourly(ctx context.Context, tx pgx.Tx, ins eventRollupInsert) error {
 	_, err := tx.Exec(ctx, `
 		INSERT INTO rollup_hourly (
@@ -520,14 +434,7 @@ func insertEventRollupHourly(ctx context.Context, tx pgx.Tx, ins eventRollupInse
 
 // --- source='metric' pass -------------------------------------------------
 
-// recomputeMetricBuckets implements SPEC §2.4 step 4's source='metric' pass
-// and §1.8's cumulative-diffing step: full delete-then-insert recompute of
-// rollup_hourly for buckets, driven by FetchMetricRowsForRollup (db/queries/
-// rollups.sql) plus the Go-side metric-name -> rollup-column mapping SPEC
-// §1.8's table describes (there is no SQL-only way to express "attrs->>
-// 'type' picks the column" cleanly across seven differently-shaped
-// metrics, so this pass computes in Go and bulk-writes once, exactly like
-// the event pass).
+// recomputeMetricBuckets implements SPEC §2.4 step 4's source='metric' pass (§1.8 cumulative-diffing).
 func recomputeMetricBuckets(ctx context.Context, tx pgx.Tx, q *gen.Queries, buckets []time.Time) error {
 	// m9 minor fix: same "skip a bucket with no covering partition" rule as
 	// recomputeEventBuckets, against metric_samples instead of events.
@@ -576,8 +483,7 @@ func recomputeMetricBuckets(ctx context.Context, tx pgx.Tx, q *gen.Queries, buck
 	return insertMetricRollupHourly(ctx, tx, groups)
 }
 
-// sampleDeltaUpdate is one metric_samples.delta write-back
-// (updateMetricSampleDeltas), keyed on the table's full primary key.
+// sampleDeltaUpdate is one metric_samples.delta write-back (keyed on table's primary key).
 type sampleDeltaUpdate struct {
 	ts         time.Time
 	seriesHash []byte
@@ -585,34 +491,15 @@ type sampleDeltaUpdate struct {
 	delta      float64
 }
 
-// seriesStateUpdate is one metric_series_state checkpoint advance
-// (upsertMetricSeriesState).
+// seriesStateUpdate is one metric_series_state checkpoint advance.
 type seriesStateUpdate struct {
 	seriesHash []byte
 	lastTS     time.Time
 	lastValue  float64
 }
 
-// computeMetricDeltas walks rows (already ordered by (series_hash, ts) by
-// FetchMetricRowsForRollup's ORDER BY) and returns, per row, its rollup
-// contribution — SPEC §1.8:
-//
-//   - cumulative: value minus the previous point's raw value, using
-//     fetchSeriesAnchors/metric_series_state as the baseline for each
-//     series' first row in this batch; a negative diff (a counter reset)
-//     takes the raw value instead.
-//   - delta: the value itself — it is already an increment, no diffing
-//     needed.
-//   - gauge (or any other/unrecognized temporality string — SPEC §0
-//     forbids rejecting a vendor-supplied value, and "sum every raw
-//     gauge reading" is never correct): the latest-ts row wins, once per
-//     (series, hour bucket) — every other row in that (series, bucket)
-//     pair contributes 0.
-//
-// It also returns the metric_samples.delta write-backs for cumulative rows
-// and the metric_series_state checkpoint advances for every series that had
-// at least one cumulative row, so recomputeMetricBuckets can persist both
-// alongside the rollup_hourly write in the same transaction.
+// computeMetricDeltas computes rollup contribution per row (SPEC §1.8: cumulative/delta/gauge temporality).
+// Also returns write-backs for metric_samples.delta and metric_series_state updates.
 func computeMetricDeltas(ctx context.Context, tx pgx.Tx, rows []gen.FetchMetricRowsForRollupRow) ([]float64, []sampleDeltaUpdate, []seriesStateUpdate, error) {
 	contribution := make([]float64, len(rows))
 
@@ -666,11 +553,7 @@ func computeMetricDeltas(ctx context.Context, tx pgx.Tx, rows []gen.FetchMetricR
 			}
 		}
 		if len(missing) > 0 {
-			// The direct metric_samples lookback found nothing for these
-			// series: either they have no history before this batch, or
-			// their history's partition was already dropped by retention.
-			// metric_series_state exists for exactly the second case (SPEC
-			// §1.8).
+			// Fallback to metric_series_state for series with no metric_samples history (SPEC §1.8).
 			stateRows, err := gen.New(tx).FetchSeriesState(ctx, missing)
 			if err != nil {
 				return nil, nil, nil, fmt.Errorf("postgres: run rollups: fetch series state: %w", err)
@@ -722,13 +605,7 @@ func computeMetricDeltas(ctx context.Context, tx pgx.Tx, rows []gen.FetchMetricR
 	return contribution, sampleUpdates, stateUpdates, nil
 }
 
-// fetchSeriesAnchors is the hand-written pgx counterpart of the SQL
-// FetchSeriesAnchors comment in db/queries/rollups.sql (same
-// multi-array-unnest limitation as insertEventRollupHourly): for each
-// (series_hash, before_ts) pair, the value of the latest metric_samples row
-// strictly before before_ts for that series, via a LATERAL join so this
-// stays one round trip regardless of how many series are in scope. A
-// series with no such row is simply absent from the returned map.
+// fetchSeriesAnchors: hand-written pgx (same multi-array-unnest limitation).
 func fetchSeriesAnchors(ctx context.Context, tx pgx.Tx, seriesHash [][]byte, beforeTS []time.Time) (map[string]*float64, error) {
 	rows, err := tx.Query(ctx, `
 		SELECT req.series_hash, prev.value
@@ -762,8 +639,7 @@ func fetchSeriesAnchors(ctx context.Context, tx pgx.Tx, seriesHash [][]byte, bef
 	return out, nil
 }
 
-// updateMetricSampleDeltas is the hand-written pgx counterpart of the SQL
-// UpdateMetricSampleDeltas comment (same multi-array-unnest limitation).
+// updateMetricSampleDeltas: hand-written pgx (same multi-array-unnest limitation).
 func updateMetricSampleDeltas(ctx context.Context, tx pgx.Tx, updates []sampleDeltaUpdate) error {
 	n := len(updates)
 	ts := make([]time.Time, n)
@@ -784,9 +660,7 @@ func updateMetricSampleDeltas(ctx context.Context, tx pgx.Tx, updates []sampleDe
 	return nil
 }
 
-// upsertMetricSeriesState is the hand-written pgx counterpart of the SQL
-// UpsertMetricSeriesState comment (same multi-array-unnest limitation); see
-// that comment for the monotonic-checkpoint WHERE guard's reasoning.
+// upsertMetricSeriesState: hand-written pgx (same multi-array-unnest limitation).
 func upsertMetricSeriesState(ctx context.Context, tx pgx.Tx, updates []seriesStateUpdate) error {
 	n := len(updates)
 	seriesHash := make([][]byte, n)
@@ -808,16 +682,13 @@ func upsertMetricSeriesState(ctx context.Context, tx pgx.Tx, updates []seriesSta
 	return nil
 }
 
-// metricGroupKey is rollup_hourly's primary key minus `source` (always
-// 'metric' here).
+// metricGroupKey is rollup_hourly's primary key minus `source` (always 'metric').
 type metricGroupKey struct {
 	bucket                 time.Time
 	project, vendor, model string
 }
 
-// metricGroupAgg accumulates one metricGroupKey's rollup_hourly columns —
-// only the ones SPEC §1.8's metric table ever feeds; every other column
-// keeps the table's DEFAULT 0.
+// metricGroupAgg accumulates one metricGroupKey's rollup_hourly columns (SPEC §1.8 fields only).
 type metricGroupAgg struct {
 	inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens int64
 	costReported                                                    float64
@@ -826,17 +697,7 @@ type metricGroupAgg struct {
 	editAccept, editReject                                          int32
 }
 
-// aggregateMetricGroups implements SPEC §1.8's metric-name -> rollup-column
-// table in Go: each FetchMetricRowsForRollup row's contribution (from
-// computeMetricDeltas) is routed to the column its metric name feeds,
-// grouped by (bucket, project, vendor, model). loc_added/loc_removed,
-// active_seconds, commits, pull_requests, and edit_decisions_* are never
-// model-attributable (SPEC §1.8, and P3-06's not_attributable list), so
-// they always group under model="" regardless of any model attribute the
-// raw metric happens to carry (lines_of_code.count does); only
-// cost.usage/token.usage are model-attributable. claude_code.session.count
-// and any unrecognized metric name are dropped here — SPEC §1.8: "no" in
-// the "Feeds rollups" column.
+// aggregateMetricGroups implements SPEC §1.8 metric-name to rollup-column routing (some fields never model-attributable).
 func aggregateMetricGroups(rows []gen.FetchMetricRowsForRollupRow, contribution []float64) map[metricGroupKey]*metricGroupAgg {
 	groups := map[metricGroupKey]*metricGroupAgg{}
 	get := func(bucket time.Time, project, vendor, model string) *metricGroupAgg {
@@ -896,21 +757,11 @@ func aggregateMetricGroups(rows []gen.FetchMetricRowsForRollupRow, contribution 
 	return groups
 }
 
-// roundInt64/roundInt32 convert a computed contribution (a float64 delta)
-// back to the integer rollup columns it feeds. Every metric routed through
-// them reports whole-number values (token counts, LOC counts, seconds,
-// decision counts) — rounding rather than truncating guards against a
-// stray float rounding error in the cumulative-diff subtraction flipping,
-// say, 3.0000000001 into a truncated 3 vs. -0.0000000001 into 0 either way,
-// which would be the same outcome, but 2.9999999998 truncating to 2 would
-// not be.
+// roundInt64/roundInt32 convert float64 delta to integer rollup columns (round vs truncate for precision).
 func roundInt64(f float64) int64 { return int64(math.Round(f)) }
 func roundInt32(f float64) int32 { return int32(math.Round(f)) }
 
-// insertMetricRollupHourly is the hand-written pgx counterpart of the SQL
-// InsertMetricRollupHourly comment (same multi-array-unnest limitation). No
-// ON CONFLICT: the matching bucket/source rows were deleted by
-// DeleteRollupHourly earlier in this same transaction.
+// insertMetricRollupHourly: hand-written pgx (same multi-array-unnest limitation).
 func insertMetricRollupHourly(ctx context.Context, tx pgx.Tx, groups map[metricGroupKey]*metricGroupAgg) error {
 	keys := make([]metricGroupKey, 0, len(groups))
 	for k := range groups {

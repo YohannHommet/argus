@@ -48,11 +48,8 @@ func TestHealthURL(t *testing.T) {
 	}
 }
 
-// withoutEnv unsets name for the duration of the test (restoring whatever
-// was there before, if anything) — t.Setenv can only set a value, never
-// remove one, and this test needs to prove behaviour in ARGUS_DATABASE_URL's
-// ABSENCE, which is the m35 scenario ("a YAML-configured deployment with no
-// DSN visible to this process").
+// withoutEnv unsets name for the duration of the test (t.Setenv only sets,
+// never unsets — needed for m35's scenario: YAML deployment with no DSN).
 func withoutEnv(t *testing.T, name string) {
 	t.Helper()
 	prev, had := os.LookupEnv(name)

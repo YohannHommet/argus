@@ -1,8 +1,6 @@
-// Command argus-sim is the standalone traffic-generator binary SPEC §7 and
-// DECISIONS.md name explicitly ("argus-sim, the traffic generator"). It is
-// a thin shim over internal/sim: `argusd sim` (cmd/argusd/main.go) wires
-// the exact same internal/sim.RunCLI, so the two binaries can never drift
-// (SPEC lead note 7: "Two binaries, one implementation").
+// Command argus-sim is the standalone traffic-generator binary (SPEC §7).
+// It wires the same internal/sim.RunCLI as `argusd sim`, so the two
+// binaries can never drift ("Two binaries, one implementation").
 package main
 
 import (

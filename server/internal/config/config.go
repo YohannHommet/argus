@@ -243,15 +243,9 @@ func (c *Config) validate(specs []fieldSpec) error {
 		if s.required && s.goName == "DatabaseURL" && c.DatabaseURL == "" {
 			return fmt.Errorf("config: %s is required", s.env)
 		}
-		// m19 fix: a "positive"-tagged field (every numeric/duration key
-		// whose only sane values are > 0 — queue sizes, worker counts,
-		// batch sizes, timeouts, intervals, byte limits) silently produces
-		// wrong behaviour rather than an error at 0 or negative. The
-		// original instance, ARGUS_INGEST_MAX_BODY_BYTES <= 0: Go clamps a
-		// negative http.MaxBytesReader limit to 0, so every non-empty
-		// ingest payload gets 413'd — total silent ingest loss on a server
-		// that still reports itself ready — with nothing at startup to
-		// catch it.
+		// m19: positive-tagged fields must reject 0/negative to prevent
+		// silent ingest loss (e.g., ARGUS_INGEST_MAX_BODY_BYTES≤0 would
+		// clamp in http.MaxBytesReader, silently 413'ing all payloads).
 		if s.positive && v.Field(s.index).Int() <= 0 {
 			return fmt.Errorf("config: %s: must be positive, got %d", s.env, v.Field(s.index).Int())
 		}

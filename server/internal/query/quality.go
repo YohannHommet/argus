@@ -1,9 +1,3 @@
-// Package query — quality.go is its read-service layer for GET /api/v1/facets, the
-// data-quality half of GET /api/v1/meta, and the two GET /api/v1/quality/*
-// endpoints (SPEC §3.1, §4.2, §4.3, P3-08). Every function here is a thin
-// call-through, matching analytics.go's reasoning: model.Facets/
-// DataQuality/UnknownKindGroup/HookLatency already carry SPEC's exact wire
-// shape, so there is nothing to assemble beyond error context.
 package query
 
 import (
@@ -15,9 +9,7 @@ import (
 	"github.com/YohannHommet/argus/server/internal/store"
 )
 
-// QualityReader is the narrow store port Facets/DataQuality/UnknownKinds/
-// HookLatency need — the same consumer-owned-port convention as
-// AnalyticsReader.
+// QualityReader is the narrow store port for quality operations.
 type QualityReader interface {
 	Facets(ctx context.Context) (model.Facets, error)
 	DataQuality(ctx context.Context) (model.DataQuality, error)
@@ -34,8 +26,7 @@ func Facets(ctx context.Context, r QualityReader) (model.Facets, error) {
 	return f, nil
 }
 
-// DataQuality backs the data_quality block (and the four duplicated
-// top-level flags) of GET /api/v1/meta (SPEC §4.2).
+// DataQuality backs the data_quality block of GET /api/v1/meta (SPEC §4.2).
 func DataQuality(ctx context.Context, r QualityReader) (model.DataQuality, error) {
 	dq, err := r.DataQuality(ctx)
 	if err != nil {
