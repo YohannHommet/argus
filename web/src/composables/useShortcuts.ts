@@ -22,7 +22,7 @@ function isTypingTarget(target: EventTarget | null): boolean {
 }
 
 /**
- * App-wide single-key shortcuts (PLAN.md P6-04): `/` focus search, `j`/`k` list navigation, `Esc`
+ * App-wide single-key shortcuts: `/` focus search, `j`/`k` list navigation, `Esc`
  * close, `?` help. A plain `window` keydown listener scoped to the calling component's mounted
  * lifetime — a view wires only the handlers it has something to do for (`SessionListView.vue`
  * registers `onFocusSearch`/`onMoveNext`/`onMovePrev`, `AppShell.vue` registers `onToggleHelp`), and

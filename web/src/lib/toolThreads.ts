@@ -6,17 +6,16 @@
  *
  * This is deliberately a *second*, display-only grouping pass on top of
  * `collapseEvents`, not a change to it: `collapseEvents` only merges
- * members of the *same* `kind` (duplicate telemetry for one occurrence —
- * SPEC §1.5.3(b)), so a `tool.pre` and its `tool.result` are, correctly,
- * two different `TimelineItem`s even after collapsing. Nesting them is a
- * presentation concern (SPEC's span-tree idiom, critic gap: "tool
- * calls/results don't read as children"), not a correlation-key merge, so
- * it stays out of the pure collapse function and its "highest-value test in
- * the project" contract.
+ * members of the *same* `kind` (duplicate telemetry for one occurrence),
+ * so a `tool.pre` and its `tool.result` are, correctly, two different
+ * `TimelineItem`s even after collapsing. Nesting them so a call and its
+ * result read as parent/child rather than unrelated flat siblings is a
+ * presentation concern, not a correlation-key merge, so it stays out of
+ * the pure collapse function.
  *
  * `display` folds the decision/duration/cost/tokens/success worth showing
- * on the *parent* row across the whole thread (SPEC §1.5.3(a)'s own
- * precedence, restated at item granularity): a decision recorded by
+ * on the *parent* row across the whole thread (the same precedence
+ * `collapseEvents` uses, restated at item granularity): a decision recorded by
  * `tool.decision` or `tool.result` must be visible on the call row itself,
  * not buried one click down in a child nobody expands.
  */

@@ -1,8 +1,8 @@
 <script setup lang="ts">
 /**
- * SPEC §6.2/§6.3: ingest health for the live view — queue depth, ingest lag,
+ * Ingest health for the live view — queue depth, ingest lag,
  * dropped total, exporters seen, connection state. Lives under `layout/`
- * per SPEC §6.3's file map, but is rendered by `LiveView` (not `AppShell`) —
+ * but is rendered by `LiveView` (not `AppShell`) —
  * it describes the live *stream's* health, not the whole app's, so it
  * belongs beside the feed it reports on rather than the persistent chrome.
  *
@@ -23,13 +23,13 @@
  *     perfectly healthy (server count 0) while a slow tab still misses
  *     frames (client count > 0), and vice versa.
  * Collapsing them into one "dropped" figure would hide which side of the
- * connection actually lost the data — exactly the vagueness PLAN.md's P5-05
- * ticket calls out ("a tooltip that says 'N events dropped' without saying
- * by whom"). Each gets its own value + tooltip naming its source.
+ * connection actually lost the data — exactly the vagueness a tooltip that
+ * just says "N events dropped" without saying by whom would leave. Each
+ * gets its own value + tooltip naming its source.
  *
- * ## Null vs zero (SPEC §4.1)
- * `stats` is `null` until the first `stats` SSE frame arrives (every ~2s
- * per SPEC §5.1) — queue depth/ingest lag/server-dropped all render `—` via
+ * ## Null vs zero
+ * `stats` is `null` until the first `stats` SSE frame arrives (every ~2s) —
+ * queue depth/ingest lag/server-dropped all render `—` via
  * `NullValue` in that window, never a fabricated `0`, since "no frame yet"
  * and "measured zero" are different facts. `clientDroppedTotal` has no such
  * gap: it is a real running counter seeded at `0` the moment the store
@@ -51,7 +51,7 @@ interface Props {
   clientDroppedTotal: number
   /** `liveStore.status` — drives the connection indicator. */
   status: LiveStatus
-  /** `useMetaStore()`'s `data_quality` flags (SPEC §4.3) — whether Argus has ever seen each exporter/hook fire, at all, ever. */
+  /** `useMetaStore()`'s `data_quality` flags — whether Argus has ever seen each exporter/hook fire, at all, ever. */
   logsExporterSeen: boolean
   metricsExporterSeen: boolean
   hooksSeen: boolean
@@ -69,7 +69,7 @@ const CLIENT_DROPPED_REASON =
   "Events this browser tab's own subscriber connection missed — reported via the stream's lag frames when this tab's buffer overflowed, e.g. the tab was backgrounded or the page was slow to keep up. Distinct from the server's own dropped_total: this counts only what this tab failed to receive."
 
 /**
- * Connection indicator (SPEC §6.2). `idle` (never subscribed) reads the
+ * Connection indicator. `idle` (never subscribed) reads the
  * same as `connecting` — a live view always subscribes on mount, so `idle`
  * is only ever visible for one reactive tick, if at all.
  */
@@ -82,7 +82,7 @@ const CONNECTION_META: Record<LiveStatus, { label: string; icon: typeof Wifi; cl
 }
 
 const connectionMeta = computed(() => CONNECTION_META[props.status])
-/** Both `reconnecting` and `closed` are "the stream is not currently delivering frames" — the one state PLAN.md's AC requires a visible reconnect indicator for. */
+/** Both `reconnecting` and `closed` are "the stream is not currently delivering frames" — the one state that requires a visible reconnect indicator. */
 const isDisconnected = computed(() => props.status === 'reconnecting' || props.status === 'closed')
 
 const exporters = computed(() => [
@@ -117,13 +117,7 @@ const EXPORTERS_DETAIL_REASON = computed(
       <p class="text-muted-foreground text-[0.6875rem]">
         Connection
       </p>
-      <!--
-        `role="status"` here, not on the whole strip: this is the one field
-        worth an assistive-tech announcement on change (SPEC's accessibility
-        exit criterion asks for role=status on live-updating regions), but
-        applying it to the fast-changing numeric cells below would spam a
-        screen reader on every ~2s stats frame — the opposite of useful.
-      -->
+      <!-- role=status only here, not the whole strip — the fast-changing numeric cells would spam a screen reader every ~2s otherwise. -->
       <p
         role="status"
         class="flex items-center gap-1.5 text-sm leading-tight font-semibold"

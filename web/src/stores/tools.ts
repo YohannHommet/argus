@@ -17,14 +17,13 @@ const DEFAULT_LIMIT = 50
  * `operations['listToolCalls']`, generated from `server/api/openapi.yaml`):
  * `project`, `tool`, `decision_source`, `from`, `to`, `limit`, `cursor`.
  *
- * Deliberately **not** here, despite PLAN.md's P4-06 prose mentioning them:
+ * Deliberately **not** here, even though earlier planning docs mentioned them:
  * `correlation` and `session` are not query parameters this endpoint
  * accepts, and there is **no `sort` parameter at all** — unlike
  * `GET /api/v1/sessions` (`sessions.ts`'s `sort: "last_event_at" | ... `),
  * `listToolCalls`'s inline query type has no `sort` field, and
- * `docs/SPEC.md`'s §4.2 endpoint table and `server/api/openapi.yaml`'s
- * `/api/v1/tool-calls` parameters list agree. Ground truth beats the
- * ticket text here: this store never sends a `sort` param, and
+ * `server/api/openapi.yaml`'s `/api/v1/tool-calls` parameters list
+ * confirms it. This store never sends a `sort` param, and
  * `ToolCallTable.vue`'s column sort is a client-side reorder of whatever
  * page is currently loaded, not a refetch (see that component's own doc
  * comment).
@@ -61,12 +60,11 @@ function queryToArray(value: LocationQuery[string]): string[] {
  * throw" rule). Duplicated rather than shared: `ToolCallFilters` is a
  * different, non-overlapping shape from `SessionFilters` (no `vendor`,
  * `model`, `status`, `q`, or `sort`), and this is only the *second*
- * occurrence of the pattern — CLAUDE.md's own rule is duplicate once,
- * extract on the third.
+ * occurrence of the pattern — duplicate once, extract on the third.
  *
  * `tool` is read from **both** `tool` (this endpoint's real query param —
  * see above) and `tool_name` (the field name `DecisionMatrix.vue` emits on
- * its `filter` event, matching `ToolCall.tool_name` — P4-08's `/analytics`
+ * its `filter` event, matching `ToolCall.tool_name` — the `/analytics`
  * host hasn't been built yet, so this accepts whichever key a
  * not-yet-written navigation lands on rather than guessing one). The two
  * are merged, not one overriding the other — a hand-built or shared URL
@@ -107,10 +105,10 @@ function isAbortError(err: unknown): boolean {
 }
 
 /**
- * `/tools`'s cross-session tool-call list (SPEC §6.2's "decision-provenance
+ * `/tools`'s cross-session tool-call list (the "decision-provenance
  * drill-down"), filtered and keyset-paginated, URL query as the single
  * source of truth for filter state — same contract as `sessions.ts`. Also
- * backs the exit-criterion-5 deep link from `DecisionMatrix.vue`'s `filter`
+ * backs the deep link from `DecisionMatrix.vue`'s `filter`
  * event: whatever is in `route.query` at the moment this store is first
  * created (i.e. `/tools`'s first mount) becomes the initial filter set and
  * is fetched immediately.
@@ -165,7 +163,7 @@ export const useToolsStore = defineStore('tools', () => {
 
     const client = useApiClient()
     // Only 'append' ever sends a cursor — a filter change already cleared nextCursor synchronously in
-    // setFilters, so a stale cursor can never reach this call (a mismatch 400s per SPEC §4.1).
+    // setFilters, so a stale cursor can never reach this call (a mismatch 400s).
     const cursor = mode === 'append' ? nextCursor.value : null
 
     try {

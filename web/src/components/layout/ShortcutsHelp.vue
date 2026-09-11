@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * The `?`-toggled help overlay (PLAN.md P6-04): a static reference for the app-wide keyboard
+ * The `?`-toggled help overlay: a static reference for the app-wide keyboard
  * shortcuts `useShortcuts.ts` wires in. Controlled open state (`v-model:open`) — `AppShell.vue` owns
  * when it's shown (the `?` handler), this component only renders the list. A plain `Dialog`
  * (centered, modal) rather than a `Sheet`: this is reference content to glance at and dismiss, not a

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * The six KPI tiles PLAN.md's P4-09 names: partial sessions, unknown-kind
+ * The six KPI tiles this view names: partial sessions, unknown-kind
  * events (24h), clock-skewed events (24h), dropped total, heuristic
  * tool-call share, and oldest raw event.
  *
@@ -14,15 +14,15 @@
  *     never as a count.
  *   - dropped total: `StreamStatsFrame.dropped_total` exists only on the
  *     live SSE `/api/v1/stream`, not on any endpoint this store reads.
- *   - heuristic tool-call share: `ToolCall.correlation` (SPEC §1.6) is a
+ *   - heuristic tool-call share: `ToolCall.correlation` is a
  *     per-row enum with a "heuristic" member, never aggregated into a
  *     share anywhere.
  *   - oldest raw event: no field, on any endpoint, carries the oldest
  *     queryable raw event's timestamp.
- * SPEC §4.1 forbids rendering a fabricated zero for any of these, so each
+ * Rendering a fabricated zero for any of these is forbidden, so each
  * renders `—` via `NullValue` with an honest, tile-specific reason
  * (`NOT_EXPOSED_BY_API`) instead — never silently omitted, so every tile
- * PLAN.md names is still visibly present on the view.
+ * named here is still visibly present on the view.
  *
  * `StatTile` (components/analytics) is reused as-is for the four tiles
  * with no color-reactivity requirement below — it already owns the

@@ -4,8 +4,8 @@
  * choose between itself: a persistent right-side `EventDetailPanel` on wide
  * viewports (>=1024px — enough room for the timeline plus a readable
  * inspector column) and the overlay `EventDetailSheet` below that, where a
- * permanent panel would starve the timeline list of width. Round-3 critic
- * gap: "prefer a persistent right-side pane on wide viewports... over a
+ * permanent panel would starve the timeline list of width: "prefer a
+ * persistent right-side pane on wide viewports... over a
  * modal/overlay drawer".
  *
  * `useMediaQuery` degrades to "narrow" (the Sheet) wherever

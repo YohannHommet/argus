@@ -1,10 +1,10 @@
 <script setup lang="ts">
 /**
- * SPEC §6.2's live-view tiles: one dense row per session currently seen on
+ * One dense row per session currently seen on
  * the firehose, with an identity block (status, project, vendor, short id +
  * copy) on the left and right-aligned tabular metric columns (last event,
  * cost, current tool) plus a "follow" affordance into `SessionDetailView`
- * (P5-06's territory — this only links to `/sessions/:id?live=1`; the query
+ * (this only links to `/sessions/:id?live=1`; the query
  * param is a request for that view to open in live-follow mode, honoured or
  * not on its side) on the right.
  *
@@ -45,8 +45,8 @@ const NO_TOOL_NAME_REASON = 'This tool event carries no tool_name'
 
 /**
  * "Current tool" isn't a field `SessionSummary` carries (checked against
- * `schema.d.ts` — there is no such property), so PLAN.md's P5-05 ticket asks
- * for it to be derived honestly from the stream rather than invented. This
+ * `schema.d.ts` — there is no such property), so it's derived honestly
+ * from the stream rather than invented. This
  * walks `events` in array order and keeps overwriting a per-session slot on
  * every `tool.*`-kind event (`tool.pre`/`tool.decision`/
  * `tool.permission_request`/`tool.result`/`tool.batch`), so the last write
@@ -81,7 +81,7 @@ function shortId(sessionId: string): string {
   return sessionId.slice(0, 8)
 }
 
-/** `?live=1` — a request for `SessionDetailView` to open in live-follow mode (SPEC §6.2: "'follow session' jumps to detail in live mode"). The destination view's own handling of this param is a different ticket's territory. */
+/** `?live=1` — a request for `SessionDetailView` to open in live-follow mode ("'follow session' jumps to detail in live mode"). The destination view's own handling of this param is a different component's territory. */
 function followTarget(sessionId: string) {
   return { path: `/sessions/${sessionId}`, query: { live: '1' } }
 }

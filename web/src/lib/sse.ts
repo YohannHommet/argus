@@ -1,6 +1,6 @@
 /**
- * Transport primitives for Argus's live SSE feed (SPEC §5, ticket P5-04).
- * Deliberately free of Pinia/Vue reactivity: `stores/live.ts` owns *when*
+ * Transport primitives for Argus's live SSE feed. Deliberately free of
+ * Pinia/Vue reactivity: `stores/live.ts` owns *when*
  * to open/close a connection and how to react to frames; this module owns
  * *how* a connection is described (URL) and retried (backoff), so both
  * halves are unit-testable without a DOM `EventSource` — see
@@ -10,8 +10,7 @@
 /**
  * Minimal structural subset of `EventSource` the store uses. Structural,
  * not `extends EventSource`, so a test can hand in a plain object that
- * never touches the network — the whole point of the P5-04 AC ("tests
- * with a fake EventSource").
+ * never touches the network — tests with a fake `EventSource`.
  */
 export interface EventSourceLike {
   readonly readyState: number
@@ -37,7 +36,7 @@ export const EVENT_SOURCE_CLOSED = 2
 let eventSourceFactory: EventSourceFactory = (url) => new EventSource(url)
 
 /**
- * Test seam (prescribed by ticket P5-04): the store never calls
+ * Test seam: the store never calls
  * `new EventSource` directly, only `createEventSource` below, so a spec
  * can redirect every connection this module ever opens to a fake without
  * touching the network. A module-level setter — mirroring
@@ -60,15 +59,15 @@ export function createEventSource(url: string): EventSourceLike {
   return eventSourceFactory(url)
 }
 
-/** SPEC §5.3 / ARGUS_STREAM_REPLAY_MAX: the client-side mirror of the server's own replay cap. */
+/** The client-side mirror of the server's own replay cap, `ARGUS_STREAM_REPLAY_MAX`. */
 export const RING_CAPACITY = 2000
 
-/** Ticket P5-04's AC: reconnect delays must never exceed this, however many attempts fail in a row. */
+/** Reconnect delays must never exceed this, however many attempts fail in a row. */
 export const BACKOFF_CAP_MS = 30_000
 
 /**
- * First attempt's uncapped delay (before doubling/jitter). Not SPEC-mandated — no reconnect base is
- * specified anywhere in SPEC.md's §5.2, only the 30s cap — chosen so a single dropped connection
+ * First attempt's uncapped delay (before doubling/jitter). No reconnect base is
+ * mandated anywhere, only the 30s cap — chosen so a single dropped connection
  * doesn't retry near-instantly (which would just re-fail against a server still restarting) while
  * still feeling responsive for a genuinely transient blip.
  */
@@ -81,7 +80,7 @@ const BACKOFF_BASE_MS = 1_000
  * Invariants a caller/test can rely on:
  *   - never exceeds `BACKOFF_CAP_MS`.
  *   - monotonically non-decreasing in `attempt`, for any *fixed* `random()` return value — the two
- *     things the AC asserts (an "increasing... capped at 30s" sequence).
+ *     invariants a test can assert against directly (an "increasing... capped at 30s" sequence).
  *
  * Full jitter (`random() * delay`) would violate the second invariant — it can return a smaller
  * value for a larger attempt, which would make "increasing delays" untestable without a huge sample.
@@ -97,7 +96,7 @@ export function backoffDelay(attempt: number, random: () => number = Math.random
   return cappedDelay / 2 + random() * (cappedDelay / 2)
 }
 
-/** SPEC §5's two channels: the fleet-wide firehose (optionally filtered) and one session's own stream. */
+/** The two channels: the fleet-wide firehose (optionally filtered) and one session's own stream. */
 export type LiveTopic =
   | { kind: 'firehose'; kinds?: string[]; project?: string; vendor?: string }
   | { kind: 'session'; id: string }
@@ -106,18 +105,17 @@ export type LiveTopic =
  * Builds the stream path for a topic, optionally resuming from a replay position.
  *
  * Same-origin, relative path — matching `api/client.ts`'s own default `baseUrl`, which is `''`
- * because Argus serves ops/read/ingest/stream from one origin (SPEC §4.4); `pnpm dev`'s Vite proxy
+ * because Argus serves ops/read/ingest/stream from one origin; `pnpm dev`'s Vite proxy
  * and the embedded-SPA deployment both cover a bare `/api/v1/...` path without needing an absolute
  * URL here.
  *
- * `kinds`/`project`/`vendor` are Argus's own vendor-vocabulary pass-through fields (SPEC §0): they
+ * `kinds`/`project`/`vendor` are Argus's own vendor-vocabulary pass-through fields: they
  * are appended verbatim, never validated against a closed set. `kinds` is repeated once per value
- * (SPEC §4.1's "repeated params OR within a field" convention, same as the REST list endpoints) —
- * `project`/`vendor` are single-valued here because that's the `LiveTopic` shape this ticket
- * prescribes, even though the equivalent REST query params (`Project`/`Vendor` in `schema.d.ts`) are
- * repeatable.
+ * (the "repeated params OR within a field" convention, same as the REST list endpoints) —
+ * `project`/`vendor` are single-valued here because that's the `LiveTopic` shape used here, even
+ * though the equivalent REST query params (`Project`/`Vendor` in `schema.d.ts`) are repeatable.
  *
- * `opts.after` is the SSE reconnect fallback (SPEC §5.2): omitted entirely (not even as `after=`)
+ * `opts.after` is the SSE reconnect fallback: omitted entirely (not even as `after=`)
  * when there's no prior position, since the wire distinguishes "no replay requested" from "replay
  * from an empty string" — the fallback for a client-initiated reconnect the browser's own
  * `Last-Event-ID` header can't cover (see stores/live.ts's `onerror` handling for why both paths

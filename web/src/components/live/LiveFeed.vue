@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * SPEC §6.2/§6.3 firehose feed: streaming rows via `EventRow`, kind filter, pause/resume,
+ * Firehose feed: streaming rows via `EventRow`, kind filter, pause/resume,
  * auto-scroll, row-click → `EventDetailSheet`.
  *
  * The "Received" column is each row's client wall-clock the instant this tab's `EventSource`
@@ -103,9 +103,9 @@ watch(
  * just kinds seen so far on the feed — so a `Kind` Argus defines but that
  * happens not to have arrived yet this session (e.g. `mcp.elicitation`) is
  * still selectable, and `'unknown'` (Argus's own closed-vocabulary escape
- * hatch for an `event_name` it doesn't recognise, SPEC §1.5.1) is always
+ * hatch for an `event_name` it doesn't recognise) is always
  * selectable/renderable too — the one member of `Kind` that plays the same
- * "must never be rejected" role SPEC §0's vendor-vocabulary rule plays for
+ * "must never be rejected" role the vendor-vocabulary rule plays for
  * `decision`/`tool_source`/etc. `Kind` itself is otherwise the
  * Argus-normalised *closed* set (`eventKinds.ts`'s own doc comment), so
  * there is no arbitrary out-of-schema string to defend against here — that
@@ -126,7 +126,7 @@ const kindFilteredEvents = computed<LiveTimelineEvent[]>(() => {
 })
 
 /**
- * `collapse: false` (PLAN.md P5-05's own prescribed choice): `collapseEvents`'s
+ * `collapse: false`: `collapseEvents`'s
  * default 2s-window grouping would make an already-rendered row mutate —
  * gain a "N sources" badge, swap its merged fields — while a reader is
  * actively looking at it. That is acceptable on a static, already-complete
@@ -142,7 +142,7 @@ const timelineItems = computed<TimelineItem[]>(() => collapseEvents(kindFiltered
  * The store's `events` (and everything derived from it above) stays
  * chronological oldest-first — the store's own doc comment is explicit that
  * this is deliberate and presentation order is the view's job. The firehose
- * itself reads newest-on-top (SPEC §6.2), so the reversal happens exactly
+ * itself reads newest-on-top, so the reversal happens exactly
  * once, right here, immediately before render.
  */
 const displayItems = computed<TimelineItem[]>(() => [...timelineItems.value].reverse())
@@ -279,12 +279,7 @@ function onRowOpen(eventRef: string): void {
           data-testid="live-feed-event-count"
         >{{ formatCount(totalEventCount) }} events this tab</span>
 
-        <!--
-          Labels the per-row duration bar's scale, same convention as
-          `Timeline.vue`'s own `timeline-duration-scale-note` — only shown
-          once something on the visible feed has a measured duration to
-          scale against.
-        -->
+        <!-- Labels the per-row duration bar's scale, same convention as Timeline.vue's timeline-duration-scale-note. -->
         <span
           v-if="maxDurationMs > 0"
           class="text-muted-foreground text-xs"
@@ -337,12 +332,7 @@ function onRowOpen(eventRef: string): void {
       title="No events yet"
       :description="isFiltered ? 'No buffered event matches the selected kinds.' : 'Events appear here as soon as they arrive on the live feed.'"
     />
-    <!--
-      Layout-thrash avoidance (PLAN.md P5-05): `:key="item.key"` (the anchor event_ref) lets Vue's
-      keyed patch reuse row DOM nodes across a prepend instead of rebuilding the whole list; `EventRow`
-      fixes each row's height and right-aligns numeric columns so a new row never reflows a neighbour;
-      `scrollTop` is only written from the `watch(displayItems, ...)` below when `following` is true.
-    -->
+    <!-- Layout-thrash avoidance: :key="item.key" lets Vue's keyed patch reuse row DOM nodes across a prepend; EventRow fixes row height/alignment so a new row never reflows a neighbour. -->
     <div
       v-else
       ref="scrollContainer"
@@ -350,14 +340,7 @@ function onRowOpen(eventRef: string): void {
       data-testid="live-feed-scroll"
       @scroll="onScroll"
     >
-      <!--
-        `sticky top-0` (the scroll container above is this row's own scrolling ancestor) keeps this
-        header pinned while the newest-first list scrolls underneath — a plain `div`, not a `<table>`,
-        since `EventRow` itself is fixed-width flex columns. Column widths/gaps below are kept in
-        lockstep with `EventRow`'s own markup by hand (the two are adjacent in any diff touching
-        either). The "Event" span matches `EventRow`'s fixed `w-96` under `compact-event-column`, so
-        the metric cluster sits right after it instead of floating off to the table's edge.
-      -->
+      <!-- sticky top-0 pins this header over the plain-div (not table) list; column widths are kept in lockstep with EventRow's markup by hand — the two sit adjacent in any diff touching either. -->
       <div
         class="border-border bg-muted/40 text-muted-foreground sticky top-0 z-10 flex min-w-0 items-center gap-3 border-b px-3 text-xs font-medium"
         data-testid="live-feed-header"

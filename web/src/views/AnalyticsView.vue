@@ -1,9 +1,9 @@
 <script setup lang="ts">
 /**
- * SPEC §4.3's fleet dashboard: KPI tiles, a cost timeseries (with a
+ * The fleet dashboard: KPI tiles, a cost timeseries (with a
  * `group_by` switch), a token timeseries, model + project breakdowns, the
  * decision matrix, a tool leaderboard, and an error panel — all driven by
- * `analyticsStore`, which owns every fetch/abort/URL-sync concern (P4-08).
+ * `analyticsStore`, which owns every fetch/abort/URL-sync concern.
  *
  * This view itself only maps store state to props/events: no fetching, no
  * URL manipulation, no attributability decisions happen here.
@@ -72,10 +72,10 @@ function onGroupByChange(value: unknown): void {
 }
 
 /**
- * Exit criterion 5's other half: a decision-matrix cell links to `/tools`
+ * A decision-matrix cell links to `/tools`
  * filtered on the same tool/source, using the API's own snake_case param
  * names (`decision_source`, `tool_name`) — the `/tools` view reads exactly
- * those (another agent's ticket).
+ * those.
  */
 function onDecisionFilter(payload: DecisionMatrixFilter): void {
   void router.push({ name: 'tools', query: { decision_source: payload.decision_source, tool_name: payload.tool_name } })
@@ -100,8 +100,8 @@ function tileReason(field: string): string | undefined {
 }
 
 /**
- * Round-5 UI pass ("flat, equal-weight numbers with no comparison or trend
- * context"): every KPI tile gets a real period-over-period delta, and the
+ * "Flat, equal-weight numbers with no comparison or trend
+ * context": every KPI tile gets a real period-over-period delta, and the
  * ones a per-bucket timeseries actually backs also get an inline
  * sparkline (see `stores/analytics.ts`'s `KPI_SPARKLINE_METRICS` doc
  * comment for exactly which ones, and why the rest can't fake one).
@@ -122,7 +122,7 @@ const formattedRejectRateDelta = computed(() => {
   return `${sign}${formatRejectRate(Math.abs(delta))}`
 })
 
-/** Reject rate is 'destructive'-polarity (round-3 UI pass): rising reads as a warning, falling as an improvement — same rule `StatTile`'s own `deltaClass` applies, duplicated here only because this one KPI renders its own `Card` rather than a `StatTile` (SPEC has no percent `ChartMetricKind`). */
+/** Reject rate is 'destructive'-polarity: rising reads as a warning, falling as an improvement — same rule `StatTile`'s own `deltaClass` applies, duplicated here only because this one KPI renders its own `Card` rather than a `StatTile` (there's no percent `ChartMetricKind`). */
 const rejectRateDeltaClass = computed(() => {
   const delta = rejectRateDelta.value
   if (!delta) return 'text-muted-foreground'
@@ -143,13 +143,7 @@ const rejectRateDeltaClass = computed(() => {
       </h1>
     </div>
 
-    <!--
-      "Logs exporter appears off" banner: `metrics_only_projects` (SPEC
-      §4.3) lives on the analytics Summary, not on /meta — a project can
-      only be metrics-only *within a window*, which is a fact this store
-      owns, not a global one metaStore could carry (see meta.ts's own
-      `metricsOnlyProjects`, which is hardcoded to `[]` and says so).
-    -->
+    <!-- "Logs exporter appears off" banner: metrics_only_projects lives on the analytics Summary (per-window), not on /meta — see meta.ts's own metricsOnlyProjects, hardcoded to []. -->
     <div
       v-if="summary && summary.metrics_only_projects.length > 0"
       role="status"
@@ -339,19 +333,7 @@ const rejectRateDeltaClass = computed(() => {
       </Button>
     </div>
 
-    <!--
-      SPEC §6.1's null-vs-zero thesis, tile by tile: every value below is bound directly to the raw
-      `Summary` field. Under a model filter the server itself returns `null` (never `0`) for every
-      non-attributable counter and lists it in `not_attributable[]` — `tileReason` reads that array
-      (never a hardcoded client-side list) to supply StatTile's tooltip reason, and StatTile's own
-      null-vs-zero handling renders a measured `0` (e.g. `loc.added: 0`) as "0", never collapsing it
-      into the same dash a `null` gets.
-
-      Round-5 UI pass: Cost/Tokens/API requests are the fleet's three headline numbers, so they get
-      their own larger primary row (StatTile `size="lg"`) ahead of the rest — every tile also gets a
-      real period-over-period delta, and the metrics a per-bucket timeseries backs get an inline
-      sparkline too (`stores/analytics.ts`'s `costDelta`/`kpiDelta`/etc., never fabricated).
-    -->
+    <!-- Null-vs-zero, tile by tile: tileReason reads the server's own not_attributable[] (never hardcoded) for StatTile's dash reason; every tile also gets a real period-over-period delta, with a sparkline where a per-bucket timeseries backs it. -->
     <div
       class="grid grid-cols-1 gap-3 md:grid-cols-3"
       data-testid="analytics-kpi-primary"
@@ -497,8 +479,7 @@ const rejectRateDeltaClass = computed(() => {
         @retry="analytics.retrySummary()"
       />
 
-      <!-- StatTile has no percent ChartMetricKind (SPEC has none for a rate) — reject_rate is
-           formatted directly via `formatRejectRate` rather than misrepresented through 'count'. -->
+      <!-- StatTile has no percent ChartMetricKind — reject_rate is formatted directly via formatRejectRate rather than misrepresented through 'count'. -->
       <Card
         size="sm"
         data-testid="kpi-reject-rate"
@@ -612,13 +593,7 @@ const rejectRateDeltaClass = computed(() => {
         </CardContent>
       </Card>
 
-      <!--
-        Tool leaderboard + error panel are both refused server-side under a model filter
-        (SPEC §4.3: dimension=tool|error_type has no model column, and metric=calls is refused on
-        any dimension) — analyticsStore's `isRequestAttributable` guard skips the request entirely
-        rather than sending it and eating the 400, so under a model filter this renders an honest
-        explanation instead of an empty chart or a fake error banner.
-      -->
+      <!-- Tool leaderboard + error panel are refused server-side under a model filter — analyticsStore's isRequestAttributable guard skips the request rather than eating a 400, rendering an honest explanation instead. -->
       <Card data-testid="panel-tool-leaderboard">
         <CardHeader>
           <CardTitle>Tool leaderboard</CardTitle>

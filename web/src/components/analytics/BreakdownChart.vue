@@ -1,13 +1,13 @@
 <script setup lang="ts">
 /**
- * Renders `GET /analytics/breakdown` (SPEC §4.3) as a horizontal bar chart
+ * Renders `GET /analytics/breakdown` as a horizontal bar chart
  * (`variant="bar"`, default) or a pie (`variant="pie"`), rows sorted as
  * the API returns them (already ranked by value desc). A `""` key (e.g.
  * `dimension=query_source`'s "no source recorded" bucket) is labelled
  * "unattributed"; any other key — including a vocabulary Argus has never
  * seen, like `a_future_query_source` — renders verbatim, since dimensions
  * such as `decision_source`/`query_source` are unconstrained vendor
- * vocabularies (SPEC §4.4).
+ * vocabularies.
  */
 import { computed, ref } from 'vue'
 import type { ComposeOption } from 'echarts/core'
@@ -33,7 +33,7 @@ interface Props {
   error?: ApiError | Error | null
   /**
    * `dimension=query_source`'s `value` is always a cost figure regardless
-   * of the `metric=` the caller fetched with (SPEC §4.3) — pass
+   * of the `metric=` the caller fetched with — pass
    * `metric="cost"` for that dimension explicitly, this component does not
    * infer it from `data.dimension`.
    */
@@ -60,7 +60,7 @@ useChartResize(containerRef, chartRef)
 
 const isEmpty = computed(() => !props.data || props.data.rows.length === 0)
 
-/** `''` (unattributed) gets a visible label; every other key renders verbatim, per SPEC §4.4. */
+/** `''` (unattributed) gets a visible label; every other key renders verbatim. */
 function rowLabel(key: string): string {
   return key === '' ? 'unattributed' : key
 }
@@ -136,7 +136,7 @@ const option = computed<BreakdownOption>(() => {
   }
 })
 
-/** PLAN.md P6-04: the disclosure's table, one row per `Breakdown.rows` entry, same label/formatter the chart itself uses — never a second formatting pass that could drift from what's drawn. */
+/** The disclosure's table, one row per `Breakdown.rows` entry, same label/formatter the chart itself uses — never a second formatting pass that could drift from what's drawn. */
 const dataTableRows = computed<(string | number)[][]>(() => {
   const d = props.data
   if (!d) return []

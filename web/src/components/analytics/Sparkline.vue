@@ -1,13 +1,13 @@
 <script setup lang="ts">
 /**
- * Inline per-tile trend line for the KPI strip (round-5 UI pass: tiles were
- * "flat, equal-weight numbers with no comparison or trend context"). Plain
+ * Inline per-tile trend line for the KPI strip — tiles were
+ * "flat, equal-weight numbers with no comparison or trend context". Plain
  * SVG rather than a `vue-echarts` instance — twelve tiles is twelve chart
  * instances' worth of canvas/resize-observer overhead for a decoration a
  * few pixels tall, and a `<path>` is trivial to assert against in a mount
  * test without mocking a chart library.
  *
- * Colors still come from `useChartTheme` (SPEC §6.1: charts and the rest of the UI must never
+ * Colors still come from `useChartTheme` (charts and the rest of the UI must never
  * drift), but a sparkline's hue is picked by `metricColor(theme, metricKey)` (never `paletteColor`'s
  * categorical cycle): `metricKey` says *which* KPI this tile trends (cost/tokens/requests
  * neutral-primary, errors/rejects destructive, the rest a muted secondary hue — see

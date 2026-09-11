@@ -13,7 +13,7 @@ export type Correlation = components['schemas']['Correlation']
 export const SORTABLE_KEYS = ['wait_ms', 'duration_ms'] as const
 export type SortableKey = (typeof SORTABLE_KEYS)[number]
 
-/** Pure — nulls sort last regardless of direction (SPEC §6.1: a null is "unknown", never treated as
+/** Pure — nulls sort last regardless of direction (a null is "unknown", never treated as
  * the lowest real value), non-null values descending. Exported for direct unit testing. */
 export function sortRows(rows: ToolCall[], key: SortableKey | null | undefined): ToolCall[] {
   if (!key) return rows
@@ -30,7 +30,7 @@ export function sortRows(rows: ToolCall[], key: SortableKey | null | undefined):
 
 <script setup lang="ts">
 /**
- * The decision-provenance drill-down table (SPEC §6.2/§6.3, PLAN P4-06).
+ * The decision-provenance drill-down table.
  * Purely presentational — rows/loading/error/sort come in as props, sort
  * requests and row clicks go out as emits, no store import — so the exact
  * same component renders both `/tools` (cross-session, `showSession: true`)
@@ -108,8 +108,8 @@ const SORTABLE_COLUMNS: ColumnMeta[] = [
 ]
 
 /**
- * `wait_ms`/`file_path` render `—` per-row already (SPEC §6.1's null-vs-zero
- * rule), but the round-6 UI-pass gap is coarser than that: in a loaded page
+ * `wait_ms`/`file_path` render `—` per-row already (the null-vs-zero
+ * rule), but there's a coarser gap than that: in a loaded page
  * where *every* row is null for one of these fields, the whole column is
  * dead weight — ~20% of the table's width spent on a wall of dashes. Rather
  * than fabricate a merged pseudo-column, this drops the column outright
@@ -134,7 +134,7 @@ interface CorrelationMeta {
   icon: Component
   class: string
   description: string
-  /** Only `hook_only` gets an outlined badge treatment — the AC's "distinct visual, not just a
+  /** Only `hook_only` gets an outlined badge treatment — "distinct visual, not just a
    * differently-coloured dot": it is the one case where the authoritative `tool_decision` fields
    * (decision/decision_source/permission_mode) are absent, so the row's provenance is weakest. */
   emphasize: boolean

@@ -3,8 +3,7 @@ import AppShell from '@/components/layout/AppShell.vue'
 import { Toaster } from '@/components/ui/sonner'
 import { useUiStore } from '@/stores/ui'
 
-// Boot the theme store so it takes ownership of <html>'s class after the
-// anti-flash inline script in index.html has done its job pre-paint.
+// Boot the theme store so it takes ownership of <html>'s class after index.html's anti-flash inline script has done its job pre-paint.
 useUiStore()
 </script>
 
@@ -12,12 +11,6 @@ useUiStore()
   <AppShell>
     <router-view />
   </AppShell>
-  <!--
-    Mounted once, app-wide — src/lib/toast.ts's notifyApiFailure() is the
-    only way anything should push a toast, so there is exactly one
-    Toaster to receive it. Never a substitute for a view's inline
-    ErrorState (see toast.ts's doc comment): every view's primary fetch
-    failure still renders in place.
-  -->
+  <!-- Mounted once, app-wide — toast.ts's notifyApiFailure() is the only way anything pushes a toast; never a substitute for a view's inline ErrorState. -->
   <Toaster />
 </template>

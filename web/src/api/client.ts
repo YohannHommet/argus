@@ -8,7 +8,7 @@ export interface ApiClientOptions {
   /**
    * Root URL prepended to every request. Defaults to `''` (same origin):
    * `server/api/openapi.yaml`'s own `servers` entry is `/`, because Argus
-   * serves ops/read/ingest from one origin (SPEC §4.4). That default
+   * serves ops/read/ingest from one origin. That default
    * covers both the embedded-SPA deployment (the server serves the built
    * assets itself) and `pnpm dev` (vite.config.ts proxies `/api`, `/v1`
    * and `/ingest` to the backend) — override only for a cross-origin
@@ -16,7 +16,7 @@ export interface ApiClientOptions {
    */
   baseUrl?: string
   /**
-   * Bearer token for `ARGUS_API_TOKEN` (SPEC §3.5/§3.6). Must come from
+   * Bearer token for `ARGUS_API_TOKEN`. Must come from
    * runtime configuration/injection — never hardcode it here, and never
    * log it.
    */
@@ -47,8 +47,8 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
 
 /**
  * Unwraps an openapi-fetch response into its typed success payload, or
- * throws a typed {@link ApiError} built from the problem+json body (SPEC
- * §4.1). Pass `{ signal }` through to the `GET`/`POST`/… call to support
+ * throws a typed {@link ApiError} built from the problem+json body.
+ * Pass `{ signal }` through to the `GET`/`POST`/… call to support
  * cancellation: an aborted request rejects with the underlying
  * `AbortError` — it never reaches this function's error branch, since
  * `fetch` itself throws before a response exists to build an ApiError

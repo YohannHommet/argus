@@ -1,7 +1,7 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 
 /**
- * All six §6.2 top-level views, the `/` -> `/sessions` redirect, and the
+ * All six top-level views, the `/` -> `/sessions` redirect, and the
  * catch-all NotFoundView. Only five of these six views are reachable from a
  * static sidebar link (SessionDetailView needs a session id) — see
  * AppShell.vue's nav list and its accompanying deviation note.

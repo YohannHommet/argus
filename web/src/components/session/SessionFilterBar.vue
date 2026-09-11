@@ -36,11 +36,11 @@ const search = computed({
 })
 
 /**
- * round-4 UI gap: bare native `<input type="date">` pairs read as off-palette UA chrome next to
+ * Bare native `<input type="date">` pairs read as off-palette UA chrome next to
  * five custom-styled selects. Replaced with a segmented relative-range control (matching the
  * reference bar's 24H/7D/1M pill group) plus a "Custom…" popover — but the wire contract is
- * unchanged: every preset here just writes one of the API's own relative shorthands (SPEC §4.1,
- * already exercised by sessions.spec.ts's `from: '-7d'` round-trip) into `filters.from`, so the
+ * unchanged: every preset here just writes one of the API's own relative shorthands
+ * (already exercised by sessions.spec.ts's `from: '-7d'` round-trip) into `filters.from`, so the
  * `from`/`to` URL params and their parse/serialise round-trip in stores/sessions.ts need no changes
  * at all — only this component's presentation of them does.
  */
@@ -249,11 +249,7 @@ function hasActiveFilters(): boolean {
       </Select>
     </div>
 
-    <!--
-      Segmented relative-range presets + a "Custom…" popover, replacing the pair of bare
-      `<input type="date">` fields (round-4 UI gap). Grouped as one flex child so it wraps atomically
-      when the toolbar runs out of width, same reasoning as every other grouped control here.
-    -->
+    <!-- Grouped as one flex child so it wraps atomically when the toolbar runs out of width, same as every other grouped control here. -->
     <div class="flex flex-col gap-1">
       <label class="text-muted-foreground text-xs">Time range</label>
       <div class="flex items-center gap-1.5">

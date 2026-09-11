@@ -1,7 +1,7 @@
 /**
  * Reactive `window.matchMedia` wrapper — the one thing `EventInspector.vue`
- * needs to decide between a persistent right-side panel (wide viewports,
- * SPEC/critic reference: Langfuse's span-tree + inspector visible together)
+ * needs to decide between a persistent right-side panel (wide viewports —
+ * Langfuse's span-tree + inspector visible together)
  * and the existing overlay `Sheet` (narrow viewports, where a permanent
  * panel would starve the timeline of width).
  *

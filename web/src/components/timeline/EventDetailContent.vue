@@ -4,8 +4,8 @@
  * the session-detail store's per-entry cache, `loadEvent`) and renders it as
  * a structured summary — kind, tool, the decision (with its provenance
  * badge), duration, cost, tokens — followed by the raw `attrs` payload.
- * Addressed by `event_ref` only, per `EventDetailSheet.vue`'s original doc
- * (SPEC §4.3) — a `TimelineItem`/raw `TimelineEvent`'s `event_ref` field is
+ * Addressed by `event_ref` only, per `EventDetailSheet.vue`'s original doc —
+ * a `TimelineItem`/raw `TimelineEvent`'s `event_ref` field is
  * exactly what's passed in.
  *
  * Extracted out of `EventDetailSheet.vue` so the same fetch + structured-summary + raw-attrs content
@@ -94,12 +94,7 @@ const meta = computed(() => (detail.value ? eventKindMeta(detail.value.kind) : n
       <Skeleton class="h-40 w-full" />
     </template>
     <template v-else-if="detail">
-      <!--
-        Structured summary first (round-3 critic ask): what this event *is*
-        before what it *contains*. Every field here is one already promoted
-        onto TimelineEvent/EventDetail by the server — nothing is derived
-        or guessed here.
-      -->
+      <!-- Structured summary first: what this event *is* before what it *contains* — every field here is one already promoted by the server, nothing derived or guessed. -->
       <section
         class="flex flex-col gap-2"
         data-testid="event-detail-summary"

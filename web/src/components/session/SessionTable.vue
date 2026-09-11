@@ -18,7 +18,7 @@ const VIRTUAL_ROW_HEIGHT = 44
 interface Column {
   key: string
   label: string
-  /** Present only on the 4 columns the API can actually sort by (SPEC §4.1) — clicking any other
+  /** Present only on the 4 columns the API can actually sort by — clicking any other
    * header does nothing, by design (there is no client-side sort to fall back to). */
   sort?: SortKey
   class?: string
@@ -140,13 +140,7 @@ function onHeaderClick(column: Column): void {
       </div>
     </template>
 
-    <!--
-      Virtualized path (>200 rows, PLAN P4-02's AC): `useVirtualList` absolutely-positions each
-      rendered item inside its wrapper, which a real `<table>`/`<tbody>` cannot host without breaking
-      row layout — so this is a deliberate, documented deviation from "always a real table": a
-      div-based CSS grid that mirrors the table header's columns 1:1 via SessionRow's own
-      SESSION_ROW_GRID_COLS constant. The ≤200-row path above stays a real semantic `<table>`.
-    -->
+    <!-- Virtualized path (>200 rows): useVirtualList absolutely-positions rows, which a real <table>/<tbody> can't host without breaking layout — this div/grid mirrors the header via SESSION_ROW_GRID_COLS. -->
     <template v-else>
       <div
         role="table"

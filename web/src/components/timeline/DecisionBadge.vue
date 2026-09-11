@@ -2,16 +2,16 @@
 /**
  * A tool-call decision, with its provenance (`decision_source`) and, when
  * available, its correlation confidence (`ToolCall.correlation`). Used by
- * the Timeline (P4-04, one badge per collapsed item that carries a
+ * the Timeline (one badge per collapsed item that carries a
  * decision) and reusable wherever else a decision needs the same
- * treatment (e.g. the Tools tab, P4-06).
+ * treatment (e.g. the Tools tab).
  *
  * `decision` and `decision_source` are vendor-supplied, unconstrained
- * strings (SPEC §0/§1.9/§4.4) — never switched over exhaustively. The 6
- * documented `decision_source` values (SPEC §1.5: config, hook,
+ * strings — never switched over exhaustively. The 6
+ * documented `decision_source` values (config, hook,
  * user_permanent, user_temporary, user_reject, user_abort) get a friendlier
  * label; anything else — including a value Argus has never seen — renders
- * verbatim through `RawValue` (SPEC §6.1).
+ * verbatim through `RawValue`.
  *
  * The `accept`/`reject` icon is purely additive to the existing color/text convention
  * `decisionColorClass` already encodes — it never replaces the raw, verbatim decision text, and any
@@ -32,7 +32,7 @@ interface Props {
   decision?: string | null
   /** Vendor-supplied, unconstrained — the badge's provenance label. */
   decisionSource?: string | null
-  /** ToolCall.correlation (SPEC §2.3/§4.2) — non-exact renders a heuristic-match caveat. Undefined means "unknown/not applicable", treated the same as 'exact' (no caveat). */
+  /** ToolCall.correlation — non-exact renders a heuristic-match caveat. Undefined means "unknown/not applicable", treated the same as 'exact' (no caveat). */
   correlation?: Correlation | null
 }
 
@@ -42,7 +42,7 @@ const props = withDefaults(defineProps<Props>(), {
   correlation: null,
 })
 
-/** SPEC §1.5's 6 documented decision_source values — everything else falls through to RawValue verbatim. */
+/** The 6 documented decision_source values — everything else falls through to RawValue verbatim. */
 const KNOWN_DECISION_SOURCE_LABELS: Record<string, string> = {
   config: 'Config',
   hook: 'Hook',

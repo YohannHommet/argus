@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * SPEC §4.1: `cost.usd` is `reported_usd + estimated_usd` — the estimated
+ * `cost.usd` is `reported_usd + estimated_usd` — the estimated
  * part is filled in from `model_prices` whenever an `llm.request` event
  * carried no reported cost (e.g. `--cost-mode=omit` demo data, or a
  * request Claude Code itself didn't attach a price to). `estimated_share`

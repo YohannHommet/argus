@@ -7,7 +7,7 @@ import { ApiError } from '@/api/errors'
 interface Props {
   /**
    * Whatever the failed call threw. An {@link ApiError} means the server
-   * answered with an RFC 9457 problem+json body (SPEC §4.1) and every field
+   * answered with an RFC 9457 problem+json body and every field
    * below is real; anything else is a transport failure with only a message.
    */
   error?: ApiError | Error | null
@@ -64,12 +64,7 @@ const validationErrors = computed(() =>
         >
           {{ detail }}
         </p>
-        <!--
-          The `type` URN is the stable, greppable identity of the failure
-          (SPEC §4.1: `urn:argus:error:invalid-cursor`). It is the field an
-          operator quotes in a bug report, so it is shown rather than hidden
-          behind a console log.
-        -->
+        <!-- The type URN is the stable, greppable identity of the failure — what an operator quotes in a bug report, so it's shown rather than hidden in a console log. -->
         <p
           v-if="problem"
           class="text-muted-foreground mt-2 font-mono text-xs break-all"
@@ -89,12 +84,7 @@ const validationErrors = computed(() =>
       </Button>
     </div>
 
-    <!--
-      Field-level validation errors, when the problem carries them.
-      `Problem.errors` is an array of free-form objects in openapi.yaml, so
-      each entry's keys are rendered raw rather than prettified into
-      something that no longer matches the request that produced them.
-    -->
+    <!-- Problem.errors is free-form per openapi.yaml, so each entry's keys render raw rather than a prettified shape that could drift from the actual request. -->
     <ul
       v-if="validationErrors.length > 0"
       class="text-muted-foreground space-y-1 text-xs"
@@ -108,12 +98,7 @@ const validationErrors = computed(() =>
       </li>
     </ul>
 
-    <!--
-      SPEC §4.1's `request_id` is on every problem body precisely so an
-      operator can join a client-visible failure to the server log line
-      carrying the real error text. Showing it here is the whole point of
-      the field.
-    -->
+    <!-- request_id lets an operator join this failure to the matching server log line — showing it here is the whole point of the field. -->
     <p
       v-if="problem?.requestId"
       class="text-muted-foreground font-mono text-xs"

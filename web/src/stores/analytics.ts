@@ -17,7 +17,7 @@ export type TimeseriesMetric = components['schemas']['TimeseriesMetric']
 export type BreakdownDimension = 'model' | 'project' | 'tool' | 'decision_source' | 'query_source' | 'error_type'
 export type BreakdownMetric = 'cost' | 'calls' | 'tokens'
 
-/** SPEC §4.3: default analytics window when nothing is in the URL yet. */
+/** Default analytics window when nothing is in the URL yet. */
 export const ANALYTICS_PRESETS = ['24h', '7d', '30d', 'custom'] as const
 export type AnalyticsPreset = (typeof ANALYTICS_PRESETS)[number]
 export const DEFAULT_PRESET: AnalyticsPreset = '24h'
@@ -36,8 +36,8 @@ const PRESET_DURATION_MS: Record<Exclude<AnalyticsPreset, 'custom'>, number> = {
 }
 
 /**
- * `TimeseriesMetric`s the KPI strip can plot a sparkline for (round-5 UI
- * pass). `cost`/`tokens` are deliberately excluded here — the strip reuses
+ * `TimeseriesMetric`s the KPI strip can plot a sparkline for. `cost`/`tokens`
+ * are deliberately excluded here — the strip reuses
  * `costSeries`/`tokenSeries`, already fetched for the two chart panels
  * (the "sum(series)+other" total is invariant under `group_by`, see
  * `lib/analyticsDelta.ts`, so no separate current-window fetch is needed
@@ -71,15 +71,15 @@ export function emptyAnalyticsFilters(): AnalyticsFilters {
 
 /**
  * Only `llm.request` events carry a model, so only these timeseries metrics are
- * model-attributable (SPEC §4.3 "Model-filtered requests"). `sessions`, `turns`,
- * `tool_calls`, `tool_rejects`, `loc` are not in this list on purpose.
+ * model-attributable. `sessions`, `turns`, `tool_calls`, `tool_rejects`, `loc`
+ * are not in this list on purpose.
  */
 export const ATTRIBUTABLE_TIMESERIES_METRICS = ['cost', 'tokens', 'api_requests', 'api_errors'] as const
 
 /**
- * Breakdown dimensions with no model column to filter on (SPEC §4.3): a
- * `?model=` request against any of these is refused rather than silently
- * dropping the filter and returning fleet-wide totals that look filtered.
+ * Breakdown dimensions with no model column to filter on: a `?model=`
+ * request against any of these is refused rather than silently dropping
+ * the filter and returning fleet-wide totals that look filtered.
  */
 const NON_MODEL_BREAKDOWN_DIMENSIONS = ['tool', 'decision_source', 'error_type', 'query_source'] as const
 
@@ -91,7 +91,7 @@ export interface AttributabilityCheck {
 }
 
 /**
- * SPEC §4.3's "Model-filtered requests" rule, as one predicate every fetch in
+ * The "model-filtered requests" rule, as one predicate every fetch in
  * this store consults before issuing a `?model=` request — rather than a
  * hand-rolled `if` at each of the store's eight call sites, which is exactly
  * how a future ninth call site would forget the rule.
@@ -115,8 +115,8 @@ export interface AttributabilityCheck {
  * `summary` degrades per-counter via its own `not_attributable[]` (server-
  * driven, see {@link useAnalyticsStore}'s `isNotAttributable`) rather than
  * refusing the whole request, and `getAnalyticsDecisions` takes no `model`
- * query parameter at all (SPEC §4.3) — there is nothing for a model filter
- * to even attach to.
+ * query parameter at all — there is nothing for a model filter to even
+ * attach to.
  */
 export function isRequestAttributable(check: AttributabilityCheck): boolean {
   if (!check.hasModelFilter) return true
@@ -198,8 +198,8 @@ function isAbortError(err: unknown): boolean {
  * One independent fetchable slice of the dashboard (a KPI strip, a chart, a
  * breakdown, the decision matrix). Each of the store's eight resources gets
  * its own instance so a failure/abort/skip in one can never leak into
- * another — the AC's "an error in one of four requests renders that panel's
- * error state while the others render" reduces to each panel reading only
+ * another — "an error in one of four requests renders that panel's error
+ * state while the others render" reduces to each panel reading only
  * its own resource.
  *
  * `run` owns abort-the-previous-in-flight-call-on-a-new-one + a monotonic
@@ -285,15 +285,15 @@ function createResource<T>(): ResourceState<T> & {
 export type AnalyticsResource<T> = ReturnType<typeof createResource<T>>
 
 /**
- * SPEC §4.3's fleet dashboard: a window (preset or custom range) + project/
+ * The fleet dashboard: a window (preset or custom range) + project/
  * model/vendor filters drive eight independent, coalesced, per-resource
  * fetches (summary, cost timeseries, token timeseries, model breakdown,
  * project breakdown, tool breakdown, error breakdown, decisions), all
  * cancelled and reissued together on a window/filter change, and only the
  * cost timeseries reissued on a `group_by` change.
  *
- * `dimension=query_source` deliberately has no resource here: SPEC §4.3
- * scopes it to `sessions.cost_by_query_source` (whole-session-lifetime,
+ * `dimension=query_source` deliberately has no resource here: it scopes to
+ * `sessions.cost_by_query_source` (whole-session-lifetime,
  * live-verified ≈$39.78 vs. the same window's ≈$24.31 summary cost) rather
  * than `rollup_hourly` like every other breakdown — presenting it next to a
  * windowed KPI strip would misrepresent it as window-filtered. It belongs on
@@ -332,7 +332,7 @@ export const useAnalyticsStore = defineStore('analytics', () => {
 
   /**
    * The window immediately preceding the current one, same length, for
-   * every KPI tile's period-over-period delta (round-5 UI pass). `null`
+   * every KPI tile's period-over-period delta. `null`
    * when it can't be computed at all (a custom range missing either
    * bound, or an inverted/zero-length one) — every delta then reads
    * `null` too (see `lib/analyticsDelta.ts`'s `computeDelta`), rather than
@@ -467,7 +467,7 @@ export const useAnalyticsStore = defineStore('analytics', () => {
   }
 
   function fetchDecisions(): Promise<void> {
-    // getAnalyticsDecisions takes no `model`/`vendor` query param (SPEC §4.3) — only from/to/project.
+    // getAnalyticsDecisions takes no `model`/`vendor` query param — only from/to/project.
     const client = useApiClient()
     return decisions.run((signal) =>
       unwrap(
@@ -542,7 +542,7 @@ export const useAnalyticsStore = defineStore('analytics', () => {
     void fetchAll()
   }
 
-  /** Switches to an explicit custom range (RFC 3339 or relative shorthand, per SPEC §4.1). */
+  /** Switches to an explicit custom range (RFC 3339 or relative shorthand). */
   function setCustomRange(from: string | null, to: string | null): void {
     preset.value = 'custom'
     customFrom.value = from
@@ -564,8 +564,7 @@ export const useAnalyticsStore = defineStore('analytics', () => {
   /**
    * `group_by` only ever changes what the cost timeseries chart shows — it
    * has no bearing on the KPI tiles, the other timeseries, either breakdown,
-   * or the decision matrix, so only `costSeries` is reissued. This is the
-   * AC's "`group_by` change refetches only the series".
+   * or the decision matrix, so only `costSeries` is reissued.
    */
   function setGroupBy(next: GroupBy): void {
     if (groupBy.value === next) return
@@ -575,7 +574,7 @@ export const useAnalyticsStore = defineStore('analytics', () => {
   }
 
   /**
-   * SPEC §4.1/§4.3's "null vs. zero", driven off the server's own
+   * The "null vs. zero" distinction, driven off the server's own
    * `Summary.not_attributable[]` rather than a hardcoded client-side list of
    * which counters a model filter blanks out — the server is the only
    * authority on which counters it could not attribute for a given request,
@@ -671,7 +670,7 @@ export const useAnalyticsStore = defineStore('analytics', () => {
     // derived
     isNotAttributable,
     fetchAll,
-    // KPI strip deltas + sparklines (round-5 UI pass)
+    // KPI strip deltas + sparklines
     costDelta,
     costSparkline,
     tokenDelta,

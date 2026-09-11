@@ -5,7 +5,7 @@ import { NOT_MEASURED } from '@/lib/nullReasons'
 interface Props {
   /**
    * A vendor-supplied free-form value (query_source, decision_source,
-   * tool_source, terminal_type, start_type, permission_mode — SPEC §4.4).
+   * tool_source, terminal_type, start_type, permission_mode).
    * Typed `string | null | undefined`, never a union: Argus must render a
    * value it has never seen before without a code change.
    */
@@ -21,15 +21,7 @@ withDefaults(defineProps<Props>(), {
 </script>
 
 <template>
-  <!--
-    No switch/mapping over vendor vocabulary here, by design (SPEC §4.4,
-    §6.1): whatever string the vendor sends renders verbatim. The empty
-    string is the one deliberate exception — it's a real, meaningful value
-    (the `by_query_source` "unattributed" bucket key, SPEC §4.3), not a
-    missing one, but rendering '' produces literally nothing on screen, so
-    it gets a visible label while the raw ('') value stays inspectable via
-    `title`.
-  -->
+  <!-- Empty string is a real, meaningful value (the unattributed bucket key), not missing — rendered as a visible label since '' alone would show nothing. -->
   <NullValue
     v-if="value === null || value === undefined"
     :reason="NOT_MEASURED"

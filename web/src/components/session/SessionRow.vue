@@ -97,7 +97,7 @@ function activate(): void {
     >
       <span class="flex items-center gap-1.5">
         <StatusDot :status="session.status" />
-        <!-- PLAN.md P5-06 / SPEC §6.2: a live badge on `active` sessions — renders nothing otherwise. -->
+        <!-- A live badge on `active` sessions — renders nothing otherwise. -->
         <LiveDot :status="session.status" />
       </span>
     </component>
@@ -166,12 +166,7 @@ function activate(): void {
       role="cell"
       class="px-3 py-2 align-middle"
     >
-      <!--
-        The testid is on this wrapping span, not forwarded onto Badge/NullValue themselves: Vue's
-        automatic attribute fallthrough doesn't reliably cross reka-ui's TooltipProvider/Tooltip/
-        TooltipTrigger chain (NullValue's `reason` branch), so a consumer-side wrapper is the robust
-        way to give both branches the same stable hook.
-      -->
+      <!-- testid lives on this wrapper, not Badge/NullValue: attribute fallthrough doesn't reliably cross reka-ui's Tooltip chain. -->
       <span data-testid="reject-rate-badge">
         <Badge
           v-if="rejectRate !== null"

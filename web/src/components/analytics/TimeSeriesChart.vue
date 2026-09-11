@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * Renders `GET /analytics/timeseries` (SPEC §4.3) as a multi-series line
+ * Renders `GET /analytics/timeseries` as a multi-series line
  * chart. Buckets are dense/zero-filled server-side — no gap handling here.
  * A series whose `key` is `""` (events with no model attributed) is
  * labelled "unattributed" for the legend/tooltip; `data.other` (series
@@ -128,7 +128,7 @@ const option = computed<TimeSeriesOption>(() => {
   }
 
   // A single-series legend ("unattributed" alone, e.g. the tokens chart with no group_by
-  // dimension) carries no information — there's nothing to distinguish it from (round-5 UI pass).
+  // dimension) carries no information — there's nothing to distinguish it from.
   const showLegend = series.length > 1
 
   return {
@@ -162,7 +162,7 @@ const option = computed<TimeSeriesOption>(() => {
 })
 
 /**
- * PLAN.md P6-04: the disclosure's table — one column per series (plus "Other"), one row per bucket,
+ * The disclosure's table — one column per series (plus "Other"), one row per bucket,
  * same `seriesLabel`/`valueFormatter` the chart itself uses so the table can never drift from what's
  * drawn. `option`'s own per-series color/dash logic is irrelevant here — a table has no color to pick.
  */

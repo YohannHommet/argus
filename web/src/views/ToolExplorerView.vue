@@ -1,11 +1,10 @@
 <script setup lang="ts">
 /**
- * `/tools` — SPEC §6.2's "decision-provenance drill-down, linked from the
+ * `/tools` — the "decision-provenance drill-down, linked from the
  * analytics decision matrix. The differentiator's dedicated view." Cross-
  * session (`ToolCallTable`'s `show-session`), filtered/paginated by
  * `toolsStore`, reachable both directly and via `DecisionMatrix.vue`'s
- * `filter` event (`{ tool_name, decision_source }`) — Phase-4 exit
- * criterion 5.
+ * `filter` event (`{ tool_name, decision_source }`).
  */
 import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
@@ -111,12 +110,7 @@ function clearAllFilters(): void {
       data-testid="tools-search"
     />
 
-    <!--
-      Active-filter chips: the visible half of exit criterion 5's "arrives with the filter applied"
-      — a click from DecisionMatrix.vue lands here with tools.filters already populated (parsed from
-      the URL on this store's creation), and this is where that fact becomes legible rather than
-      silently baked into an unlabeled request.
-    -->
+    <!-- Active-filter chips: a click from DecisionMatrix.vue lands here with tools.filters already populated, made legible here rather than silently baked into an unlabeled request. -->
     <div
       v-if="hasActiveFilters"
       class="flex flex-wrap items-center gap-2"

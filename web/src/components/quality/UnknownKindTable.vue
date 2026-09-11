@@ -1,8 +1,8 @@
 <script setup lang="ts">
 /**
- * SPEC §6.2's unmapped-`event_name` inspector: the raw-sample viewer is
+ * The unmapped-`event_name` inspector: the raw-sample viewer is
  * the whole reason this table exists, so any group's `sample` opens in
- * `JsonViewer` (an AC) — Argus stores it verbatim and this is where an
+ * `JsonViewer` — Argus stores it verbatim and this is where an
  * operator sees exactly what a new vendor event looks like before Argus
  * has a mapping for it.
  *

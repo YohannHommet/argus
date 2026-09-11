@@ -3,8 +3,8 @@ import { computed } from 'vue'
 
 interface Props {
   /**
-   * `status` is a stored Argus column with a documented, closed 4-value vocabulary (SPEC §1.7:
-   * active/ended/abandoned/unknown) — unlike a vendor field, it's reasonable to switch on those four
+   * `status` is a stored Argus column with a documented, closed 4-value vocabulary
+   * (active/ended/abandoned/unknown) — unlike a vendor field, it's reasonable to switch on those four
    * values by name. But it's still typed as a plain string, not the union: a live capture has been
    * observed returning statuses outside a "closed" enum elsewhere in Argus, so an out-of-vocabulary
    * value must fall through to the neutral branch rather than throw or render nothing.
@@ -15,7 +15,7 @@ interface Props {
 const props = withDefaults(defineProps<Props>(), { status: undefined })
 
 /**
- * Round-4 UI gap: "the status dot [needs] a real semantic accent" — not four arbitrary hues, but
+ * "The status dot [needs] a real semantic accent" — not four arbitrary hues, but
  * dots that read in the same vocabulary as the rest of the product. `active` gets the product's one
  * accent color plus a pulse (it's the only status still changing right now); `ended` is a muted
  * positive (the common, unremarkable outcome — full-saturation green would outshout every other
