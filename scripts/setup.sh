@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # scripts/setup.sh (make setup) — guided onboarding for a fresh clone: checks
 # docker, creates deploy/.env from deploy/.env.example if missing, brings the
-# stack up (`make up`), prints the exact Claude Code wiring (OTel env block +
-# hook JSON) for the port actually in use, then installs the hook into
-# ~/.claude/settings.json (scripts/install-hook.sh).
+# stack up (`make up`), then syncs Claude Code's wiring (OTel env block +
+# hooks) to the port actually in use via `make install-hook`
+# (scripts/install-hook.sh).
 #
 # Idempotent and safe to re-run: never overwrites an existing deploy/.env,
 # `make up` no-ops onto an already-running stack, and install-hook.sh merges
@@ -58,32 +58,21 @@ fi
 log "starting the stack: make up PORT=${port} (builds on first run — this can take a minute)"
 make up PORT="${port}"
 
-# --- 4. print the Claude Code wiring -----------------------------------------
+# --- 4. install the hook + OTel env into Claude Code's settings.json --------
+# make install-hook (scripts/install-hook.sh -> scripts/argus_hook.py) writes
+# both the OTel env block and the PostToolUse/SessionEnd/SessionStart hooks
+# into ~/.claude/settings.json for the port just started on — no manual
+# export, no hand-editing. Re-run it any time the port changes.
+make install-hook PORT="${port}"
+
 cat <<WIRING
 
 --------------------------------------------------------------------------
-Point Claude Code at Argus — export these in the shell you run it from:
-
-  export CLAUDE_CODE_ENABLE_TELEMETRY=1 \\
-         OTEL_LOGS_EXPORTER=otlp OTEL_METRICS_EXPORTER=otlp \\
-         OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf \\
-         OTEL_EXPORTER_OTLP_ENDPOINT=${base_url} \\
-         OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta \\
-         OTEL_LOG_TOOL_DETAILS=1
-
-Hook block being merged into ~/.claude/settings.json (PostToolUse + SessionEnd):
-
-  { "hooks": {
-    "PostToolUse": [ { "hooks": [
-      { "type": "http", "url": "${base_url}/ingest/hook", "timeout": 5 } ] } ],
-    "SessionEnd":  [ { "hooks": [
-      { "type": "http", "url": "${base_url}/ingest/hook", "timeout": 1 } ] } ]
-  } }
+Claude Code wiring merged into ~/.claude/settings.json for ${base_url}:
+env (OTel export) + hooks (PostToolUse, SessionEnd, SessionStart -> /ingest/hook).
+Changed the port? Re-run: make install-hook
 --------------------------------------------------------------------------
 WIRING
-
-# --- 5. install the hook ------------------------------------------------------
-make install-hook PORT="${port}"
 
 cat <<DONE
 

@@ -61,8 +61,50 @@ Prefer a shortcut? `make up` does the same (build, start, wait for ready, print 
 
 ### 2. Point Claude Code at Argus
 
-Export the OpenTelemetry env vars in the shell you run Claude Code from (swap `http://localhost:8080`
-for your `ARGUS_HTTP_PORT` if you changed it):
+```bash
+make install-hook
+```
+
+This writes both the OTel env block and the hook block into `~/.claude/settings.json` for you —
+it's the one re-runnable command that keeps Claude Code's wiring in sync with whatever port Argus
+is on (see [Changing the port](#changing-the-port)) — no hand-editing, and it works whatever your
+shell is (zsh, bash, fish), because the config lives in `settings.json`, which Claude Code reads
+itself. Under the hood it merges in:
+
+```json
+{
+  "env": {
+    "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
+    "OTEL_LOGS_EXPORTER": "otlp",
+    "OTEL_METRICS_EXPORTER": "otlp",
+    "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
+    "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:8080",
+    "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE": "delta",
+    "OTEL_LOG_TOOL_DETAILS": "1"
+  },
+  "hooks": {
+    "PostToolUse":  [ { "hooks": [ { "type": "http", "url": "http://localhost:8080/ingest/hook", "timeout": 5 } ] } ],
+    "SessionStart": [ { "hooks": [ { "type": "http", "url": "http://localhost:8080/ingest/hook", "timeout": 2 } ] } ],
+    // SessionEnd hooks share a hard 1.5 s budget — keep this at 1.
+    "SessionEnd":   [ { "hooks": [ { "type": "http", "url": "http://localhost:8080/ingest/hook", "timeout": 1 } ] } ]
+  }
+}
+```
+
+`OTEL_LOG_TOOL_DETAILS=1` is what populates tool file paths, the `subagent_type` linkage, and the
+file-touch view — without it those fields stay empty. It also makes Claude Code log full tool
+parameters (including Bash command text) to your collector, so it is your call; Argus works without
+it, you just lose those three views. The hooks cover the events OTel doesn't emit (session
+lifecycle, tool decisions); `SessionEnd`'s 1 second timeout is on purpose — every `SessionEnd` hook
+shares one hard 1.5 s budget, and Argus acks in milliseconds, so a larger value only eats into other
+hooks' share.
+
+`make install-hook` merges — every other key and hook already in your `settings.json` is preserved,
+and a `.bak` is written before it edits the file. `make uninstall-hook` removes exactly what it
+added. Both apply to every Claude Code session, including `claude agents`.
+
+Prefer to wire it by hand? These are the same OTel values `make install-hook` writes — paste them
+into your shell before launching `claude` (the `export` syntax works in bash and zsh):
 
 ```bash
 export CLAUDE_CODE_ENABLE_TELEMETRY=1 \
@@ -73,26 +115,8 @@ export CLAUDE_CODE_ENABLE_TELEMETRY=1 \
        OTEL_LOG_TOOL_DETAILS=1
 ```
 
-`OTEL_LOG_TOOL_DETAILS=1` is what populates tool file paths, the `subagent_type` linkage, and the
-file-touch view — without it those fields stay empty. It also makes Claude Code log full tool
-parameters (including Bash command text) to your collector, so it is your call; Argus works without
-it, you just lose those three views.
-
-Then add the hook block to `~/.claude/settings.json` so hook-only events (session lifecycle,
-decisions) reach Argus too:
-
-```json
-{ "hooks": {
-  "PostToolUse": [ { "hooks": [
-    { "type": "http", "url": "http://localhost:8080/ingest/hook", "timeout": 5 } ] } ],
-  // SessionEnd hooks share a hard 1.5 s budget — keep this at 1.
-  "SessionEnd":  [ { "hooks": [
-    { "type": "http", "url": "http://localhost:8080/ingest/hook", "timeout": 1 } ] } ]
-} }
-```
-
-The `SessionEnd` timeout is 1 second on purpose: every `SessionEnd` hook shares one hard 1.5 s
-budget, and Argus acks in milliseconds, so a larger value only eats into other hooks' share.
+Swap `http://localhost:8080` for your `ARGUS_HTTP_PORT`. `make install-hook` is still preferred —
+it also wires the hooks and stays in sync when the port changes.
 
 ### 3. Open the UI and use Claude Code
 
@@ -148,17 +172,35 @@ make setup
 ```
 
 `make setup` checks for Docker, creates `deploy/.env` from `deploy/.env.example` (skipped if it
-already exists), builds and starts the stack, prints the exact Claude Code OTel env block and hook
-JSON for the port you're on, and merges Argus's hook into `~/.claude/settings.json` for you.
-`make install-hook` / `make uninstall-hook` do just that step on their own, at any time — both are
-idempotent and touch only Argus's own hook entries: every other hook already in your
-`settings.json` is preserved, and a `.bak` is written before either one edits the file.
+already exists), builds and starts the stack, and runs `make install-hook` for the port you're on —
+merging Argus's hooks (`PostToolUse`, `SessionEnd`, `SessionStart`) and its OTel env block into
+`~/.claude/settings.json`. `make install-hook` / `make uninstall-hook` do just that step on their
+own, at any time — both are idempotent and touch only Argus's own hook and env entries: every other
+hook and env key already in your `settings.json` is preserved, and a `.bak` is written before
+either one edits the file.
 
 To customize a knob — the port, retention, rollup cadence, ingest/API auth tokens, log level —
 edit `deploy/.env` (gitignored, never committed) and run `make up` again; no need to hand-edit
 `deploy/docker-compose.yml` or `settings.json`. `deploy/.env.example` documents each knob with its
 default; the full generated `ARGUS_*` reference is
 [`docs/config-reference.md`](docs/config-reference.md).
+
+### Changing the port
+
+The port is only ever set in one place, `deploy/.env`'s `ARGUS_HTTP_PORT` (or `PORT=` on the CLI),
+but two things read it — the running stack and Claude Code's wiring — so a port change needs both
+re-synced:
+
+```bash
+# edit deploy/.env's ARGUS_HTTP_PORT, or just pass PORT= below
+make up PORT=18080
+make install-hook PORT=18080
+```
+
+`make up` moves the stack to the new port and, if `~/.claude/settings.json` still points Argus's
+OTel endpoint at the old one, prints a one-line reminder (it never edits the file itself).
+`make install-hook` is what actually does the re-sync: re-running it replaces every Argus hook URL
+and the OTel endpoint with the new port — no stale `:oldport` references, no duplicate entries.
 
 ## Configuration
 
