@@ -1329,6 +1329,20 @@ paths:
         One raw hook payload per call (SPEC §1.1, §3.5). Shape varies by
         hook_event and vendor, so the body is documented as an opaque object
         rather than one fixed schema.
+      parameters:
+        - name: event
+          in: query
+          required: false
+          description: >-
+            Which hook fired, named by the transport rather than the body:
+            `make install-hook` wires one URL per event
+            (`/ingest/hook?event=SessionStart`). Used only for payloads that
+            carry no `hook_event_name` of their own — a self-naming body
+            always wins, so replaying a captured payload through a
+            mislabelled URL cannot relabel it.
+          schema:
+            type: string
+          example: SessionStart
       requestBody:
         required: true
         content:
@@ -1346,9 +1360,10 @@ paths:
         "202":
           description: >-
             Accepted for asynchronous ingestion (SPEC §3.5). `event` echoes
-            the request's hook_event_name(s) back verbatim
+            the hook_event_name(s) the request was classified under
             (server/internal/ingest/hooks/handler.go's writeAccepted) —
-            comma-joined when the body is a batch-replay array.
+            the body's own name, else the `event` query param — comma-joined
+            when the body is a batch-replay array.
           content:
             application/json:
               schema:

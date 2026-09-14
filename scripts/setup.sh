@@ -69,7 +69,7 @@ cat <<WIRING
 
 --------------------------------------------------------------------------
 Claude Code wiring merged into ~/.claude/settings.json for ${base_url}:
-env (OTel export) + hooks (PostToolUse, SessionEnd, SessionStart -> /ingest/hook).
+env (OTel export) + hooks (SessionStart, PostToolUse, SessionEnd -> /ingest/hook?event=…).
 Changed the port? Re-run: make install-hook
 --------------------------------------------------------------------------
 WIRING

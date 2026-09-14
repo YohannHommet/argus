@@ -10,9 +10,10 @@
  *
  * The env block and hook JSON below are the literal README quickstart and
  * hook config, verbatim, not paraphrased, with only the endpoint
- * substituted in. `OTEL_LOG_TOOL_DETAILS=1` and the `SessionEnd` hook's
- * `timeout: 1` are deliberately not "simplified" — see the inline notes
- * next to each for why.
+ * substituted in. `OTEL_LOG_TOOL_DETAILS=1`, the `SessionEnd` hook's
+ * `timeout: 1` and `SessionStart` being a curl command rather than an http
+ * hook are deliberately not "simplified" — see the inline notes next to
+ * each, and scripts/argus_hook.py, for why.
  */
 import { computed } from 'vue'
 
@@ -39,11 +40,14 @@ const envBlock = computed(
 const hookBlock = computed(
   () =>
     `{ "hooks": {
-  "PostToolUse": [ { "hooks": [
-    { "type": "http", "url": "${props.endpointUrl}/ingest/hook", "timeout": 5 } ] } ],
+  // Claude Code registers an http SessionStart hook but never fires it, so this one posts with curl.
+  "SessionStart": [ { "hooks": [
+    { "type": "command", "timeout": 2, "command": "curl -sS -m 2 -X POST -H 'Content-Type: application/json' --data-binary @- -o /dev/null '${props.endpointUrl}/ingest/hook?event=SessionStart' || true" } ] } ],
+  "PostToolUse":  [ { "hooks": [
+    { "type": "http", "url": "${props.endpointUrl}/ingest/hook?event=PostToolUse", "timeout": 5 } ] } ],
   // SessionEnd hooks share a hard 1.5 s budget — keep this at 1.
-  "SessionEnd":  [ { "hooks": [
-    { "type": "http", "url": "${props.endpointUrl}/ingest/hook", "timeout": 1 } ] } ]
+  "SessionEnd":   [ { "hooks": [
+    { "type": "http", "url": "${props.endpointUrl}/ingest/hook?event=SessionEnd", "timeout": 1 } ] } ]
 } }`,
 )
 

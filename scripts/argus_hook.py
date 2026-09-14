@@ -1,18 +1,31 @@
 #!/usr/bin/env python3
 """Merge or remove Argus's Claude Code wiring in a Claude Code settings.json:
-the PostToolUse/SessionEnd/SessionStart hooks and the OTel env block.
+the SessionStart/PostToolUse/SessionEnd hooks and the OTel env block.
 
 Invoked by scripts/install-hook.sh (`make install-hook` / `make
 uninstall-hook`) — never run directly by a user. stdlib json only, so every
 existing key and every other hook/env entry round-trips untouched except the
 hooks arrays and env keys this script edits.
 
+Each hook posts to its own URL (`/ingest/hook?event=<HookEvent>`) so the
+receiver classifies the event from the transport, not only from the body.
+
+SessionStart is wired as a `command` hook running curl, not as an `http` hook
+like the other two: Claude Code registers a `type: http` SessionStart hook but
+never dispatches it (verified on 2.1.260/2.1.270 — a capture server saw
+PostToolUse and SessionEnd arrive while SessionStart never fired, and a
+`command` hook on the same event fired normally). Without this, Argus never
+sees a session start, so every session stays status=unknown with no
+started_at.
+
 Argus's own hook entries are identified by URL, not by position: any hook
-group whose sole hook is `{"type": "http", "url": "http://<host>/ingest/hook"}`.
-Argus's own env keys are identified by name: the fixed OTEL_*/
-CLAUDE_CODE_ENABLE_TELEMETRY set in OTEL_KEYS below. That makes install
-idempotent (re-running with the same port is a no-op, re-running with a
-different port replaces the old hook URLs/endpoint instead of duplicating
+group whose sole hook posts to `http://<host>/ingest/hook` — as an `http`
+hook's url, or inside a `command` hook's command string — with or without the
+`?event=` query, so re-running after an upgrade replaces the old entries
+instead of duplicating them. Argus's own env keys are identified by name: the
+fixed OTEL_*/CLAUDE_CODE_ENABLE_TELEMETRY set in OTEL_KEYS below. That makes
+install idempotent (re-running with the same port is a no-op, re-running with
+a different port replaces the old hook URLs/endpoint instead of duplicating
 them) and makes uninstall precise (it removes only entries matching that
 shape/name — every unrelated hook or env key, including ones with the same
 event name and a different matcher/url, is left exactly as it was).
@@ -22,9 +35,15 @@ import re
 import sys
 from pathlib import Path
 
-EVENTS = ("PostToolUse", "SessionEnd", "SessionStart")
-TIMEOUTS = {"PostToolUse": 5, "SessionEnd": 1, "SessionStart": 2}
-URL_RE = re.compile(r"^https?://[^/\s]+/ingest/hook$")
+EVENTS = ("SessionStart", "PostToolUse", "SessionEnd")
+# SessionEnd hooks share one hard 1.5s budget across all of them, hence 1.
+TIMEOUTS = {"SessionStart": 2, "PostToolUse": 5, "SessionEnd": 1}
+# Events Claude Code does not deliver over an `http` hook (see module docstring).
+COMMAND_EVENTS = frozenset({"SessionStart"})
+
+# Matches an Argus ingest URL wherever it appears: an `http` hook's url field,
+# or somewhere inside a `command` hook's command string.
+URL_RE = re.compile(r"https?://[^/\s'\"]+/ingest/hook(\?event=[A-Za-z]+)?(?=['\"\s]|$)")
 
 # Argus-owned OTel env keys with fixed values — everything telemetry needs
 # except the endpoint, which carries the port and is computed per-install.
@@ -39,6 +58,10 @@ OTEL_KEYS = {
 OTEL_ENDPOINT_KEY = "OTEL_EXPORTER_OTLP_ENDPOINT"
 
 
+def hook_url(base_url: str, event: str) -> str:
+    return f"{base_url}/ingest/hook?event={event}"
+
+
 def is_argus_group(group: object) -> bool:
     """True if `group` is a hook group this script would itself write."""
     if not isinstance(group, dict):
@@ -47,16 +70,27 @@ def is_argus_group(group: object) -> bool:
     if not isinstance(hooks, list) or len(hooks) != 1:
         return False
     h = hooks[0]
-    return (
-        isinstance(h, dict)
-        and h.get("type") == "http"
-        and isinstance(h.get("url"), str)
-        and bool(URL_RE.match(h["url"]))
-    )
+    if not isinstance(h, dict):
+        return False
+    if h.get("type") == "http":
+        return isinstance(h.get("url"), str) and bool(URL_RE.fullmatch(h["url"]))
+    if h.get("type") == "command":
+        return isinstance(h.get("command"), str) and bool(URL_RE.search(h["command"]))
+    return False
 
 
-def argus_group(url: str, event: str) -> dict:
-    return {"hooks": [{"type": "http", "url": url, "timeout": TIMEOUTS[event]}]}
+def argus_group(base_url: str, event: str) -> dict:
+    timeout = TIMEOUTS[event]
+    url = hook_url(base_url, event)
+    if event in COMMAND_EVENTS:
+        # `|| true` on purpose: observability must never fail or delay a
+        # session start, so a stack that is down stays a silent no-op.
+        command = (
+            f"curl -sS -m {timeout} -X POST -H 'Content-Type: application/json' "
+            f"--data-binary @- -o /dev/null '{url}' || true"
+        )
+        return {"hooks": [{"type": "command", "command": command, "timeout": timeout}]}
+    return {"hooks": [{"type": "http", "url": url, "timeout": timeout}]}
 
 
 def argus_env(base_url: str) -> dict:
@@ -98,7 +132,6 @@ def main() -> int:
     changed = False
 
     if action == "install":
-        url = f"{base_url}/ingest/hook"
         hooks = dict(hooks) if hooks else {}
         for event in EVENTS:
             existing = hooks.get(event, [])
@@ -106,7 +139,7 @@ def main() -> int:
                 print(f'error: {path}: "hooks.{event}" is not a JSON array', file=sys.stderr)
                 return 1
             kept = [g for g in existing if not is_argus_group(g)]
-            new_list = kept + [argus_group(url, event)]
+            new_list = kept + [argus_group(base_url, event)]
             if new_list != existing:
                 changed = True
             hooks[event] = new_list

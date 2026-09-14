@@ -83,10 +83,12 @@ itself. Under the hood it merges in:
     "OTEL_LOG_TOOL_DETAILS": "1"
   },
   "hooks": {
-    "PostToolUse":  [ { "hooks": [ { "type": "http", "url": "http://localhost:8080/ingest/hook", "timeout": 5 } ] } ],
-    "SessionStart": [ { "hooks": [ { "type": "http", "url": "http://localhost:8080/ingest/hook", "timeout": 2 } ] } ],
+    // Claude Code registers an http SessionStart hook but never fires it, so
+    // this one posts with curl instead — see below.
+    "SessionStart": [ { "hooks": [ { "type": "command", "timeout": 2, "command": "curl -sS -m 2 -X POST -H 'Content-Type: application/json' --data-binary @- -o /dev/null 'http://localhost:8080/ingest/hook?event=SessionStart' || true" } ] } ],
+    "PostToolUse":  [ { "hooks": [ { "type": "http", "url": "http://localhost:8080/ingest/hook?event=PostToolUse", "timeout": 5 } ] } ],
     // SessionEnd hooks share a hard 1.5 s budget — keep this at 1.
-    "SessionEnd":   [ { "hooks": [ { "type": "http", "url": "http://localhost:8080/ingest/hook", "timeout": 1 } ] } ]
+    "SessionEnd":   [ { "hooks": [ { "type": "http", "url": "http://localhost:8080/ingest/hook?event=SessionEnd", "timeout": 1 } ] } ]
   }
 }
 ```
@@ -98,6 +100,12 @@ it, you just lose those three views. The hooks cover the events OTel doesn't emi
 lifecycle, tool decisions); `SessionEnd`'s 1 second timeout is on purpose — every `SessionEnd` hook
 shares one hard 1.5 s budget, and Argus acks in milliseconds, so a larger value only eats into other
 hooks' share.
+
+Each hook posts to its own `?event=` URL so Argus can classify it from the URL alone. `SessionStart`
+is the odd one out: Claude Code accepts and registers a `type: http` hook for it but never sends the
+request (observed on 2.1.26x/2.1.27x), so it is wired as a one-line `curl` command hook instead —
+that is what makes a session show up as *active* with a start time and a project, rather than
+`unknown`. It ends in `|| true` on purpose: if Argus is down, a session must still start normally.
 
 `make install-hook` merges — every other key and hook already in your `settings.json` is preserved,
 and a `.bak` is written before it edits the file. `make uninstall-hook` removes exactly what it

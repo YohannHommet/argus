@@ -171,6 +171,18 @@ jobs:
           cd server && go run ./cmd/argusd config --markdown > /tmp/config-reference.md
           diff -u ../docs/config-reference.md /tmp/config-reference.md
 
+  hook-wiring:
+    name: hook-wiring
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: argus_hook.py merge/removal test
+        # `make install-hook` edits the user's real ~/.claude/settings.json, so
+        # its merge has to be right the first time: this exercises install,
+        # re-install, port change, uninstall and the SessionStart curl command
+        # against throwaway files (stdlib only, no setup step needed).
+        run: make test-hook-wiring
+
   compose:
     name: compose
     runs-on: ubuntu-latest

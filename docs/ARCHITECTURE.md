@@ -11,7 +11,7 @@ Copied from [SPEC §0](SPEC.md#0-system-summary):
 ```
 Claude Code
   ├─ OTLP/HTTP  (OTEL_EXPORTER_OTLP_ENDPOINT → argusd)  → POST /v1/logs, /v1/metrics
-  └─ hooks      ("type": "http")                        → POST /ingest/hook
+  └─ hooks      ("type": "http", SessionStart: curl)    → POST /ingest/hook?event=…
                                     │
                           ┌─────────▼─────────┐
                           │ internal/ingest   │  decode → normalize → bounded queue

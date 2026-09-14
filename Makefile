@@ -22,7 +22,7 @@ export ARGUS_HTTP_PORT := $(PORT)
 
 .PHONY: help up rebuild down restart clean demo logs status ui \
 	setup install-hook uninstall-hook \
-	dev build test test-fast lint type-check openapi-check ci gen migrate sim \
+	dev build test test-fast test-hook-wiring lint type-check openapi-check ci gen migrate sim \
 	compose-up compose-smoke e2e \
 	check-server check-web check-migrations check-compose check-smoke
 
@@ -106,10 +106,13 @@ build: check-server check-web ## Build the argusd binary and the web assets
 	mkdir -p bin
 	cd server && CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o ../bin/argusd ./cmd/argusd
 
-test: check-server check-web ## Run the CI-equivalent test suite: Go -tags=e2e -race + coverage floor, web unit --coverage (see .github/workflows/ci.yml go-test/web)
+test: check-server check-web test-hook-wiring ## Run the CI-equivalent test suite: Go -tags=e2e -race + coverage floor, web unit --coverage (see .github/workflows/ci.yml go-test/web)
 	cd server && go test -tags=e2e -race -covermode=atomic -coverprofile=cover.out ./...
 	cd server && ../scripts/coverage-floor.sh cover.out ../scripts/coverage-floors.txt
 	cd web && pnpm unit --coverage
+
+test-hook-wiring: ## Test the settings.json merge behind `make install-hook` (scripts/argus_hook.py)
+	python3 scripts/argus_hook_test.py
 
 test-fast: check-server check-web ## Fast inner-loop test run: no -race, no -tags=e2e (skips the e2e suites), no coverage floor
 	cd server && go test ./...

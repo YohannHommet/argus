@@ -45,6 +45,14 @@ func NewHookNormalizer(now func() time.Time, retentionRaw time.Duration, allowMe
 // normalization runs in-request before enqueue, so error means 400 + zero events
 // silently dropped. `argus-sim` can retry; real Claude Code sends one-per-request.
 func (n *HookNormalizer) FromHookPayload(body []byte) ([]model.Event, error) {
+	return n.FromHookPayloadWithEvent(body, "")
+}
+
+// FromHookPayloadWithEvent is FromHookPayload with the hook name the
+// *transport* claims (POST /ingest/hook?event=…), used only for elements
+// whose body does not name themselves. A self-naming payload always wins, so
+// replaying a captured body through a mislabelled URL cannot relabel it.
+func (n *HookNormalizer) FromHookPayloadWithEvent(body []byte, fallbackEventName string) ([]model.Event, error) {
 	nowFn := n.Now
 	if nowFn == nil {
 		nowFn = time.Now
@@ -65,6 +73,7 @@ func (n *HookNormalizer) FromHookPayload(body []byte) ([]model.Event, error) {
 		// evt.Attrs or hashed into the dedup key (otlpattrs.go's
 		// sanitizeHookAttrs doc comment).
 		attrs = sanitizeHookAttrs(attrs)
+		applyFallbackHookEventName(attrs, fallbackEventName)
 
 		evt, keep, err := n.buildHookEvent(attrs, nowFn())
 		if err != nil {
@@ -76,6 +85,19 @@ func (n *HookNormalizer) FromHookPayload(body []byte) ([]model.Event, error) {
 	}
 
 	return events, nil
+}
+
+// applyFallbackHookEventName writes the transport-supplied hook name into
+// attrs when the payload carries none, so the rest of the pipeline (kind
+// mapping, dedup key, stored attrs) sees one source of truth either way.
+func applyFallbackHookEventName(attrs map[string]any, fallbackEventName string) {
+	if fallbackEventName == "" {
+		return
+	}
+	if s, ok := attrs["hook_event_name"].(string); ok && s != "" {
+		return
+	}
+	attrs["hook_event_name"] = fallbackEventName
 }
 
 // splitHookPayload implements SPEC §3.5: "single object or array".
