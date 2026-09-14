@@ -8,7 +8,13 @@ LDFLAGS := -s -w \
 	-X github.com/YohannHommet/argus/server/internal/telemetry.Version=$(VERSION) \
 	-X github.com/YohannHommet/argus/server/internal/telemetry.Commit=$(COMMIT)
 
-.PHONY: help dev build test test-fast lint type-check openapi-check ci gen migrate sim \
+# Local run config. Override the port when 8080 is taken: `make up PORT=18080`.
+PORT ?= 8080
+COMPOSE := docker compose -f deploy/docker-compose.yml
+export ARGUS_HTTP_PORT := $(PORT)
+
+.PHONY: help up rebuild down restart clean demo logs status ui \
+	dev build test test-fast lint type-check openapi-check ci gen migrate sim \
 	compose-up compose-smoke e2e \
 	check-server check-web check-migrations check-compose check-smoke
 
@@ -36,6 +42,39 @@ check-compose:
 
 check-smoke:
 	@test -f scripts/smoke.sh || { echo "error: scripts/smoke.sh not found — not implemented until P1-07 (Dockerfile, docker-compose, scripts/smoke.sh)" >&2; exit 1; }
+
+# --- Run the app (start here) -----------------------------------------------
+# Wraps the docker compose stack. Default port 8080; override with PORT=NNNN.
+
+up: check-compose ## Start Argus (builds on first run), wait for ready, print the URL
+	$(COMPOSE) up -d
+	@for i in $$(seq 1 60); do curl -fsS localhost:$(PORT)/readyz >/dev/null 2>&1 && break; sleep 1; done
+	@echo "Argus is up -> http://localhost:$(PORT)"
+
+rebuild: check-compose ## Rebuild the image from source, then (re)start
+	$(COMPOSE) up -d --build
+
+down: check-compose ## Stop Argus (keeps its data)
+	$(COMPOSE) down
+
+restart: check-compose ## Restart just the argusd container
+	$(COMPOSE) restart argusd
+
+clean: check-compose ## Stop Argus and delete its data volume (wipes everything)
+	$(COMPOSE) down -v
+
+demo: check-compose ## Seed deterministic demo data into the running stack
+	$(COMPOSE) exec -T argusd /argusd sim --mode=demo --seed=42
+
+logs: check-compose ## Follow argusd logs
+	$(COMPOSE) logs -f argusd
+
+status: check-compose ## Show container status and /readyz
+	@$(COMPOSE) ps
+	@printf 'readyz: '; curl -s localhost:$(PORT)/readyz || echo "(no response on :$(PORT))"; echo
+
+ui: ## Print the UI URL
+	@echo "http://localhost:$(PORT)"
 
 # --- Everyday targets --------------------------------------------------------
 
