@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
-# scripts/install-hook.sh (make install-hook / make uninstall-hook) — merge
-# or remove Argus's HTTP hook (PostToolUse + SessionEnd -> /ingest/hook) in a
-# Claude Code settings.json. This is the fiddly bit the README used to ask
-# users to hand-edit; the actual JSON surgery lives in scripts/argus_hook.py
-# (stdlib json — safer than sed/jq for "preserve everything else exactly"),
-# this wrapper only resolves the port and the settings path and reports
-# what happened.
+# scripts/install-hook.sh (make install-hook / make uninstall-hook) — the ONE
+# re-runnable command that syncs ALL Claude-side Argus config to the current
+# port: the HTTP hooks (PostToolUse + SessionEnd + SessionStart ->
+# /ingest/hook) AND the OTel env block (endpoint + the fixed telemetry keys)
+# in a Claude Code settings.json. This is the fiddly bit the README used to
+# ask users to hand-edit; the actual JSON surgery lives in
+# scripts/argus_hook.py (stdlib json — safer than sed/jq for "preserve
+# everything else exactly"), this wrapper only resolves the port and the
+# settings path and reports what happened. Re-running after a port change
+# (PORT= or deploy/.env's ARGUS_HTTP_PORT) moves every Argus entry to the new
+# port with no old-port references and no duplicates — see argus_hook.py.
 #
 #   bash scripts/install-hook.sh install
 #   bash scripts/install-hook.sh uninstall

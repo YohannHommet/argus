@@ -1,27 +1,42 @@
 #!/usr/bin/env python3
-"""Merge or remove Argus's HTTP hook entries in a Claude Code settings.json.
+"""Merge or remove Argus's Claude Code wiring in a Claude Code settings.json:
+the PostToolUse/SessionEnd/SessionStart hooks and the OTel env block.
 
 Invoked by scripts/install-hook.sh (`make install-hook` / `make
 uninstall-hook`) — never run directly by a user. stdlib json only, so every
-existing key and every other hook entry round-trips untouched except the
-PostToolUse/SessionEnd arrays this script edits.
+existing key and every other hook/env entry round-trips untouched except the
+hooks arrays and env keys this script edits.
 
-Argus's own entries are identified by URL, not by position: any hook group
-whose sole hook is `{"type": "http", "url": "http://<host>/ingest/hook"}`.
-That makes install idempotent (re-running with the same port is a no-op,
-re-running with a different port replaces the old entry instead of
-duplicating it) and makes uninstall precise (it removes only entries matching
-that shape — every unrelated hook, including ones with the same event name
-and a different matcher/url, is left exactly as it was).
+Argus's own hook entries are identified by URL, not by position: any hook
+group whose sole hook is `{"type": "http", "url": "http://<host>/ingest/hook"}`.
+Argus's own env keys are identified by name: the fixed OTEL_*/
+CLAUDE_CODE_ENABLE_TELEMETRY set in OTEL_KEYS below. That makes install
+idempotent (re-running with the same port is a no-op, re-running with a
+different port replaces the old hook URLs/endpoint instead of duplicating
+them) and makes uninstall precise (it removes only entries matching that
+shape/name — every unrelated hook or env key, including ones with the same
+event name and a different matcher/url, is left exactly as it was).
 """
 import json
 import re
 import sys
 from pathlib import Path
 
-EVENTS = ("PostToolUse", "SessionEnd")
-TIMEOUTS = {"PostToolUse": 5, "SessionEnd": 1}
+EVENTS = ("PostToolUse", "SessionEnd", "SessionStart")
+TIMEOUTS = {"PostToolUse": 5, "SessionEnd": 1, "SessionStart": 2}
 URL_RE = re.compile(r"^https?://[^/\s]+/ingest/hook$")
+
+# Argus-owned OTel env keys with fixed values — everything telemetry needs
+# except the endpoint, which carries the port and is computed per-install.
+OTEL_KEYS = {
+    "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
+    "OTEL_LOGS_EXPORTER": "otlp",
+    "OTEL_METRICS_EXPORTER": "otlp",
+    "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
+    "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE": "delta",
+    "OTEL_LOG_TOOL_DETAILS": "1",
+}
+OTEL_ENDPOINT_KEY = "OTEL_EXPORTER_OTLP_ENDPOINT"
 
 
 def is_argus_group(group: object) -> bool:
@@ -42,6 +57,13 @@ def is_argus_group(group: object) -> bool:
 
 def argus_group(url: str, event: str) -> dict:
     return {"hooks": [{"type": "http", "url": url, "timeout": TIMEOUTS[event]}]}
+
+
+def argus_env(base_url: str) -> dict:
+    """The full Argus-owned env block (fixed keys + the port-carrying endpoint)."""
+    env = dict(OTEL_KEYS)
+    env[OTEL_ENDPOINT_KEY] = base_url
+    return env
 
 
 def main() -> int:
@@ -68,6 +90,11 @@ def main() -> int:
         print(f'error: {path}: "hooks" is not a JSON object', file=sys.stderr)
         return 1
 
+    env = data.get("env")
+    if env is not None and not isinstance(env, dict):
+        print(f'error: {path}: "env" is not a JSON object', file=sys.stderr)
+        return 1
+
     changed = False
 
     if action == "install":
@@ -85,25 +112,41 @@ def main() -> int:
             hooks[event] = new_list
         data["hooks"] = hooks
 
-    elif action == "uninstall":
-        if not hooks:
-            print("uninstall: no hooks configured — nothing to remove")
-            return 0
-        for event in EVENTS:
-            existing = hooks.get(event)
-            if not isinstance(existing, list):
-                continue
-            kept = [g for g in existing if not is_argus_group(g)]
-            if len(kept) != len(existing):
+        env = dict(env) if env else {}
+        for key, value in argus_env(base_url).items():
+            if env.get(key) != value:
                 changed = True
-            if kept:
-                hooks[event] = kept
-            else:
-                hooks.pop(event, None)
+            env[key] = value
+        data["env"] = env
+
+    elif action == "uninstall":
         if hooks:
-            data["hooks"] = hooks
-        else:
-            data.pop("hooks", None)
+            for event in EVENTS:
+                existing = hooks.get(event)
+                if not isinstance(existing, list):
+                    continue
+                kept = [g for g in existing if not is_argus_group(g)]
+                if len(kept) != len(existing):
+                    changed = True
+                if kept:
+                    hooks[event] = kept
+                else:
+                    hooks.pop(event, None)
+            if hooks:
+                data["hooks"] = hooks
+            else:
+                data.pop("hooks", None)
+
+        if env:
+            managed_keys = set(OTEL_KEYS) | {OTEL_ENDPOINT_KEY}
+            for key in managed_keys:
+                if key in env:
+                    env.pop(key)
+                    changed = True
+            if env:
+                data["env"] = env
+            else:
+                data.pop("env", None)
 
     else:
         print(f"error: unknown action {action!r} (want install or uninstall)", file=sys.stderr)

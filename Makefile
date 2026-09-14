@@ -58,6 +58,7 @@ up: check-compose ## Start Argus (builds on first run), wait for ready, print th
 	$(COMPOSE) up -d
 	@for i in $$(seq 1 60); do curl -fsS localhost:$(PORT)/readyz >/dev/null 2>&1 && break; sleep 1; done
 	@echo "Argus is up -> http://localhost:$(PORT)"
+	@bash scripts/check-port-sync.sh
 
 rebuild: check-compose ## Rebuild the image from source, then (re)start
 	$(COMPOSE) up -d --build
@@ -84,13 +85,13 @@ status: check-compose ## Show container status and /readyz
 ui: ## Print the UI URL
 	@echo "http://localhost:$(PORT)"
 
-setup: check-compose ## Guided onboarding: check docker, create deploy/.env, start the stack, print + install the Claude Code hook
+setup: check-compose ## Guided onboarding: check docker, create deploy/.env, start the stack, sync Claude Code's hooks + OTel env
 	@bash scripts/setup.sh
 
-install-hook: ## Merge Argus's hook into ~/.claude/settings.json (idempotent; override port with PORT=, path with ARGUS_SETTINGS_FILE=)
+install-hook: ## Sync Argus's hooks + OTel env into ~/.claude/settings.json for the current port (idempotent, re-runnable after a port change; override port with PORT=, path with ARGUS_SETTINGS_FILE=)
 	@bash scripts/install-hook.sh install
 
-uninstall-hook: ## Remove Argus's hook from ~/.claude/settings.json (only Argus's own entries; leaves everything else)
+uninstall-hook: ## Remove Argus's hooks + OTel env from ~/.claude/settings.json (only Argus's own entries; leaves everything else)
 	@bash scripts/install-hook.sh uninstall
 
 # --- Everyday targets --------------------------------------------------------
