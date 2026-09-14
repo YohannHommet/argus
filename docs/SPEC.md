@@ -24,7 +24,7 @@ One Go binary (`argusd`) + Postgres + one Vue SPA (embedded in the binary).
 ```
 Claude Code
   ├─ OTLP/HTTP  (OTEL_EXPORTER_OTLP_ENDPOINT → argusd)  → POST /v1/logs, /v1/metrics
-  └─ hooks      ("type": "http")                        → POST /ingest/hook
+  └─ hooks      ("type": "http", SessionStart: curl)    → POST /ingest/hook?event=…
                                     │
                           ┌─────────▼─────────┐
                           │ internal/ingest   │  decode → normalize → bounded queue
@@ -289,13 +289,22 @@ Recommended hook config shipped in the README. Note the `SessionEnd` timeout: th
 across all `SessionEnd` hooks is 1.5 s**, so teaching `5` there would be wrong even though Argus
 ACKs in milliseconds.
 
+Each hook posts to its own `?event=` URL, so the receiver can classify the event from the URL alone
+(§3.5). **`SessionStart` is a `command` hook running curl, not an `http` hook**: Claude Code accepts
+and registers a `type: http` SessionStart hook but never sends the request (observed on 2.1.26x /
+2.1.27x), so an http SessionStart never arrives and every session would stay `status = unknown` with
+no `started_at` (§1.7).
+
 ```jsonc
 { "hooks": {
-  "PostToolUse": [ { "hooks": [
-    { "type": "http", "url": "http://localhost:8080/ingest/hook", "timeout": 5 } ] } ],
+  // Claude Code registers an http SessionStart hook but never fires it, so this one posts with curl.
+  "SessionStart": [ { "hooks": [
+    { "type": "command", "timeout": 2, "command": "curl -sS -m 2 -X POST -H 'Content-Type: application/json' --data-binary @- -o /dev/null 'http://localhost:8080/ingest/hook?event=SessionStart' || true" } ] } ],
+  "PostToolUse":  [ { "hooks": [
+    { "type": "http", "url": "http://localhost:8080/ingest/hook?event=PostToolUse", "timeout": 5 } ] } ],
   // SessionEnd hooks share a hard 1.5 s budget — keep this at 1.
-  "SessionEnd":  [ { "hooks": [
-    { "type": "http", "url": "http://localhost:8080/ingest/hook", "timeout": 1 } ] } ]
+  "SessionEnd":   [ { "hooks": [
+    { "type": "http", "url": "http://localhost:8080/ingest/hook?event=SessionEnd", "timeout": 1 } ] } ]
 } }
 ```
 
@@ -309,7 +318,7 @@ The events table stores **both** rows. Merging happens in two places only:
 |---|---|---|
 | `sessions.started_at` / `ended_at` | earliest / latest observed, any source | monotonic facts |
 | `sessions.start_type`, `end_reason` | hook | OTel has `start_type` only as a metric attribute |
-| `sessions.cwd`, `project` | hook (`SessionStart.cwd`, `CwdChanged`) | OTel `workspace.host_paths` is a list and less direct |
+| `sessions.cwd`, `project` | hook (`SessionStart.cwd`, `CwdChanged`), falling back to any hook event's `cwd` | OTel `workspace.host_paths` is a list and less direct |
 | `sessions.app_version`, `entrypoint`, `terminal_type`, `user_*`, `org_id` | otel_log (falling back to resource `service.version` for the version) | hooks don't carry them |
 | `tool_calls.decision`, `decision_source`, `tool_source` | `otel_log`/`tool_decision` > `otel_log`/`tool_result` > `hook` | only `tool_decision` carries the authoritative 6-valued `source` |
 | `tool_calls.duration_ms`, `input_size_bytes`, `result_size_bytes` | otel_log (`tool_result`, read from `attrs`) | measured by the agent |
@@ -323,6 +332,12 @@ Implemented as `COALESCE`-with-rank in the upsert: each projection row carries a
 jsonb holding the source rank that last wrote each precedence-governed column; a write overwrites
 only when its rank is ≥ the stored rank (equal rank ⇒ later `ts` wins). Ranks: `otel_log=30`,
 `hook=20`, `otel_metric=10`, `sim` = the rank of the source it imitates.
+
+One extra rank, `15`, exists for `cwd`/`project` only: **every** hook payload carries `cwd`, so any
+hook event offers it at `15` — below the `SessionStart`/`CwdChanged` rows above, which still win
+whenever they arrive, but enough to fill a column that would otherwise stay NULL. It has to be this
+way in practice: Claude Code never delivers `SessionStart` over an `http` hook (§1.5.2), and a
+session already running when Argus starts never re-sends one at all.
 
 **(b) UI timeline collapse** — the timeline endpoint returns raw events; the frontend collapses a
 group into one row when all of: same `kind`, same correlation key (`tool_use_id`, else `prompt_id`,
@@ -1192,6 +1207,12 @@ disagreement > 5 s raises `clock_skewed`.
 
 `POST /ingest/hook`, JSON, one payload per request (Claude Code sends one); also accepts an array
 for batch replay by `argus-sim`.
+
+An optional `?event=<HookEvent>` query param names the hook the request carries, so classification
+does not depend on the body alone (§1.5.2's config wires one URL per event). It is a **fallback**:
+an element whose payload has its own `hook_event_name` keeps it, so replaying a captured payload
+through a mislabelled URL cannot relabel it. No param and no `hook_event_name` → `kind = unknown`,
+unchanged.
 
 **The 1.5 s `SessionEnd` budget dictates the design**: the handler validates `session_id`, computes
 the dedup key, enqueues, and returns `202 Accepted` with `{"ok":true,"event":"<hook_event_name>"}`.

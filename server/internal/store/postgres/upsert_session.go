@@ -22,9 +22,13 @@ import (
 // Source ranks for field_ranks precedence mechanism (SPEC §1.5.3).
 const (
 	rankOTelMetric = 10
-	rankHook       = 20
-	rankOTelLog    = 30
-	rankNone       = -1 // sentinel: this event contributed no candidate for the field
+	// rankHookIncidental ranks cwd seen on a hook event SPEC §1.5.3 does not
+	// name as a cwd source: below rankHook so SessionStart/CwdChanged always
+	// win, above rankNone so it still fills a column nothing else populates.
+	rankHookIncidental = 15
+	rankHook           = 20
+	rankOTelLog        = 30
+	rankNone           = -1 // sentinel: this event contributed no candidate for the field
 )
 
 func sourceRank(s model.Source) int {
@@ -123,6 +127,17 @@ func (a *sessionAgg) foldEvent(e model.Event, prices []pricing.Price) {
 	}
 
 	rank := sourceRank(e.Source)
+
+	// Every Claude Code hook payload carries cwd, and Claude Code never
+	// delivers the SessionStart/CwdChanged hooks SPEC §1.5.3 names as the cwd
+	// sources over http — so without this fallback sessions.project stays NULL
+	// for real traffic. Ranked below those two, which still win when they come.
+	if e.Source == model.SourceHook {
+		if cwd := attrStr(e.Attrs, "cwd"); cwd != "" {
+			a.cwd.offer(cwd, rankHookIncidental, e.TS)
+			a.project.offer(path.Base(cwd), rankHookIncidental, e.TS)
+		}
+	}
 
 	// permission_mode is not in SPEC §1.5.3's precedence table (unlike
 	// cwd/start_type/etc., which are single-source by construction, see

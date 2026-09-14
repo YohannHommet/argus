@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # scripts/install-hook.sh (make install-hook / make uninstall-hook) — the ONE
 # re-runnable command that syncs ALL Claude-side Argus config to the current
-# port: the HTTP hooks (PostToolUse + SessionEnd + SessionStart ->
-# /ingest/hook) AND the OTel env block (endpoint + the fixed telemetry keys)
-# in a Claude Code settings.json. This is the fiddly bit the README used to
+# port: the hooks (SessionStart + PostToolUse + SessionEnd ->
+# /ingest/hook?event=<HookEvent>) AND the OTel env block (endpoint + the fixed
+# telemetry keys) in a Claude Code settings.json. SessionStart is a `curl`
+# command hook, the other two are `http` hooks — Claude Code never dispatches
+# an http hook for SessionStart (see argus_hook.py's docstring for the
+# evidence). This is the fiddly bit the README used to
 # ask users to hand-edit; the actual JSON surgery lives in
 # scripts/argus_hook.py (stdlib json — safer than sed/jq for "preserve
 # everything else exactly"), this wrapper only resolves the port and the

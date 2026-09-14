@@ -1956,7 +1956,13 @@ export interface operations {
     };
     ingestHook: {
         parameters: {
-            query?: never;
+            query?: {
+                /**
+                 * @description Which hook fired, named by the transport rather than the body: `make install-hook` wires one URL per event (`/ingest/hook?event=SessionStart`). Used only for payloads that carry no `hook_event_name` of their own — a self-naming body always wins, so replaying a captured payload through a mislabelled URL cannot relabel it.
+                 * @example SessionStart
+                 */
+                event?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -1969,7 +1975,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Accepted for asynchronous ingestion (SPEC §3.5). `event` echoes the request's hook_event_name(s) back verbatim (server/internal/ingest/hooks/handler.go's writeAccepted) — comma-joined when the body is a batch-replay array. */
+            /** @description Accepted for asynchronous ingestion (SPEC §3.5). `event` echoes the hook_event_name(s) the request was classified under (server/internal/ingest/hooks/handler.go's writeAccepted) — the body's own name, else the `event` query param — comma-joined when the body is a batch-replay array. */
             202: {
                 headers: {
                     [name: string]: unknown;

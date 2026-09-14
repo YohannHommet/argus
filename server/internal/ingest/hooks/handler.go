@@ -118,8 +118,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Claude Code's http hooks are wired one URL per event
+	// (/ingest/hook?event=SessionEnd), so the transport names the hook even
+	// for a payload that does not name itself.
+	eventParam := r.URL.Query().Get("event")
+
 	// Validate before enqueue to fail fast per SPEC §3.6 (single 400, never partial 202).
-	events, err := h.normalizer.FromHookPayload(body)
+	events, err := h.normalizer.FromHookPayloadWithEvent(body, eventParam)
 	if err != nil {
 		writeProblem(w, r, http.StatusBadRequest, "invalid-hook-payload", err.Error())
 		return
@@ -140,14 +145,22 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeAccepted(w, echoedEventName(body))
+	writeAccepted(w, echoedEventName(body, eventParam))
 }
 
-// echoedEventName echoes comma-joined hook_event_names (SPEC §3.5 covers single-object only; batch is passthrough).
-func echoedEventName(body []byte) string {
+// echoedEventName echoes comma-joined hook_event_names (SPEC §3.5 covers
+// single-object only; batch is passthrough), applying the same
+// payload-wins-over-?event fallback the normalizer did, so the 202 reports
+// the names actually used to classify.
+func echoedEventName(body []byte, fallback string) string {
 	names, err := rawHookEventNames(body)
 	if err != nil || len(names) == 0 {
 		return ""
+	}
+	for i, name := range names {
+		if name == "" {
+			names[i] = fallback
+		}
 	}
 	return strings.Join(names, ",")
 }
