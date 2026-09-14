@@ -7,11 +7,16 @@
 #
 #   cp deploy/docker-compose.override.example.yml deploy/docker-compose.override.yml
 #   docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.override.yml up -d
+#
+# For the ARGUS_* env vars docker-compose.yml already wires up (retention
+# days, tokens, log level, port, ...), deploy/.env.example -> deploy/.env is
+# the simpler path (`make setup` sets it up) and needs no second compose
+# file. Reach for this override file for anything beyond that: an ARGUS_* var
+# this repo hasn't wired into deploy/.env yet (ARGUS_RETENTION_SESSION_DAYS
+# below), or a whole extra service (the `sim` one-shot below).
 services:
   argusd:
     environment:
-      ARGUS_INGEST_TOKEN: change-me-to-a-real-token
-      ARGUS_RETENTION_RAW_DAYS: "90"
       ARGUS_RETENTION_SESSION_DAYS: "30"
 
   # One-shot traffic simulator (SPEC §3.8's `sim` subcommand, wired for real
