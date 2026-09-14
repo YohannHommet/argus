@@ -75,6 +75,26 @@ func TestFromHookPayloadWithEvent_BlankHookEventNameFallsBackToQueryParam(t *tes
 	require.Equal(t, model.KindSessionStart, events[0].Kind)
 }
 
+// Backward compatibility for replay (argus-sim posts self-naming bodies to
+// the bare path): injecting must be a true no-op there, dedup key included,
+// so a resend still collapses onto the row the pre-?event wiring wrote.
+func TestFromHookPayloadWithEvent_SelfNamingPayloadKeepsItsDedupKey(t *testing.T) {
+	t.Parallel()
+	body := []byte(`{"session_id":"sess-1","hook_event_name":"SessionEnd","reason":"clear"}`)
+
+	bare, err := newTestHookNormalizer(false).FromHookPayload(body)
+	require.NoError(t, err)
+	matching, err := newTestHookNormalizer(false).FromHookPayloadWithEvent(body, "SessionEnd")
+	require.NoError(t, err)
+	conflicting, err := newTestHookNormalizer(false).FromHookPayloadWithEvent(body, "SessionStart")
+	require.NoError(t, err)
+
+	require.NotEmpty(t, bare[0].DedupKey)
+	require.Equal(t, bare[0].DedupKey, matching[0].DedupKey)
+	require.Equal(t, bare[0].DedupKey, conflicting[0].DedupKey,
+		"a mislabelled URL must not fork the dedup key of a payload that names itself")
+}
+
 // MessageDisplay is dropped before classification; the gate must see the
 // injected name too, or a ?event=MessageDisplay URL would bypass it.
 func TestFromHookPayloadWithEvent_InjectedMessageDisplayIsStillGated(t *testing.T) {
