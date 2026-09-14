@@ -34,7 +34,6 @@ npm-debug.log*
 /web/.playwright/
 
 # Env
-.env
 .env.*
 !.env.example
 
@@ -45,3 +44,7 @@ npm-debug.log*
 .idea/
 .vscode/
 .worktrees/
+
+# local machine config (host port etc.)
+deploy/.env
+.env
