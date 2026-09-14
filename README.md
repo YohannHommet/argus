@@ -67,8 +67,9 @@ make install-hook
 
 This writes both the OTel env block and the hook block into `~/.claude/settings.json` for you —
 it's the one re-runnable command that keeps Claude Code's wiring in sync with whatever port Argus
-is on (see [Changing the port](#changing-the-port)). No shell exports, no hand-editing. Under the
-hood it merges in:
+is on (see [Changing the port](#changing-the-port)) — no hand-editing, and it works whatever your
+shell is (zsh, bash, fish), because the config lives in `settings.json`, which Claude Code reads
+itself. Under the hood it merges in:
 
 ```json
 {
@@ -101,6 +102,21 @@ hooks' share.
 `make install-hook` merges — every other key and hook already in your `settings.json` is preserved,
 and a `.bak` is written before it edits the file. `make uninstall-hook` removes exactly what it
 added. Both apply to every Claude Code session, including `claude agents`.
+
+Prefer to wire it by hand? These are the same OTel values `make install-hook` writes — paste them
+into your shell before launching `claude` (the `export` syntax works in bash and zsh):
+
+```bash
+export CLAUDE_CODE_ENABLE_TELEMETRY=1 \
+       OTEL_LOGS_EXPORTER=otlp OTEL_METRICS_EXPORTER=otlp \
+       OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf \
+       OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:8080 \
+       OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta \
+       OTEL_LOG_TOOL_DETAILS=1
+```
+
+Swap `http://localhost:8080` for your `ARGUS_HTTP_PORT`. `make install-hook` is still preferred —
+it also wires the hooks and stays in sync when the port changes.
 
 ### 3. Open the UI and use Claude Code
 
