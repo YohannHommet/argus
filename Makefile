@@ -9,11 +9,19 @@ LDFLAGS := -s -w \
 	-X github.com/YohannHommet/argus/server/internal/telemetry.Commit=$(COMMIT)
 
 # Local run config. Override the port when 8080 is taken: `make up PORT=18080`.
-PORT ?= 8080
+# Falls back to deploy/.env's ARGUS_HTTP_PORT (written by `make setup`, or by
+# hand) when PORT isn't given on the command line, so editing that one file
+# is enough to change the port for every target below — no need to also
+# remember `PORT=` on every invocation.
+PORT ?= $(shell [ -f deploy/.env ] && grep -m1 '^ARGUS_HTTP_PORT=' deploy/.env | cut -d= -f2)
+ifeq ($(strip $(PORT)),)
+PORT := 8080
+endif
 COMPOSE := docker compose -f deploy/docker-compose.yml
 export ARGUS_HTTP_PORT := $(PORT)
 
 .PHONY: help up rebuild down restart clean demo logs status ui \
+	setup install-hook uninstall-hook \
 	dev build test test-fast lint type-check openapi-check ci gen migrate sim \
 	compose-up compose-smoke e2e \
 	check-server check-web check-migrations check-compose check-smoke
@@ -75,6 +83,15 @@ status: check-compose ## Show container status and /readyz
 
 ui: ## Print the UI URL
 	@echo "http://localhost:$(PORT)"
+
+setup: check-compose ## Guided onboarding: check docker, create deploy/.env, start the stack, print + install the Claude Code hook
+	@bash scripts/setup.sh
+
+install-hook: ## Merge Argus's hook into ~/.claude/settings.json (idempotent; override port with PORT=, path with ARGUS_SETTINGS_FILE=)
+	@bash scripts/install-hook.sh install
+
+uninstall-hook: ## Remove Argus's hook from ~/.claude/settings.json (only Argus's own entries; leaves everything else)
+	@bash scripts/install-hook.sh uninstall
 
 # --- Everyday targets --------------------------------------------------------
 

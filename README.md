@@ -34,7 +34,8 @@ Argus answers questions about *what the agent actually did*:
 ## Quickstart
 
 A stranger should get from a clone to live data in about two minutes. Verified end-to-end from a
-clean checkout.
+clean checkout. Prefer one guided command over the steps below? See
+[Install & customize](#install--customize).
 
 ### 1. Start the stack
 
@@ -135,6 +136,29 @@ The async, batched ingest path sustains the **1000 events/s** target with **zero
 (and no `too_old` rejections or deadlock-retries) at ~20 ms median write latency. See the
 [load-test results](docs/OPERATIONS.md#load-test-results) for the full rate → latency/drops table, and
 `scripts/loadtest.sh` to reproduce.
+
+## Install & customize
+
+The fastest path from a clone to a running, wired-up Argus:
+
+```bash
+git clone https://github.com/YohannHommet/argus.git
+cd argus
+make setup
+```
+
+`make setup` checks for Docker, creates `deploy/.env` from `deploy/.env.example` (skipped if it
+already exists), builds and starts the stack, prints the exact Claude Code OTel env block and hook
+JSON for the port you're on, and merges Argus's hook into `~/.claude/settings.json` for you.
+`make install-hook` / `make uninstall-hook` do just that step on their own, at any time — both are
+idempotent and touch only Argus's own hook entries: every other hook already in your
+`settings.json` is preserved, and a `.bak` is written before either one edits the file.
+
+To customize a knob — the port, retention, rollup cadence, ingest/API auth tokens, log level —
+edit `deploy/.env` (gitignored, never committed) and run `make up` again; no need to hand-edit
+`deploy/docker-compose.yml` or `settings.json`. `deploy/.env.example` documents each knob with its
+default; the full generated `ARGUS_*` reference is
+[`docs/config-reference.md`](docs/config-reference.md).
 
 ## Configuration
 
