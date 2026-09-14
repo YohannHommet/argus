@@ -13,18 +13,7 @@ import (
 	storetesting "github.com/YohannHommet/argus/server/internal/store/testing"
 )
 
-// --- M6/M8 (pre-Phase-4 audit wave, ticket W3): NewPool must pin every
-// connection's TimeZone to UTC and set a lock_timeout, regardless of what
-// the database URL itself requests. -----------------------------------
-
-// TestNewPool_PinsUTCTimeZoneAndLockTimeoutRegardlessOfDSN is the pool-level
-// unit test for both fixes: it opens a pool via the real postgres.NewPool
-// against a DSN that explicitly asks for a different TimeZone and a
-// disabled lock_timeout, then asserts the live session GUCs show NewPool's
-// values, not the DSN's. rollups_test.go's
-// TestRunRollups_NonUTCSessionTimeZone_{Kolkata,Paris} additionally prove
-// this pin is what makes the real rollup passes correct end-to-end; this
-// test isolates the pool-construction behaviour on its own.
+// TestNewPool_PinsUTCTimeZoneAndLockTimeoutRegardlessOfDSN verifies NewPool pins TimeZone=UTC and lock_timeout despite DSN.
 func TestNewPool_PinsUTCTimeZoneAndLockTimeoutRegardlessOfDSN(t *testing.T) {
 	ctx := context.Background()
 	dsn := storetesting.NewDSN(t) + "&TimeZone=" + url.QueryEscape("America/New_York") + "&lock_timeout=0"

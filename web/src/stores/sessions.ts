@@ -12,13 +12,13 @@ import { useLiveStore } from '@/stores/live'
 export type SessionSummary = components['schemas']['SessionSummary']
 export type SessionStatus = components['schemas']['SessionStatus']
 
-/** SPEC §4.1: keyset sort is desc-only on one of these four keys + id — there is no asc/desc toggle
+/** Keyset sort is desc-only on one of these four keys + id — there is no asc/desc toggle
  * to build a UI for. */
 export const SORT_KEYS = ['last_event_at', 'started_at', 'cost_usd', 'event_count'] as const
 export type SortKey = (typeof SORT_KEYS)[number]
 export const DEFAULT_SORT: SortKey = 'last_event_at'
 
-/** Argus-computed, closed (SPEC §1.7) — unlike vendor/free-form fields, safe to validate a query
+/** Argus-computed, closed — unlike vendor/free-form fields, safe to validate a query
  * param against. */
 export const SESSION_STATUSES = ['active', 'ended', 'abandoned', 'unknown'] as const satisfies readonly SessionStatus[]
 
@@ -26,12 +26,12 @@ const DEFAULT_LIMIT = 50
 
 /** Search is debounced ~300ms so a user typing doesn't fire a request per keystroke; select/date
  * filters use FILTER_DEBOUNCE_MS, which exists only to collapse several state changes landing in the
- * same tick (e.g. "clear all filters" touching six fields at once) into the single refetch the AC
- * requires — not as a UX delay. */
+ * same tick (e.g. "clear all filters" touching six fields at once) into the single refetch
+ * required — not as a UX delay. */
 export const SEARCH_DEBOUNCE_MS = 300
 const FILTER_DEBOUNCE_MS = 0
 
-/** Repeated params OR within a field, AND across fields (SPEC §4.1's own filter semantics). */
+/** Repeated params OR within a field, AND across fields. */
 export interface SessionFilters {
   project: string[]
   vendor: string[]
@@ -69,7 +69,7 @@ function queryToArray(value: LocationQuery[string]): string[] {
 /**
  * Pure — parses a route query into filter/sort state. Exported so the round-trip (filters ->
  * `filtersToQuery` -> back through here) is testable without a router instance, which is exactly
- * what "survives a reload" (Phase-4 exit criterion 1) reduces to: a fresh page load hands the store
+ * what "survives a reload" reduces to: a fresh page load hands the store
  * nothing but `route.query`, so it alone must be enough to reproduce the filter state that produced
  * it. An unrecognised `status` value (or a garbled `sort`) is dropped rather than thrown on — a
  * hand-edited or stale URL must degrade to "no filter"/"default sort", not a broken page.
@@ -122,7 +122,7 @@ export function filtersToQuery(filters: SessionFilters, sort: SortKey): Location
 
 /**
  * Reject rate is *undefined*, not zero, whenever there's nothing meaningful to divide
- * (SPEC §6.1's null-vs-zero rule, applied to a derived metric): no hook coverage at all
+ * (the null-vs-zero distinction, applied to a derived metric): no hook coverage at all
  * (`tool_call_count` unset) and exactly zero tool calls both return `null` so a formatter renders
  * `—`, never a misleading `0%`. Loosely typed on purpose (not `Pick<SessionSummary, ...>`) — the
  * live schema has both fields as non-nullable `number`, but this function is the one place that
@@ -144,9 +144,9 @@ function isAbortError(err: unknown): boolean {
 }
 
 /**
- * SPEC §4.1's session list, filtered/sorted/paginated, with the URL query as the single source of
- * truth for filter state (Phase-4 exit criterion 1: filtering changes the result set, is reflected
- * in the URL, and survives a reload).
+ * The session list, filtered/sorted/paginated, with the URL query as the single source of
+ * truth for filter state: filtering changes the result set, is reflected
+ * in the URL, and survives a reload.
  *
  * Every filter/sort mutation goes through `setFilters`/`setSearch`/`setSort` — never assign
  * `.filters`/`.sort` directly — because those three actions are what keeps the URL and the debounced
@@ -251,7 +251,7 @@ export const useSessionsStore = defineStore('sessions', () => {
   function scheduleFetch(delayMs: number): void {
     clearDebounce()
     // A filter/sort change invalidates pagination immediately, not when the debounced fetch fires —
-    // a cursor minted under the old filters would otherwise be sent as a 400 (SPEC §4.1).
+    // a cursor minted under the old filters would otherwise be sent as a 400.
     nextCursor.value = null
     hasMore.value = false
     debounceTimer = setTimeout(() => {
@@ -275,8 +275,8 @@ export const useSessionsStore = defineStore('sessions', () => {
     scheduleFetch(FILTER_DEBOUNCE_MS)
   }
 
-  /** Same contract as {@link setFilters}, but on the ~300ms search debounce — this is the path the
-   * AC's "triggers exactly one (debounced) refetch" exercises. */
+  /** Same contract as {@link setFilters}, but on the ~300ms search debounce — this is the path that
+   * triggers exactly one (debounced) refetch. */
   function setSearch(q: string): void {
     filters.value = { ...filters.value, q }
     syncRoute()
@@ -317,15 +317,15 @@ export const useSessionsStore = defineStore('sessions', () => {
   }
 
   /**
-   * SPEC §6.4 / PLAN.md P5-06: "applies live `session` frames to rows already in the list." The
+   * Applies live `session` frames to rows already in the list. The
    * connection itself is `SessionListView.vue`'s responsibility (it calls `useLiveStore().subscribe`
-   * while mounted, per that ticket's own file split) — this store only reacts to whatever lands in
+   * while mounted) — this store only reacts to whatever lands in
    * `liveStore.sessions`, which is always safe to watch even when nobody has subscribed to anything
    * yet (the Map is simply empty, and stays empty).
    *
    * Depends on `.values()` (not e.g. `.get(id)` per row), so this reruns once per incoming frame
    * regardless of how many rows are currently loaded — `applySessionUpdate` itself is what makes that
-   * a no-op for every id besides the one that actually changed, and the AC's own "never inserts a row
+   * a no-op for every id besides the one that actually changed, and "never inserts a row
    * outside the loaded page" already lives entirely in that function (see its doc comment).
    * `Array.from(...)` deliberately materialises a fresh array reference on every dependency change so
    * `watch`'s default (non-deep) comparison always finds "changed" — comparing two Map instances by

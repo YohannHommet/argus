@@ -4,7 +4,7 @@
  * Clicking the row opens the detail drawer on its primary (first) raw
  * event; when the item collapsed more than one source, a "N sources"
  * affordance lists each raw member individually — clicking one opens the
- * drawer on that specific `event_ref` (SPEC §1.5.3(b): collapsing must stay
+ * drawer on that specific `event_ref` (collapsing must stay
  * reversible/inspectable, not just togglable at the top level).
  */
 import { computed } from 'vue'
@@ -22,7 +22,7 @@ interface Props {
   item: TimelineItem
   /** ToolCall.correlation for this item's decision, when known — see EventRow's host for how it's derived. */
   correlation?: Correlation | null
-  /** True when this row's event_ref is the one currently open in the inspector — the only visible selection cue (round-3 critic gap: "row selection state must be visible"). */
+  /** True when this row's event_ref is the one currently open in the inspector — the only visible selection cue ("row selection state must be visible"). */
   selected?: boolean
   /** True for a tool-thread child (tool.decision/tool.permission_request/tool.result nested under its tool.pre call, see TimelineGroup's `buildToolThreads` usage) — renders slightly smaller/quieter than a top-level row, since the thread's own rail already shows the nesting. */
   nested?: boolean
@@ -119,10 +119,7 @@ function openEvent(eventRef: string) {
 </script>
 
 <template>
-  <!--
-    One dense line per row: metrics right-aligned in fixed-width tabular-nums columns keeps rows
-    under 32px, fitting far more of them on screen without dropping any field.
-  -->
+  <!-- One dense line per row: metrics right-aligned in fixed-width tabular-nums columns keeps rows under 32px without dropping any field. -->
   <div
     class="border-border/50 hover:bg-muted/40 focus-visible:ring-ring flex min-w-0 cursor-pointer items-center gap-3 border-b text-sm outline-none focus-visible:ring-2 focus-visible:-outline-offset-2"
     :class="[nested ? 'h-7 px-2' : 'h-8 px-3', selected ? 'bg-muted border-l-primary border-l-2' : '']"
@@ -177,17 +174,7 @@ function openEvent(eventRef: string) {
       >{{ item.file_path }}</span>
     </div>
 
-    <!--
-      Right cluster: fixed-width, right-aligned, tabular-nums metric columns so offset/duration/
-      cost/tokens line up down the whole list. The offset leads with its varying digits, relative to
-      the first loaded event rather than a repeated absolute date, which is demoted to a
-      hover/inspector detail.
-
-      Every column slot is unconditionally rendered — a `v-if` that drops a whole slot's width would
-      shift the other columns to different x-offsets depending on which fields a given row carries.
-      Each formatter already renders `EM_DASH` for a null/absent value (SPEC §6.1), so the fix is to
-      let it render, not to remove the slot's reserved width.
-    -->
+    <!-- Right cluster: fixed-width metric columns keep offset/duration/cost/tokens aligned — every slot always renders (never `v-if`'d away) so dropping one never shifts the others. -->
     <div class="text-muted-foreground flex shrink-0 items-center gap-3 text-xs">
       <span
         class="w-16 text-right tabular-nums"
@@ -195,10 +182,7 @@ function openEvent(eventRef: string) {
         :title="formatAbsoluteTime(item.ts)"
       >{{ wallClockTime ? formatWallClockTime(item.ts) : formatRelativeOffset(item.ts, originTs) }}</span>
 
-      <!--
-        Duration bar folded into the single line: a fixed-width inline track beside its own text,
-        scaled (log) against the session's max observed duration.
-      -->
+      <!-- Duration bar folded into the single line: a fixed-width inline track beside its own text, scaled (log) against the session's max duration. -->
       <span class="flex w-16 shrink-0 items-center justify-end gap-1.5">
         <span
           v-if="item.duration_ms !== null && maxDurationMs > 0"
@@ -217,11 +201,7 @@ function openEvent(eventRef: string) {
         >{{ formatDuration(item.duration_ms) }}</span>
       </span>
 
-      <!--
-        `text-cost` (theme.css's `--foreground`, full-contrast) only when there is a real cost to
-        show — applying it unconditionally would render a null cost's EM_DASH at emphasized
-        brightness instead of muted, especially on the live feed where cost is null far more often.
-      -->
+      <!-- text-cost only when there's a real cost — otherwise a null cost's EM_DASH would render at emphasized brightness instead of muted. -->
       <span
         class="w-14 text-right tabular-nums"
         :class="item.cost !== null ? 'text-cost' : ''"

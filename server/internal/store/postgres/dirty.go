@@ -1,9 +1,5 @@
-// Package postgres — dirty.go implements SPEC §2.4's dirty-marking rules,
-// the last step of WriteBatch/WriteMetrics's fixed lock order (SPEC §1.6):
-// every batch marks the hour buckets it touched in rollup_dirty inside the
-// same transaction as the events/projection writes, which is what makes the
-// rollup job immune to pre-commit sequence allocation (SPEC §2.4's
-// "Why there is no events.seq watermark").
+// Package postgres implements dirty-marking via rollup_dirty (SPEC §2.4, lock-ordering SPEC §1.6).
+// Marks in-transaction dedupes sequence allocation immunity.
 package postgres
 
 import (
@@ -23,17 +19,13 @@ const (
 	sourceMetric = "metric"
 )
 
-// hourBucket truncates ts to the hour, UTC — SPEC §2.4's
-// "date_trunc('hour', ts)" bucket key, computed in Go so WriteBatch can
-// dedupe buckets before ever issuing SQL.
+// hourBucket truncates ts to hour UTC; computed in Go to dedupe before SQL.
 func hourBucket(ts time.Time) time.Time {
 	t := ts.UTC()
 	return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), 0, 0, 0, time.UTC)
 }
 
-// hourBucketsBetween returns every hour bucket in [first, last], capped at
-// max entries (SPEC §2.4's ARGUS_ROLLUP_SESSION_REMARK_MAX), or reports true
-// if truncated so the caller can log the required warning.
+// hourBucketsBetween returns hour buckets [first, last] capped at maxBuckets, reporting truncation.
 func hourBucketsBetween(first, last time.Time, maxBuckets int) (buckets []time.Time, truncated bool) {
 	start := hourBucket(first)
 	end := hourBucket(last)
@@ -55,11 +47,7 @@ type dirtyMark struct {
 	Source string
 }
 
-// markRollupDirty inserts marks into rollup_dirty (deduped, sorted by
-// (bucket, source) ascending — the lock-ordering invariant's last statement,
-// SPEC §1.6) inside tx. ON CONFLICT DO NOTHING: a bucket already dirty from
-// an earlier statement in this same run, or from a concurrent batch, needs
-// no second row.
+// markRollupDirty inserts deduped marks into rollup_dirty, sorted by (bucket, source) (SPEC §1.6).
 func markRollupDirty(ctx context.Context, tx pgx.Tx, marks []dirtyMark) error {
 	if len(marks) == 0 {
 		return nil

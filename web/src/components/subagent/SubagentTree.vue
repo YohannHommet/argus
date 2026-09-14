@@ -1,10 +1,10 @@
 <script setup lang="ts">
 /**
- * Root of the Subagents tab (PLAN P4-05). Owns the loading/error/empty
+ * Root of the Subagents tab. Owns the loading/error/empty
  * states around the tree, computes the shared duration-bar scale once for
  * the whole visible tree (rather than each `SubagentNode` guessing its
- * own), and turns a node click into the cross-tab navigation SPEC/PLAN
- * P4-05 describes: `?tab=timeline&agent_id=…`. The store
+ * own), and turns a node click into the cross-tab navigation:
+ * `?tab=timeline&agent_id=…`. The store
  * (`useSessionDetailStore`) already watches `route.query.agent_id` and
  * applies it via `setTimelineFilters` (see `SessionDetailView.vue`), so
  * this component only needs to write the query — it does not touch the
@@ -33,7 +33,7 @@ interface Props {
   costNote?: string | null
   /**
    * `SubagentNode.tool_call_count` is a bare total with no per-tool detail. `ToolCall.agent_id` is
-   * hook-sourced but real (SPEC §1.9) — grouping the session's already-loaded tool calls by that
+   * hook-sourced but real — grouping the session's already-loaded tool calls by that
    * field gives every node a genuine per-tool-name breakdown without inventing anything the server
    * didn't say. Optional: a caller that hasn't loaded tool calls yet gets nodes with no breakdown,
    * which reads identically to a plain tool count.
@@ -108,7 +108,7 @@ const toolBreakdownByAgent = computed<Record<string, ToolBreakdownEntry[]>>(() =
 const hasMeaningfulDurationSpread = computed(() => maxDurationMs.value >= 1000)
 
 /**
- * PLAN P4-05: "clicking a node navigates to `?tab=timeline&agent_id=…`
+ * "Clicking a node navigates to `?tab=timeline&agent_id=…`
  * and the store applies the filter". Both halves are done directly here
  * rather than relying solely on `SessionDetailView.vue`'s own
  * `route.query.agent_id` watcher: the URL is updated (`{ query }` alone

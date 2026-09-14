@@ -115,11 +115,7 @@ describe('ActiveSessionCards', () => {
     expect(card.text()).toContain('Last event')
   })
 
-  // D-31 widened `StreamSessionFrame` to the full `SessionSummary`, so `project` is genuinely
-  // wired end to end — but it is only ever populated from a hook session.start/cwd_changed event
-  // (server/internal/store/postgres/upsert_session.go), so a session still active on other
-  // transports can legitimately arrive with `project: ''`. That must render an honest placeholder,
-  // never blank space (the exact symptom the critic pixel-verified).
+  // `project` is only populated from a hook session.start/cwd_changed event, so `project: ''` is legitimate and must render a placeholder, never blank space.
   it('a session with no project signal yet (project: "") shows a placeholder, never a blank title', async () => {
     const noProjectYet = { ...firstSession, project: '' }
     const wrapper = await mountCards({ sessions: [noProjectYet], events: [] })
@@ -129,11 +125,7 @@ describe('ActiveSessionCards', () => {
     expect(title.text()).toContain('No project yet')
   })
 
-  // Round-8 critic gap: `StatusDot`'s own visible status word (falling back
-  // to "Unknown" when `status` is out-of-vocabulary/unset) plus a project
-  // placeholder that used to also read "Unknown project" collided into a
-  // stutter — "Unknown Unknown project". The placeholder's wording no
-  // longer starts with "Unknown", so the status word appears once per row.
+  // `StatusDot`'s "Unknown" plus an "Unknown project" placeholder used to stutter — the placeholder no longer starts with "Unknown".
   it('does not stutter "Unknown" when both the status and the project are unresolved', async () => {
     const unknownStatusNoProject = { ...firstSession, status: 'unknown', project: '' }
     const wrapper = await mountCards({ sessions: [unknownStatusNoProject], events: [] })

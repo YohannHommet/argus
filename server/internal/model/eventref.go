@@ -17,13 +17,9 @@ type EventRef struct {
 	TS  time.Time
 	Seq int64
 
-	// DedupKey is populated only on the EventRef values store.Writer.
-	// WriteBatch returns in BatchResult.EventRefs (internal/ingest's
-	// matchPersisted keys off it to map a persisted ref back to the
-	// submitted batch event it belongs to — SPEC §3.6/§5.3, audit finding
-	// M1). It plays no part in Encode/DecodeEventRef: the wire `event_ref`
-	// stays exactly (ts, seq), and every other EventRef consumer (GetEvent,
-	// pagination cursors, conformance fixtures) leaves this field zero.
+	// DedupKey is populated only by store.Writer.WriteBatch in BatchResult.EventRefs
+	// (consumed by internal/ingest's matchPersisted to map persisted refs to submitted events, M1).
+	// It plays no part in Encode/DecodeEventRef: the wire format is (ts, seq) only.
 	DedupKey string
 }
 

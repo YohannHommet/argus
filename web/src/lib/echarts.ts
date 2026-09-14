@@ -1,11 +1,10 @@
 /**
- * Single tree-shaken ECharts registration point (SPEC §6.1). Every chart
+ * Single tree-shaken ECharts registration point. Every chart
  * component imports `VChart`/`useChartResize` from here rather than
  * `vue-echarts`/`echarts/core` directly, so this module's side-effecting
  * `use()` call is guaranteed to run exactly once before any chart mounts,
  * and no second call with a different renderer/chart-type set can silently
- * expand the bundle (verified via `pnpm build`'s reported chunk size — see
- * ticket P4-07's report).
+ * expand the bundle (verified via `pnpm build`'s reported chunk size).
  *
  * Registers exactly: CanvasRenderer, LineChart, BarChart, PieChart,
  * HeatmapChart, GridComponent, TooltipComponent, LegendComponent,
@@ -53,8 +52,8 @@ export interface ResizableChart {
 
 /**
  * Wires a chart's `resize()` call to its container's `ResizeObserver`
- * rather than relying on vue-echarts's own `autoresize` prop, so the AC
- * ("charts resize with the container") is directly assertable in a mount
+ * rather than relying on vue-echarts's own `autoresize` prop, so charts
+ * resizing with the container is directly assertable in a mount
  * test: stub `global.ResizeObserver`, invoke the captured callback, assert
  * the exposed `resize` spy was called — no reliance on the library's
  * internal wiring, which a stubbed `VChart` component would bypass anyway.
@@ -74,7 +73,7 @@ export function useChartResize(
  * {@link BreakdownChart.vue} so the same `metric` name always formats the
  * same way in both — e.g. a `dimension=query_source` breakdown's `value`
  * is always a cost figure regardless of the `metric=` query param it was
- * fetched with (SPEC §4.3), so its host passes `metric="cost"` explicitly.
+ * fetched with, so its host passes `metric="cost"` explicitly.
  */
 export type ChartMetricKind = 'cost' | 'tokens' | 'count' | 'duration'
 

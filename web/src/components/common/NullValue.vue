@@ -2,7 +2,7 @@
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 
 interface Props {
-  /** Why this value is null (SPEC §6.1) — one of `src/lib/nullReasons.ts`'s constants, or a one-off string. */
+  /** Why this value is null — one of `src/lib/nullReasons.ts`'s constants, or a one-off string. */
   reason?: string
   label?: string
   /**
@@ -21,14 +21,7 @@ withDefaults(defineProps<Props>(), {
 </script>
 
 <template>
-  <!--
-    reka-ui's TooltipContent renders into a portal that only exists in the
-    DOM while the tooltip is open (hover/focus) — a mount test can't drive
-    that without simulating pointer events. `title`/`aria-label` put the
-    same reason directly on the trigger element so both an assistive
-    technology and a plain `wrapper.text()`/`getByLabelText` assertion can
-    read it without opening anything.
-  -->
+  <!-- title/aria-label duplicate the tooltip's reason since TooltipContent only mounts into the DOM while open, which a plain assertion can't easily trigger. -->
   <span
     v-if="!reason"
     class="text-muted-foreground"

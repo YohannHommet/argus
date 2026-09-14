@@ -22,7 +22,7 @@ export type StreamLagFrame = components['schemas']['StreamLagFrame']
 /**
  * A `TimelineEvent` as retained in the live ring buffer — always carrying
  * `receivedAt`, this tab's own wall-clock the instant `handleEventFrame`
- * processed the frame. The wire payload (SPEC §4.3) has no such field, only
+ * processed the frame. The wire payload has no such field, only
  * the vendor-emitted `ts`, and `ts` is not reliable arrival order: two
  * frames can legitimately land out of `ts` order (clock skew, multi-source
  * fan-in), which is exactly why a firehose that displays `ts` down a
@@ -48,8 +48,8 @@ export interface LiveSubscription {
 }
 
 /**
- * Fixed-capacity circular buffer for `event` frames (AC: "the ring buffer never exceeds 2000 under
- * 5000 pushed frames and keeps the newest"). Writes are O(1) — a circular index into a preallocated
+ * Fixed-capacity circular buffer for `event` frames (the ring buffer never exceeds 2000 under
+ * 5000 pushed frames and keeps the newest). Writes are O(1) — a circular index into a preallocated
  * slot array, never a shift/splice — so the buffer's cost doesn't grow with how long the tab has
  * been open, only with `RING_CAPACITY` itself. Reading it back out in order is unavoidably
  * O(RING_CAPACITY), but that's paid at most once per Vue reactive flush (see `events` below, which
@@ -80,7 +80,7 @@ class EventRing {
   /**
    * Oldest-first (chronological) snapshot of what's currently retained — the same convention
    * `collapseEvents.ts` and the session timeline already use elsewhere in the app. A "live feed"
-   * view that wants newest-on-top (PLAN.md P5-05) reverses its own render order; the store stays the
+   * view that wants newest-on-top reverses its own render order; the store stays the
    * one honest, order-stable source of truth.
    */
   toArray(): LiveTimelineEvent[] {
@@ -102,8 +102,8 @@ function topicsEqual(a: LiveTopic, b: LiveTopic): boolean {
 }
 
 /**
- * Sole owner of the tab's `EventSource` (PLAN.md P5-04 / exit criterion 6: "exactly one EventSource
- * per browser tab regardless of navigation").
+ * Sole owner of the tab's `EventSource` — exactly one EventSource per browser tab regardless of
+ * navigation.
  *
  * Reference counting is deliberately **not** "one topic + a refcount": during a route transition two
  * views can be mounted at once (the outgoing `LiveView` and the incoming `SessionDetailView`), so
@@ -117,7 +117,7 @@ function topicsEqual(a: LiveTopic, b: LiveTopic): boolean {
  * "Without dropping frames" on a topic switch does not mean literally holding one socket open across
  * two different topics (a single `EventSource` can't reattach to a different URL) — it means the
  * re-opened connection always carries `?after=<lastEventRef>`, so the server replays whatever gap
- * opened between closing the old connection and the new one reaching `open` (SPEC §5.2).
+ * opened between closing the old connection and the new one reaching `open`.
  */
 export const useLiveStore = defineStore('live', () => {
   const status = ref<LiveStatus>('idle')
@@ -129,7 +129,7 @@ export const useLiveStore = defineStore('live', () => {
   const droppedTotal = ref(0)
   const sessions = ref(new Map<string, SessionSummary>())
   const stats = shallowRef<StreamStatsFrame | null>(null)
-  /** The topic currently driving the live `EventSource`, i.e. the top of the subscription stack — `null` when nobody is subscribed. Exposed for a future "watching: firehose / session X" indicator (P5-05/P5-06) and asserted directly by exit-criterion-6 tests. */
+  /** The topic currently driving the live `EventSource`, i.e. the top of the subscription stack — `null` when nobody is subscribed. Exposed for a future "watching: firehose / session X" indicator, and asserted directly by tests. */
   const activeTopic = ref<LiveTopic | null>(null)
   /** Total `EventSource` instances this tab has ever created (not how many are currently live — that's always 0 or 1). Lets a test assert "exactly one" without reaching into the fake factory itself. */
   const eventSourcesCreated = ref(0)
@@ -199,7 +199,7 @@ export const useLiveStore = defineStore('live', () => {
   function handleEventFrame(ev: MessageEvent): void {
     const payload = parseFrame<TimelineEvent>(ev, 'event')
     if (!payload) return
-    // Read from the parsed body's own `event_ref` (SPEC §5.1), not `ev.lastEventId` — the latter
+    // Read from the parsed body's own `event_ref`, not `ev.lastEventId` — the latter
     // depends on a real `EventSource` setting it, which the test fake and jsdom don't implement.
     lastEventRef.value = payload.event_ref
     // Tracked even while paused: a reconnect that happens mid-pause must still resume from the true
@@ -240,7 +240,7 @@ export const useLiveStore = defineStore('live', () => {
   }
 
   /**
-   * SPEC §5.2 on a `reset`: "the client drops local state and refetches via REST". Every piece of
+   * On a `reset`: "the client drops local state and refetches via REST". Every piece of
    * local state derived from the stream goes, `sessions` included — a projection snapshot that was
    * true when it arrived is still a snapshot from before an acknowledged gap, and the REST refetch
    * the callback triggers is what replaces it with something whose completeness is knowable. Only
@@ -266,7 +266,7 @@ export const useLiveStore = defineStore('live', () => {
   }
 
   /**
-   * SPEC §5.1: sent once on graceful server shutdown "so the browser reconnects instead of
+   * Sent once on graceful server shutdown "so the browser reconnects instead of
    * erroring". Closed proactively here (rather than left to the browser's own error/retry) so the
    * reconnect always goes through this module's `?after=` path instead of depending on whether the
    * server's connection teardown happens to leave the browser in `CONNECTING` or `CLOSED`. A planned
@@ -295,10 +295,10 @@ export const useLiveStore = defineStore('live', () => {
   }
 
   /**
-   * Distinguishes the two reconnect paths SPEC §5.2 provides (ticket P5-04's central subtlety):
+   * Distinguishes the two reconnect paths available:
    *   - `CONNECTING` — the browser is already retrying by itself, carrying `Last-Event-ID` on its
    *     own. Opening a second `EventSource` here is exactly how a tab ends up with two live
-   *     connections at once (exit criterion 6) — only the exposed connection state changes.
+   *     connections at once — only the exposed connection state changes.
    *   - anything else (`CLOSED`) — the browser gave up. From here the reconnect is ours: schedule
    *     one after `backoffDelay`, and open a *new* `EventSource` carrying `?after=<lastEventRef>`,
    *     since a fresh connection we open ourselves has no `Last-Event-ID` header to fall back on.
@@ -391,7 +391,7 @@ export const useLiveStore = defineStore('live', () => {
     }
   }
 
-  /** Stops the raw event feed from mutating `events`, without touching the connection — SPEC's "a stalled subscriber must not slow ingestion" is a server-side guarantee (SPEC §5.3); this is the client-side complement: a paused *tab* still receives frames (so `lastEventRef` stays current) but stops re-rendering on each one. */
+  /** Stops the raw event feed from mutating `events`, without touching the connection — "a stalled subscriber must not slow ingestion" is a server-side guarantee; this is the client-side complement: a paused *tab* still receives frames (so `lastEventRef` stays current) but stops re-rendering on each one. */
   function pause(): void {
     paused.value = true
   }

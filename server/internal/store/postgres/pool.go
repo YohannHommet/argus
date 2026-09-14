@@ -1,8 +1,4 @@
-// Package postgres is the production implementation of internal/store's
-// Store interface, backed by pgx v5's pgxpool (SPEC §3.1, §3.2). Only
-// Health, Close, and Migrate have real bodies in P1-04; every other method
-// returns store.ErrNotImplemented so later tickets can fill them in without
-// touching the store.Store interface.
+// Package postgres implements internal/store's Store interface (SPEC §3.1, §3.2).
 package postgres
 
 import (
@@ -21,9 +17,7 @@ import (
 
 const applicationName = "argusd"
 
-// defaultRollupSessionRemarkMax is SPEC §3.7's ARGUS_ROLLUP_SESSION_REMARK_MAX
-// default (720 = 30 days of hourly buckets): the cap on how many rollup_dirty
-// hour buckets one session's project/cwd change can re-mark (§2.4).
+// defaultRollupSessionRemarkMax is ARGUS_ROLLUP_SESSION_REMARK_MAX default (720 = 30 days of hourly buckets, SPEC §2.4, §3.7).
 const defaultRollupSessionRemarkMax = 720
 
 // Store is the postgres-backed store.Store implementation.

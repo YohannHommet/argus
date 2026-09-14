@@ -13,12 +13,11 @@ import ShortcutsHelp from '@/components/layout/ShortcutsHelp.vue'
 import { useShortcuts } from '@/composables/useShortcuts'
 
 /**
- * Five navigable destinations. SPEC §6.2 lists six top-level routes, but the
- * sixth (`/sessions/:id`) requires a session id and cannot be a fixed
- * sidebar link. The router at src/router/index.ts still registers all six
- * views + the `/` redirect + NotFoundView. SPEC §6.3 and P1-03 both ask for
- * six nav items, but no sixth navigable route exists; this gap is deviation
- * D-1, raised for the owner at the Phase-1 review, not an omission.
+ * Five navigable destinations. The sixth top-level route (`/sessions/:id`)
+ * requires a session id and cannot be a fixed sidebar link, so it has no
+ * nav entry — a deliberate gap, not an omission. The router at
+ * src/router/index.ts still registers all six views + the `/` redirect +
+ * NotFoundView.
  */
 const navItems = [
   { to: '/sessions', label: 'Sessions', icon: ListTree },
@@ -29,7 +28,7 @@ const navItems = [
 ] as const
 
 /**
- * PLAN.md P6-04: `?` toggles the app-wide shortcuts help overlay, mounted here (not per-view) since
+ * `?` toggles the app-wide shortcuts help overlay, mounted here (not per-view) since
  * `AppShell.vue` wraps every route for the lifetime of the app (`App.vue`). `Esc` closing it is the
  * one case `useShortcuts.ts`'s own `onEscape` needs to actually do something with, rather than just
  * relying on the `Dialog`'s native Escape handling, so a stray Esc elsewhere in the app never has to

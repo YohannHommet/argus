@@ -69,9 +69,7 @@ func (c *PipelineConfig) applyDefaults() {
 	}
 }
 
-// Publisher is called per-flush after write commits (SPEC §5.3, audit m7-minor).
-// Contract: within-flush order only, never block, tolerate Publish after Close returns.
-// Panics are caught/logged. Handed off via buffered goroutine, not inline.
+// Publisher is called per-flush; contract: within-flush order, never block (m7-minor, SPEC §5.3).
 type Publisher interface {
 	Publish(events []model.Event)
 }
@@ -310,12 +308,7 @@ func (p *Pipeline) Close(ctx context.Context) error {
 	}
 }
 
-// awaitEnqueueBarrier blocks until every EnqueueEvents/EnqueueMetrics call
-// that already passed its closing check has finished landing its send (m5):
-// Enqueue* holds closeMu for reading across its whole check+send, so
-// acquiring it for writing here returns only once none of them are
-// in-flight, at which point stopCh is safe to close — any Enqueue* that
-// starts afterwards will see p.closing already true.
+// awaitEnqueueBarrier blocks until in-flight Enqueue* calls complete (m5 race fix: closeMu RLock/WLock).
 func (p *Pipeline) awaitEnqueueBarrier() {
 	p.closeMu.Lock()
 	defer p.closeMu.Unlock()
@@ -466,22 +459,12 @@ func (p *Pipeline) publishOne(events []model.Event) {
 	p.publisher.Publish(events)
 }
 
-// handoffPublish hands persisted events to the publish goroutine without
-// blocking the flushing worker (m7-minor's non-blocking half of the
-// contract): a full publishCh means the hub (or the goroutine feeding it)
-// is behind, and the fix for that is dropping this batch from the stream,
-// logged and accounted, never stalling ingest — a hub outage must stay a
-// hub outage, not become 503s on the write path.
+// handoffPublish hands events to publisher non-blockingly; drops if full to avoid stalling writes (m7-minor).
 func (p *Pipeline) handoffPublish(events []model.Event) {
 	select {
 	case p.publishCh <- events:
 	default:
-		// Not p.metrics.Dropped: that counter's documented meaning is
-		// "never made it to storage" (metrics.go), and these events are
-		// already committed — they only missed the stream. Accounting for
-		// this drop is the log line itself (count, first event's session);
-		// adding a dedicated Prometheus series for it is metrics.go's call,
-		// outside this ticket's file set.
+		// Not p.metrics.Dropped: events are committed, only missed the stream; logging accounts for the drop.
 		first := events[0]
 		p.logger.Warn("ingest: publish handoff full, dropping batch from stream",
 			"count", len(events), "session_id", first.SessionID)

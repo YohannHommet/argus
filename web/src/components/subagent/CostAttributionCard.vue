@@ -1,12 +1,11 @@
 <script setup lang="ts">
 /**
- * Renders `SubagentTree.cost_attribution` (PLAN P4-05). SPEC §1.9 is
- * explicit that `by_query_source`'s vocabulary is real but uninterpreted —
- * Argus does not map it onto a "subagent vs main" semantic — so this card
- * shows the raw keys as a sorted table rather than inventing labels for
- * them, and leads with the "other query sources: $X of $Y" framing SPEC
- * §1.9 calls "the honest form of the claim" instead of a per-agent cost
- * number the telemetry cannot support.
+ * Renders `SubagentTree.cost_attribution`. `by_query_source`'s vocabulary
+ * is real but uninterpreted — Argus does not map it onto a "subagent vs
+ * main" semantic — so this card shows the raw keys as a sorted table
+ * rather than inventing labels for them, and leads with the "other query
+ * sources: $X of $Y" framing — "the honest form of the claim" — instead of
+ * a per-agent cost number the telemetry cannot support.
  *
  * Collapsed by default (the table is reference material, not the tab's headline) with every
  * disclaimer folded into one muted summary line: the honest "$X of $Y" framing stays visible, the
@@ -34,15 +33,12 @@ interface Props {
   loading?: boolean
   error?: ApiError | Error | null
   /**
-   * D-30 (docs/review/phase-4-gauntlet.md, owner-ratified 2026-08-18): the
-   * session's `cost.estimated_usd`/`estimated_share` (SPEC §4.3) —
-   * deliberately NOT read off `data`, because `by_query_source` is
-   * reported-cost-only (SPEC §2.1: "summed reported cost. Uninterpreted"),
-   * so an all-estimated session has nothing in it to derive an estimate
-   * from. Both default to 0, which reproduces today's rendering exactly:
-   * this card's one current caller (SessionDetailView.vue) does not yet
-   * pass them through (flagged to the lead as a follow-up wiring gap, since
-   * that file is outside this ticket's scope).
+   * The session's `cost.estimated_usd`/`estimated_share` — deliberately
+   * NOT read off `data`, because `by_query_source` is reported-cost-only
+   * ("summed reported cost, uninterpreted"), so an all-estimated session
+   * has nothing in it to derive an estimate from. Both default to 0,
+   * which reproduces today's rendering exactly: this card's one current
+   * caller (SessionDetailView.vue) does not yet pass them through.
    */
   estimatedUsd?: number
   estimatedShare?: number
@@ -63,7 +59,7 @@ const isEmpty = computed(() => !props.loading && !props.error && props.data === 
 /** Collapsed by default — this table is secondary reference material next to the Subagents tree, not the tab's headline. */
 const expanded = ref(false)
 
-/** Raw `by_query_source` keys, sorted by cost descending — no special-casing of any particular key (SPEC §1.9/§4.4). */
+/** Raw `by_query_source` keys, sorted by cost descending — no special-casing of any particular key. */
 const rows = computed(() => {
   if (!props.data) return []
   return Object.entries(props.data.by_query_source).sort(([, a], [, b]) => b - a)
@@ -72,14 +68,14 @@ const rows = computed(() => {
 const totalCostUsd = computed(() => rows.value.reduce((sum, [, value]) => sum + value, 0))
 
 /**
- * D-30: true only when this session's vendor-reported query-source split
- * has NOTHING in it (`rows` empty, i.e. `by_query_source` summed to zero)
- * yet the session actually burned a real, non-zero estimated cost — the
- * exact "$0.00 of $0.00 rendered as though it were measured" defect this
- * ticket fixes. A session with ANY reported cost keeps today's summary/
- * table untouched (SPEC §2.1: by_query_source is reported-only by design,
- * so a partially-estimated session's reported slice is still a true, if
- * incomplete, answer — not a lie worth this card's own fix).
+ * True only when this session's vendor-reported query-source split has
+ * NOTHING in it (`rows` empty, i.e. `by_query_source` summed to zero) yet
+ * the session actually burned a real, non-zero estimated cost — the exact
+ * "$0.00 of $0.00 rendered as though it were measured" defect this guards
+ * against. A session with ANY reported cost keeps today's summary/table
+ * untouched: by_query_source is reported-only by design, so a
+ * partially-estimated session's reported slice is still a true, if
+ * incomplete, answer.
  */
 const allEstimatedNoReportedSplit = computed(() => rows.value.length === 0 && props.estimatedUsd > 0)
 
@@ -91,7 +87,7 @@ const estimatedNoticeText = computed(() => {
 })
 
 const PER_QUERY_SOURCE_ESTIMATED_CAVEAT_HINT =
-  'The per-query-source split above only ever covers vendor-reported cost (SPEC §2.1) — it has no estimated figures to attribute.'
+  'The per-query-source split above only ever covers vendor-reported cost — it has no estimated figures to attribute.'
 
 const PER_NODE_UNAVAILABLE_HINT =
   'Per-node cost is not available for this session — costs above are attributed by query source only, not by individual subagent.'

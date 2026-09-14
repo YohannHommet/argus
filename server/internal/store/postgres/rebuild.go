@@ -1,83 +1,8 @@
 // Package postgres — rebuild.go implements store.Maintenance.RebuildProjections
-// (SPEC §1.6, §2.4, §3.8, P3-10): `argusd rebuild-projections` replays every
-// event in (ts, seq) order into the four SPEC §1.6 projection tables
-// (sessions, turns, tool_calls, subagents) — truncated first — so a
-// schema/mapping change can be re-derived from the immutable events table
-// without re-ingesting anything.
-//
-// # M12 — --from-ts is a session filter, not a replay lower bound
-//
-// A first cut of this file truncated all four projection tables unconditionally
-// and then replayed only events with ts >= fromTS. That destroys every
-// projection row for a session whose LAST event is before fromTS (no replayed
-// event ever recreates it) and, worse, silently corrupts any session that
-// straddles fromTS (started before, still active at/after it): the row would
-// be deleted by the truncate and then rebuilt from only its post-fromTS
-// events, so aggregates seeded from the session's start (started_at, cwd,
-// event_count, token/cost sums, …) come out wrong instead of missing —
-// exactly the "rebuild produces identical rows" guarantee (SPEC §1.6) this
-// file exists to uphold.
-//
-// The fix scopes both deletion AND replay by SESSION, not by event ts:
-// affectedSessionIDs(fromTS) finds every session with at least one event at
-// or after fromTS, the scoped delete removes only THOSE sessions' projection
-// rows (turns/tool_calls/subagents cascade off `sessions(id) ON DELETE
-// CASCADE`, 001_core.sql/003_projections.sql), and the replay then walks
-// EVERY event those sessions ever produced — from each session's true start,
-// not from fromTS — so no straddling session is ever rebuilt from a partial
-// slice of its own history. A session with zero events at/after fromTS is
-// left completely untouched, matching the "starting point" framing in
-// runRebuildProjections's doc comment. fromTS.IsZero() (the CLI's default,
-// "replay every event ever stored") is treated as the unscoped full-rebuild
-// case and skips session filtering entirely, matching this file's original,
-// already-tested full-truncate behaviour exactly (and avoiding an
-// `session_id = ANY(...)` array the size of the whole sessions table for the
-// common case).
-//
-// Consequence for resumption: job_state's watermark is only (ts, seq) —
-// 004_rollups.sql leaves no room for "and here was the affected-session set"
-// without a migration, which is out of this ticket's file-ownership scope
-// (rebuild.go/rebuild_test.go/main.go only). affectedSessionIDs is therefore
-// RECOMPUTED from fromTS on every call, including a resume, rather than
-// cached: since it is a pure function of fromTS and the (frozen, by the
-// ARGUS03 lock below) events table, a resumed call reproduces the exact same
-// session set as the interrupted one PROVIDED the operator re-supplies the
-// same --from-ts. This is a real, documented operational contract (see
-// runRebuildProjections's flag help) rather than a silent hazard: passing a
-// different --from-ts on a resume recomputes a different session set against
-// an already-partially-truncated/replayed state and produces inconsistent
-// results. Reported to the fix-wave lead as a residual limitation rather than
-// solved outright — closing it properly needs a job_state column to persist
-// the original fromTS, which is a migration outside this ticket's scope.
-//
-// # M12 — refusing a dangerous fromTS
-//
-// Even with session-scoped deletion, a --from-ts older than the oldest
-// surviving `events` partition is worth refusing by default: it means the
-// operator is asking to rebuild sessions whose EARLIEST events may already be
-// gone (dropped by retention, SPEC §2.4), so the "full session history"
-// replay this file now performs can only reconstruct what raw retention left
-// behind — a session's rebuilt aggregates would then silently under-count
-// relative to what they held before the rebuild. RebuildProjectionsForce
-// refuses this case unless force=true, and always logs the row counts about
-// to be deleted before touching anything (SPEC audit finding M12).
-//
-// # M13 — a session-scoped advisory lock (ARGUS03) against concurrent writers
-//
-// Nothing serialises a rebuild against a running `serve`: replayPage reuses
-// WriteBatch's additive upserts (event_count = sessions.event_count +
-// EXCLUDED.event_count, upsert_session.go:445), so an event ingested after
-// this file's truncate/delete step and before the replay cursor passes it
-// gets counted twice. rebuild.go owns only this side of the fix: it takes
-// pg_try_advisory_lock(ARGUS03) for the whole rebuild and refuses loudly if
-// it cannot, mirroring migrate.go's ARGUS01/rollups.go's ARGUS02 numbering.
-// write.go (owned by another ticket) does NOT yet take ARGUS03 in shared
-// mode, so today this only protects a rebuild against a CONCURRENT REBUILD —
-// it does not yet stop `serve`'s ingest path from double-counting into a
-// running rebuild. That follow-up is reported verbatim to the fix-wave lead.
-// Until it lands, an operator MUST stop `serve` before running
-// rebuild-projections; this file cannot enforce that on its own without
-// write.go's cooperation.
+// (SPEC §1.6, §2.4, §3.8, P3-10): replays events into projection tables.
+// M12: --from-ts filters by session, not event ts (session-scoped deletion+replay).
+// M12: refuses fromTS older than oldest partition (would silently under-count).
+// M13: advisory lock ARGUS03 prevents double-counting from concurrent writes.
 //
 // # Why this reuses write.go's fold/upsert functions verbatim
 //

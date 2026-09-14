@@ -46,13 +46,7 @@ func listSessionsHandler(reader Reader, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 
-		// sort is validated against the closed SessionSort set (m1 audit
-		// finding: an unrecognized value used to flow through unvalidated
-		// to the store, which rejected it with a plain fmt.Errorf that
-		// surfaced as a 500 with internal text — SPEC §4.3 lists exactly
-		// four valid values, and openapi.yaml declares 400 as the only
-		// client-error status here). The store-layer check stays in place
-		// as defence in depth.
+		// sort validated here (m1: prevent unvalidated store errors reaching client as 500).
 		sortKey := store.SessionSortLastEventAt
 		if raw := q.Get("sort"); raw != "" {
 			sortKey = store.SessionSort(raw)

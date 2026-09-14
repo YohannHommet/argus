@@ -1,13 +1,3 @@
-// Package query — analytics.go is its read-service layer for the four
-// analytics endpoints (SPEC §3.1: "httpapi -> query -> store", P3-08). Unlike
-// sessions.go/events.go it computes nothing of its own: model.Summary/
-// Series/Breakdown/DecisionMatrix already carry SPEC §4.3's exact wire
-// shape (read_analytics.go's own doc comment: "this file's own job is
-// choosing which fixed query to run ... and applying the two pieces of
-// logic SQL alone cannot express"), so every function here is a thin
-// call-through that only adds error context and lets
-// store.ErrNotAttributable propagate unchanged (via %w) for httpapi to
-// recognise with errors.Is.
 package query
 
 import (
@@ -18,9 +8,7 @@ import (
 	"github.com/YohannHommet/argus/server/internal/store"
 )
 
-// AnalyticsReader is the narrow store port every Analytics* function below
-// needs — the same consumer-owned-port convention as SessionReader/
-// EventReader.
+// AnalyticsReader is the narrow store port for analytics operations.
 type AnalyticsReader interface {
 	AnalyticsSummary(ctx context.Context, f store.AnalyticsFilter) (model.Summary, error)
 	AnalyticsSeries(ctx context.Context, f store.AnalyticsFilter, g store.Grouping) (model.Series, error)
@@ -39,10 +27,7 @@ func AnalyticsSummary(ctx context.Context, r AnalyticsReader, f store.AnalyticsF
 }
 
 // AnalyticsSeries implements GET /api/v1/analytics/timeseries (SPEC §4.3).
-// f and g are assumed already validated by httpapi/params.go; a non-
-// attributable metric under a model filter surfaces as store.
-// ErrNotAttributable (wrapped, still matched by errors.Is) for httpapi to
-// map onto its 400.
+// Non-attributable metrics surface as store.ErrNotAttributable (SPEC §4.3).
 func AnalyticsSeries(ctx context.Context, r AnalyticsReader, f store.AnalyticsFilter, g store.Grouping) (model.Series, error) {
 	series, err := r.AnalyticsSeries(ctx, f, g)
 	if err != nil {

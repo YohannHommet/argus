@@ -1,8 +1,6 @@
 package ingest
 
-// White-box tests: reaches projectCache directly to verify its bounded-eviction
-// behavior, which is load-bearing and pinned here rather than only indirectly
-// through HubPublisher's own tests.
+// White-box tests: verify projectCache bounded-eviction (load-bearing behavior).
 
 import (
 	"testing"

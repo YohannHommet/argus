@@ -1,6 +1,6 @@
 <script lang="ts">
 /**
- * Recursion guard (design note, PLAN P4-05): the server caps synthetic
+ * Recursion guard (design note): the server caps synthetic
  * subagent-tree depth at 16 (a malformed `parent_agent_id` cycle cannot
  * hang the server's own query). This client-side cap is set higher than
  * that — 24 — so it never fires on any tree the server actually intends
@@ -20,7 +20,7 @@ export const MAX_RENDER_DEPTH = 24
 
 <script setup lang="ts">
 /**
- * One row of the subagent tree (PLAN P4-05), rendered recursively for
+ * One row of the subagent tree, rendered recursively for
  * `node.children`. Two independent depth numbers are in play here and
  * must not be confused: `node.depth` is the server's own field (shown as
  * a badge, informational only) and `renderDepth` is this component's own
@@ -61,7 +61,7 @@ interface Props {
    * duration *text* still renders either way — only the visual comparison is withheld.
    */
   showDurationBar?: boolean
-  /** Tooltip text for the (always-null, SPEC §1.9) cost column. Prefer `cost_attribution.note` when the caller has one. */
+  /** Tooltip text for the (always-null) cost column. Prefer `cost_attribution.note` when the caller has one. */
   costNote?: string | null
   /** `agent_id -> tool-name breakdown`, computed once for the whole tree by `SubagentTree`. Absent/empty for an agent_id with no attributable tool calls loaded — renders as a plain count, same as before this existed. */
   toolBreakdownByAgent?: Record<string, ToolBreakdownEntry[]>
@@ -119,7 +119,7 @@ const toolBreakdownInlineText = computed(() => {
 const toolBreakdownFullText = computed(() => toolBreakdown.value.map((e) => `${e.name}×${e.count}`).join(', '))
 
 /**
- * SubagentNode schema has no task/name field to promote (SPEC §1.9 has none) — inventing one would
+ * SubagentNode schema has no task/name field to promote — inventing one would
  * violate the project's own honesty rule. When two-or-more of this node's own children share an
  * `agent_type` (e.g. two "explore" runs), their position among same-typed siblings disambiguates
  * them beyond the agent_type badge they'd otherwise render identically under. A lone child of its
@@ -223,7 +223,7 @@ function onChildSelect(agentId: string): void {
       <!--
         Sibling subagents of the same agent_type (e.g. two "explore" runs) render as visually
         identical rows without something to tell them apart. There is no subagent *name* in this
-        schema (honesty limit — SPEC §1.9 has none to promote), so `agent_id` is the one real
+        schema (honesty limit — no name field exists to promote), so `agent_id` is the one real
         distinguishing value every node already has; showing it (truncated, full value on
         hover/copy) disambiguates without inventing a name that isn't there.
       -->

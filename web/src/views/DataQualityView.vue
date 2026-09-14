@@ -1,10 +1,10 @@
 <script setup lang="ts">
 /**
- * SPEC §6.2: ingest health, the unmapped-`event_name` inspector, and the
+ * Ingest health, the unmapped-`event_name` inspector, and the
  * hook-latency panel — "how a new Claude Code release that adds an event
  * becomes visible in minutes". This view is a thin composition root: it
  * owns no formatting/rendering logic of its own, just wiring `useMetaStore`
- * (already fetched app-wide) and `useQualityStore` (this ticket's two
+ * (already fetched app-wide) and `useQualityStore` (this view's two
  * `/quality/*` endpoints) into `QualityTiles`/`UnknownKindTable`/
  * `HookLatencyPanel`.
  */

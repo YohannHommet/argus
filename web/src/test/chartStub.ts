@@ -1,8 +1,8 @@
-// Test-only helpers shared by the P4-07 analytics chart specs
+// Test-only helpers shared by the analytics chart specs
 // (TimeSeriesChart/BreakdownChart/DecisionMatrix). Not part of the app
 // bundle — canvas never renders under jsdom, so every chart mount test
 // stubs `vue-echarts`'s component and asserts on the `option` object it
-// received (per the ticket's AC), plus jsdom's missing `ResizeObserver`.
+// received, plus jsdom's missing `ResizeObserver`.
 import { defineComponent, h } from 'vue'
 import { vi } from 'vitest'
 

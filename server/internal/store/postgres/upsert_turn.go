@@ -1,14 +1,5 @@
-// Package postgres — upsert_turn.go builds the `turns` stub-on-reference
-// upsert (SPEC §1.7 rule 1, §1.6, §2.1): any candidate event carrying a
-// prompt_id creates or touches a turn row, but cost/tokens are aggregated
-// only from llm.request events (SPEC §1.5.3: "turns.* cost/tokens always
-// aggregated from llm.request events only, never from hooks").
-//
-// turns.tool_call_count, tool_reject_count, and error_count are left at
-// their DEFAULT 0 here — deliberately: SPEC's lead decision for this ticket
-// reserves those counters for P2-07 (tool_calls) and P2-08 (subagents),
-// which own the events those counts are derived from. Maintaining them here
-// would be a half-implementation this ticket was explicitly told not to do.
+// Package postgres — upsert_turn.go builds the `turns` stub-on-reference upsert (SPEC §1.7 rule 1, §1.6, §2.1).
+// Aggregates cost/tokens from llm.request events only (SPEC §1.5.3).
 package postgres
 
 import (
@@ -29,8 +20,7 @@ type turnKey struct {
 	SessionID, PromptID string
 }
 
-// turnAgg accumulates one turn's contribution from the batch's candidate
-// events.
+// turnAgg accumulates one turn's contribution from batch events.
 type turnAgg struct {
 	key                                               turnKey
 	firstSeen, lastEvent                              time.Time
@@ -46,11 +36,7 @@ func newTurnAgg(key turnKey) *turnAgg {
 	return &turnAgg{key: key, models: map[string]struct{}{}}
 }
 
-// foldTurnEvents groups persisted candidate events carrying a non-nil
-// PromptID by (session_id, prompt_id) — stub-on-reference (SPEC §1.7 rule
-// 1): "the same for turns when prompt_id is present." prices is WriteBatch's
-// SPEC §2.4 price table for this transaction — nil when no candidate needs
-// it (see write.go's doc on why loading it is conditional).
+// foldTurnEvents groups candidate events by (session_id, prompt_id) into turnAgg (stub-on-reference, SPEC §1.7 rule 1).
 func foldTurnEvents(candidates []model.Event, prices []pricing.Price) map[turnKey]*turnAgg {
 	out := map[turnKey]*turnAgg{}
 	for _, e := range candidates {

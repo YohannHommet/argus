@@ -1,8 +1,8 @@
 import type { components } from './schema'
 
 /**
- * The RFC 9457 problem+json body every Argus error response carries (SPEC
- * §4.1). Re-exported from the generated schema so ApiError can never drift
+ * The RFC 9457 problem+json body every Argus error response carries.
+ * Re-exported from the generated schema so ApiError can never drift
  * from the wire contract.
  */
 export type Problem = components['schemas']['Problem']
@@ -21,7 +21,7 @@ export class ApiError extends Error {
   readonly detail?: string
   readonly instance?: string
   /**
-   * chi's per-request id (SPEC §4.1). Carried onto the error so the UI's
+   * chi's per-request id. Carried onto the error so the UI's
    * problem banner can show the one value that joins a client-visible
    * failure back to the server log line holding the real error text — the
    * entire reason the field exists on every problem body. Optional: the
@@ -58,7 +58,7 @@ function isProblem(body: unknown): body is Problem {
 
 /**
  * Builds an ApiError from whatever body openapi-fetch parsed off a non-2xx
- * response. Argus always emits problem+json (SPEC §4.1), but a body that
+ * response. Argus always emits problem+json, but a body that
  * doesn't match that shape (an intermediary's HTML error page, an empty
  * body) still came from a real HTTP response — so it gets a fallback
  * Problem built from the response's own status, not a silently invented

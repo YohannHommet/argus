@@ -1,10 +1,5 @@
-// Package postgres — partitions.go implements the SPEC §2.4 partition
-// manager for the two RANGE-partitioned tables (events, metric_samples):
-// EnsurePartitions creates monthly partitions and their per-partition
-// indexes idempotently, and IsTooOld classifies the Postgres error raised
-// when a row's ts falls outside every existing partition (SPEC §1.7 rule
-// 3) — there is deliberately no DEFAULT partition (SPEC §2.2) to swallow
-// such rows silently.
+// Package postgres manages RANGE partitions for events/metric_samples (SPEC §2.4).
+// No DEFAULT partition (SPEC §2.2) — rows outside all partitions raise errors (SPEC §1.7 rule 3).
 package postgres
 
 import (
@@ -20,40 +15,16 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// partitionsLockKey is the pg_try_advisory_xact_lock key EnsurePartitions
-// takes to single-flight partition creation across processes (m34 fix).
-// Transaction-scoped, same idiom as rollups.go's rollupLockKey: it releases
-// itself on COMMIT or ROLLBACK, so there is no matching unlock call to get
-// right. Continues this codebase's lock-key registry (migrate.go's
-// migrationLockKey "ARGUS01", rollups.go's rollupLockKey "ARGUS02") —
-// "ARGUS03" is already claimed (ticket W8, rebuild-projections), so this one
-// is "ARGUS04" to avoid a collision.
-//
-// Without this lock, two argusd processes starting together (or a process
-// racing PartitionJob's hourly tick against another replica's) could both
-// observe "table does not exist" from CREATE TABLE IF NOT EXISTS's own
-// existence check before either takes Postgres's internal lock on the
-// parent, and one loses the race with 42P07/23505 — narrow today (single-
-// argusd topology, `restart: unless-stopped` recovers) but real, and fatal
-// at startup (App.New calls this and treats a failure as fatal, per SPEC
-// §2.4's "startup fails loudly"). Serializing via this lock means the loser
-// simply waits, then finds every table/index already created by the winner
-// (still idempotent, still a no-op) instead of erroring.
+// partitionsLockKey is the advisory lock key for single-flight partition creation across processes.
+// Transaction-scoped (releases on COMMIT/ROLLBACK); avoids CREATE TABLE race on concurrent starts.
 const partitionsLockKey int64 = 0x41_52_47_55_53_30_34 // "ARGUS04"
 
-// execer is the subset of pgxpool.Pool/pgx.Tx that ensureMonthlyPartition
-// needs, so EnsurePartitions can run every CREATE TABLE/INDEX statement
-// inside the same advisory-locked transaction rather than against the pool
-// directly.
+// execer is the interface for running CREATE TABLE/INDEX inside an advisory-locked transaction.
 type execer interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 }
 
-// eventsIndexDDL returns the 6 per-partition indexes SPEC §2.2 names for an
-// events partition. The UNIQUE (ts, dedup_key) index is deliberately absent
-// here: it lives on the parent constraint (002_events.sql) and Postgres
-// creates it automatically on every partition — creating it again would be
-// a duplicate-index bug, not a no-op.
+// eventsIndexDDL returns 6 per-partition indexes for events; UNIQUE (ts, dedup_key) lives on parent constraint.
 func eventsIndexDDL(partition pgx.Identifier) []string {
 	p := partition.Sanitize()
 	name := partition[len(partition)-1]

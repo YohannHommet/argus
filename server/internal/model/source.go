@@ -1,11 +1,7 @@
 package model
 
-// Source is the provenance of an event — one of the four closed vocabularies
-// SPEC §0 permits (`kind`, `source`, `correlation`, `status`). Unlike Kind it
-// has no "unknown" escape hatch because every event Argus ingests arrives
-// through exactly one of these three pipelines (SPEC §0's architecture
-// diagram) plus the simulator; there is no fourth transport to misclassify
-// into.
+// Source is the event provenance (SPEC §0), one of four closed vocabularies.
+// Unlike Kind, it has no "unknown" escape hatch (SPEC §0's architecture diagram).
 type Source string
 
 // Source constants (SPEC §1.3 `source` column).
@@ -29,23 +25,16 @@ const (
 	CorrelationOTelOnly Correlation = "otel_only"
 	// CorrelationHookOnly means no tool_use_id exists anywhere for this call.
 	CorrelationHookOnly Correlation = "hook_only"
-	// CorrelationHeuristic means a hook event without tool_use_id was
-	// attached to an OTel call by fallback match (session+prompt+tool+
-	// nearest open call within 60s, one-to-one). No v1 feature is
-	// load-bearing on this value (SPEC §1.6).
+	// CorrelationHeuristic means fallback match by session+prompt+tool (SPEC §1.6, not load-bearing).
 	CorrelationHeuristic Correlation = "heuristic"
 )
 
-// SessionStatus is the sessions.status column (SPEC §1.7, §2.1). It is
-// Argus-computed state, not vendor vocabulary, so — unlike query_source,
-// decision_source, etc. — it is one of the taxonomies SPEC §0 permits to be
-// closed.
+// SessionStatus is the sessions.status column (SPEC §1.7, §2.1), Argus-computed, one of four closed taxonomies (SPEC §0).
 type SessionStatus string
 
 // SessionStatus constants (SPEC §1.7).
 const (
-	// SessionStatusUnknown is the stub-on-reference state: a session row
-	// exists (referenced by an event) but no session.start has been seen.
+	// SessionStatusUnknown is the stub-on-reference state: row exists but no session.start seen.
 	SessionStatusUnknown   SessionStatus = "unknown"
 	SessionStatusActive    SessionStatus = "active"
 	SessionStatusEnded     SessionStatus = "ended"

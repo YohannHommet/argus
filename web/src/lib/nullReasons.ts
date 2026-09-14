@@ -2,7 +2,7 @@
  * Canonical reason strings for `NullValue`'s tooltip. Centralised (rather
  * than inlined in every table cell) so stores/composables that decide
  * *why* a value is null can share the exact same wording a `NullValue`
- * consumer renders — SPEC §6.1 requires a reason, not just a dash, and a
+ * consumer renders — a reason is required, not just a dash, and a
  * typo'd duplicate string would silently drift from the canonical one.
  */
 export const NOT_ATTRIBUTABLE_TO_MODEL = 'Not attributable to a single model'
@@ -10,23 +10,23 @@ export const NO_PER_AGENT_COST = 'Claude Code does not emit per-agent cost'
 export const NO_HOOK_COVERAGE = 'No hook coverage for this session'
 export const NOT_MEASURED = 'Not measured'
 /**
- * SPEC §6.2's data-quality tiles: a value the view knows how to show but
+ * For the data-quality tiles: a value the view knows how to show but
  * that no endpoint this view reads (`/meta`, `/quality/unknown-kinds`,
  * `/quality/hook-latency`) currently returns as an aggregate — as opposed
  * to `NOT_MEASURED` (this session/window simply has none) or
  * `NO_HOOK_COVERAGE` (a coverage gap). Distinguishing the two matters here
- * specifically: SPEC §4.1 forbids a fabricated zero standing in for "the
- * API doesn't expose this yet".
+ * specifically: a fabricated zero must never stand in for "the API
+ * doesn't expose this yet".
  */
 export const NOT_EXPOSED_BY_API = "Not exposed by Argus's read API yet"
 /**
  * `SessionSummary.project`/`cwd` are only ever populated from a hook-sourced
- * `session.start` or `workspace.cwd_changed` event (SPEC §1.5.3 — an
- * otel_log candidate is explicitly excluded from this field). A session
+ * `session.start` or `workspace.cwd_changed` event (an otel_log candidate
+ * is explicitly excluded from this field). A session
  * that is already `active` on other transports (otel logs/metrics arrived
  * first) can legitimately still carry `project: ''` until that hook event
  * lands — this is the same underlying gap `SessionDetail.partial` names,
  * not a wiring bug, so it gets a reason rather than blank space.
  */
 export const NO_PROJECT_SIGNAL_YET =
-  'No session.start or workspace.cwd_changed hook event has been observed yet for this session (SPEC §1.5.3) — project is not yet known'
+  'No session.start or workspace.cwd_changed hook event has been observed yet for this session — project is not yet known'

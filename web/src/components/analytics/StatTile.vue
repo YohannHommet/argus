@@ -1,10 +1,10 @@
 <script setup lang="ts">
 /**
  * A single KPI tile: a value (possibly `null`), its unit, and an optional
- * delta vs. the previous window. SPEC §6.1's whole null-vs-zero thesis
+ * delta vs. the previous window. The whole null-vs-zero thesis
  * lives here — under a `?model=` filter the API returns `null` (never
  * `0`) for every non-model-attributable counter and lists it in
- * `not_attributable[]` (SPEC §4.3), so `value: null` must render `—` plus
+ * `not_attributable[]`, so `value: null` must render `—` plus
  * a reason, and a measured `0` must render `0`, never collapse into `—`.
  * A delta against an unknown baseline is meaningless, so a `null` value
  * never renders a delta regardless of what `delta` holds.
@@ -25,7 +25,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 
 interface Props {
   label: string
-  /** `null` renders `—` (never `0`) — SPEC §6.1's not-attributable-under-a-filter case. */
+  /** `null` renders `—` (never `0`) — the not-attributable-under-a-filter case. */
   value?: number | null
   /** Selects the `lib/format.ts` formatter. Defaults to a plain count. */
   metric?: ChartMetricKind
@@ -38,7 +38,7 @@ interface Props {
   /**
    * Why `value` is null. Defaults to `NOT_ATTRIBUTABLE_TO_MODEL` — the
    * common case this tile exists for (a `?model=` filter's non-attributable
-   * counters, SPEC §4.3) — override for any other null reason
+   * counters) — override for any other null reason
    * (`lib/nullReasons.ts`'s other constants, or a one-off string).
    */
   reason?: string

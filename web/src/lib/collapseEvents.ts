@@ -1,23 +1,21 @@
 /**
- * `collapseEvents` — SPEC §1.5.3(b), described in SPEC §6.3 as "the
- * highest-value frontend test in the project". A pure function, no Vue
- * imports: the timeline endpoint always returns raw events (server-side
- * `?collapse=` is reserved and ignored per D-24) and this is the client
- * that turns them into display rows.
+ * `collapseEvents` is a pure function, no Vue imports: the timeline endpoint
+ * always returns raw events (server-side `?collapse=` is reserved and
+ * ignored) and this is the client that turns them into display rows.
  *
  * Collapse rule: a group is one row when, for every pair of members, all
  * of — same `kind`, same correlation key (`tool_use_id`, else `prompt_id`,
  * else `session_id`), and `|Δts| ≤ window` ms (default 2000). The row
- * exposes the union of fields per SPEC §1.5.3(a)'s precedence and the raw
- * member events for the "N sources" affordance.
+ * exposes the union of fields per each field's precedence (below) and the
+ * raw member events for the "N sources" affordance.
  *
- * Design decisions (see PLAN.md P4-04 for the questions this answers):
+ * Design decisions:
  *
  * - **Δts is measured against the group's first (anchor) member**, not the
  *   previous member. Anchoring to the previous member lets a chain of
  *   events each ≤2000ms apart from its neighbour drift arbitrarily far from
- *   where the group started (SPEC's own example: three events 1.5s apart
- *   are 4.5s apart end-to-end). The window is meant to bound how stale a
+ *   where the group started (e.g. three events 1.5s apart end up 4.5s apart
+ *   end-to-end). The window is meant to bound how stale a
  *   *collapsed row* can be, not how long a chain can grow one hop at a
  *   time, so every candidate is compared to the group's first member.
  * - **`clock_skewed` events never merge on the basis of `ts`.** A skewed
@@ -80,13 +78,13 @@ export interface TimelineItem {
 }
 
 export interface CollapseOptions {
-  /** Max |Δts| in ms from the group's anchor member for a candidate to join. Default 2000 (SPEC §1.5.3(b)). */
+  /** Max |Δts| in ms from the group's anchor member for a candidate to join. Default 2000. */
   window?: number
-  /** `false` disables collapsing entirely — display-only, reversible (SPEC §1.5.3(b), `?collapse=false`). Default true. */
+  /** `false` disables collapsing entirely — display-only, reversible (`?collapse=false`). Default true. */
   collapse?: boolean
 }
 
-/** SPEC §1.5.3(a): otel_log=30, hook=20, otel_metric=10; sim = rank of the source it imitates. */
+/** otel_log=30, hook=20, otel_metric=10; sim = rank of the source it imitates. */
 const SOURCE_RANK: Record<EventSource, number> = {
   otel_log: 30,
   hook: 20,
@@ -122,7 +120,7 @@ export function pickByRank<M, T>(members: readonly M[], get: (m: M) => T | null 
 
 const genericRank = (e: TimelineEvent) => SOURCE_RANK[e.source]
 
-/** decision / decision_source / tool_source: otel_log/tool.decision > otel_log/tool.result > hook > (rest, by generic rank). Only tool.decision carries the authoritative 6-valued decision_source (SPEC §1.5). */
+/** decision / decision_source / tool_source: otel_log/tool.decision > otel_log/tool.result > hook > (rest, by generic rank). Only tool.decision carries the authoritative 6-valued decision_source. */
 function decisionRank(e: TimelineEvent): number {
   if (e.source === 'otel_log' && e.kind === 'tool.decision') return 1000
   if (e.source === 'otel_log' && e.kind === 'tool.result') return 900
@@ -163,7 +161,7 @@ function mergeFields(members: TimelineEvent[]): Omit<TimelineItem, 'key' | 'sour
     duration_ms: pickByRank(members, (e) => e.duration_ms, durationRank),
     success: pickByRank(members, (e) => e.success, successRank),
     error_type: pickByRank(members, (e) => e.error_type, successRank),
-    // agent_id: hook-only field (SPEC §1.9) — no other source carries it, so a plain rank-based pick
+    // agent_id: hook-only field — no other source carries it, so a plain rank-based pick
     // is equivalent to "the hook member's value" without a bespoke priority function.
     agent_id: pickByRank(members, (e) => e.agent_id, genericRank),
     agent_type: pickByRank(members, (e) => e.agent_type, genericRank),
@@ -218,7 +216,7 @@ function singleItem(event: TimelineEvent): TimelineItem {
   }
 }
 
-/** The correlation key precedence (SPEC §1.5.3(b)): tool_use_id, else prompt_id, else session_id. Two events correlate only when their *own* keys are the same type and equal — an event whose key falls through to prompt_id never correlates with one whose key is a (possibly different) tool_use_id, even by coincidence. */
+/** The correlation key precedence: tool_use_id, else prompt_id, else session_id. Two events correlate only when their *own* keys are the same type and equal — an event whose key falls through to prompt_id never correlates with one whose key is a (possibly different) tool_use_id, even by coincidence. */
 function correlates(anchor: TimelineEvent, candidate: TimelineEvent): boolean {
   if (anchor.tool_use_id !== null || candidate.tool_use_id !== null) {
     return anchor.tool_use_id !== null && anchor.tool_use_id === candidate.tool_use_id
@@ -236,7 +234,7 @@ function withinWindow(anchor: TimelineEvent, candidate: TimelineEvent, window: n
 }
 
 /**
- * Collapses raw `TimelineEvent`s into display rows per SPEC §1.5.3(b).
+ * Collapses raw `TimelineEvent`s into display rows.
  * See the module doc for the Δts-anchor and clock_skewed rationale.
  */
 export function collapseEvents(events: TimelineEvent[], opts: CollapseOptions = {}): TimelineItem[] {

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * The Timeline tab (PLAN.md P4-04 / Phase-4 exit criterion 3): turn-grouped,
+ * The Timeline tab: turn-grouped,
  * collapsible, filterable, infinitely-scrollable events for the current
  * session (`useSessionDetailStore().currentId`). Mounted by
  * `SessionDetailView.vue`, which this component does not touch or assume
@@ -15,8 +15,8 @@
  *   cursor-paginated; filtering after the fact would leave partial, wrong
  *   page sizes and require re-fetching to fill the viewport, which is
  *   exactly what the server-side `kinds` query param exists to avoid.
- * - **Collapsing is purely client-side and local** (`collapseEnabled` ref),
- *   per SPEC §1.5.3(b) / D-24: `?collapse=` is never sent to the server —
+ * - **Collapsing is purely client-side and local** (`collapseEnabled` ref):
+ *   `?collapse=` is never sent to the server —
  *   `collapseEvents` runs over whatever page(s) are already loaded.
  * - **Chips are built from the kinds actually present in the loaded raw
  *   events**, not the full 43-value `Kind` union — a session realistically
@@ -27,10 +27,10 @@
  *   is chronological, and a global bucket can pull a later no-turn event into an earlier turn's block,
  *   rendering that turn's header below events later than its own. Splitting on contiguous runs keeps
  *   groups in input order; a (rare) session whose turn's events are truly non-contiguous renders as
- *   more than one block instead of being silently reordered — honest per SPEC's raw-data-first stance.
+ *   more than one block instead of being silently reordered — the honest behavior when that happens.
  * - **`correlationFor` is a local proxy, not `ToolCall.correlation`.**
- *   Fetching the tool-calls list to join by `tool_use_id` is P4-06's
- *   endpoint, out of this ticket's scope. Here, an item's decision is
+ *   Fetching the tool-calls list to join by `tool_use_id` is a separate
+ *   endpoint's job, out of scope here. Here, an item's decision is
  *   treated as `'exact'` when one of its raw members is the authoritative
  *   `otel_log`/`tool.decision` event, and `'heuristic'` otherwise (e.g. the
  *   decision was inferred from a hook or `tool.result` alone) — good enough
@@ -231,7 +231,7 @@ watch(sentinelRef, (el, prev) => {
   if (el) setupObserver()
 })
 
-// --- scroll anchoring (PLAN.md P5-06 AC) -----------------------------------
+// --- scroll anchoring -----------------------------------
 
 const scrollContainerRef = ref<HTMLElement | null>(null)
 
@@ -269,7 +269,7 @@ watch(
 
 /**
  * `agentId` is the one timeline filter this component does not itself own:
- * P4-05's subagent tree sets it (a node click routes to
+ * the subagent tree sets it (a node click routes to
  * `?tab=timeline&agent_id=…`, which SessionDetailView's query watcher applies
  * to the store). `setTimelineFilters` is a pure state setter and the kind
  * chips above pair every call with their own `loadTimeline`, so without this

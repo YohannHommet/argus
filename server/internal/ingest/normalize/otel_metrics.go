@@ -150,22 +150,9 @@ func (n *Normalizer) numberSample(name, vendor, temporality string, dp *metricsp
 	return n.buildSample(name, vendor, temporality, dp.GetAttributes(), resourceAttrs, dp.GetTimeUnixNano(), value, ingestedAt), true
 }
 
-// histogramSamples implements the ticket's "store sum/count as two samples"
-// rule: <name>_sum (only when OTLP's optional Sum field is set — lead note 5:
-// "Histogram sum is optional in OTLP; handle its absence without producing a
-// bogus 0") and <name>_count (always — Count is not optional in the OTLP
-// message, and a legitimately-zero count is a real value, not an absence, so
-// it is never suppressed).
-//
-// Lead note 2's collision question — "how do the two rows' series_hash and
-// dedup_key differ so they cannot collide under the (ts, series_hash,
-// dedup_key) primary key" — is answered by treating "<name>_sum" and
-// "<name>_count" as two distinct metric names, full stop: seriesHash and
-// model.DedupKeyMetric both hash over (name, attrs), so two different names
-// with identical attrs and ts necessarily produce two different series
-// hashes and two different dedup keys without any bespoke suffixing logic
-// here — the same mechanism that already distinguishes any other two
-// same-timestamp, same-attrs, different-name metrics.
+// histogramSamples emits two samples per histogram datapoint: <name>_sum
+// (if OTLP Sum is set) and <name>_count (always). Distinct metric names
+// prevent key collision (lead note 2).
 func (n *Normalizer) histogramSamples(name, vendor, temporality string, dp *metricspb.HistogramDataPoint, resourceAttrs map[string]any, ingestedAt time.Time) []model.MetricSample {
 	var out []model.MetricSample
 
@@ -178,57 +165,10 @@ func (n *Normalizer) histogramSamples(name, vendor, temporality string, dp *metr
 }
 
 // buildSample assembles one model.MetricSample from a decoded data point's
-// raw pieces, common to Sum, Gauge, and Histogram data points.
-//
-// series_hash participation (lead note 1): only the data point's own
-// Attributes participate — never resource or instrumentation-scope
-// attributes. Three reasons: (1) OTLP's own data model documents a
-// NumberDataPoint/HistogramDataPoint's Attributes as "the set of key/value
-// pairs that uniquely identify the timeseries from where this point
-// belongs" — series identity is already a defined OTel concept, and it is
-// exactly the data-point attributes, not the resource or scope; (2) resource
-// attributes (service.version, host.arch, os.type, ...) commonly change
-// across an agent's lifetime (an upgrade mid-session) or across export
-// batches without the underlying timeseries changing at all — folding them
-// into series_hash would fragment metric_series_state's cumulative-diff
-// state (SPEC §1.8) across a resource-attribute change that has nothing to
-// do with the counter it's tracking; (3) it keeps a clean, checkable
-// invariant: Attrs (the stored jsonb column) and the bytes hashed into
-// SeriesHash are exactly the same map, so series_hash is always
-// independently reproducible from the stored row via
-// sha256(name + sorted(attrs)) — no hidden extra inputs a debugger can't
-// see. session.id, when Claude Code includes it, arrives as one such
-// data-point attribute (OTEL_METRICS_INCLUDE_SESSION_ID) and therefore
-// participates like any other attribute, with no special-casing needed.
-//
-// ts / clamping (lead note 6): TimeUnixNano is passed through
-// model.ClampTimestamp exactly like FromOTLPLogs does, because
-// metric_samples is monthly-partitioned with no DEFAULT partition (SPEC
-// §2.2/§2.3) — an unclamped, badly-skewed point would be an insert error,
-// not merely a data-quality flag, and dropping the point instead of storing
-// it clamped would violate "never silently drop a point". Unlike
-// model.Event, model.MetricSample (owned by ticket P2-01, not this ticket)
-// has no ClockSkewed column, and metric_samples (SPEC §2.3) has no
-// clock_skewed column either — so the skew *signal* ClampTimestamp computes
-// is deliberately discarded here after being used to pick the timestamp;
-// there is no column to carry it and adding one is a schema change outside
-// this ticket's scope. This is a known, documented limitation, not an
-// oversight: a metrics-only clock-skew data-quality view is a gap v1 accepts
-// (the same events-vs-metrics asymmetry SPEC §1.8 already treats as
-// acceptable for cost/token attribution).
-//
-// dedup_key (SPEC §1.7 rule 2) and series_hash are computed from the
-// *clamped* timestamp, not the raw one: a skewed point is stored under
-// ts=now, and its dedup key must match the row it is actually stored under
-// (the same reasoning FromOTLPLogs's dedup key already applies implicitly by
-// never taking ts as an input at all — DedupKeyMetric, unlike
-// DedupKeyOTelLog, takes ts explicitly, so this function must choose which
-// one, and consistency with the stored row wins).
-// resourceAttrs is only ever consulted for the audit finding m12 session.id
-// fallback below — never folded into attrs/series_hash, since series_hash's
-// inputs "must stay exactly the stored attrs" (this ticket's caveat) and
-// buildSample's own doc comment already documents resource attrs as
-// deliberately excluded from series identity.
+// raw pieces (Sum, Gauge, Histogram). series_hash uses data-point attributes only
+// (not resource/scope — SPEC §2.3, lead note 1). Timestamp clamped (no ClockSkewed
+// column per SPEC §2.3). SessionID falls back to resourceAttrs per m12 (never merged
+// into attrs/series_hash).
 func (n *Normalizer) buildSample(name, vendor string, temporality string, kvs []*commonpb.KeyValue, resourceAttrs map[string]any, timeUnixNano uint64, value float64, ingestedAt time.Time) model.MetricSample {
 	attrs := otlpAttrsToMap(kvs)
 
@@ -246,18 +186,7 @@ func (n *Normalizer) buildSample(name, vendor string, temporality string, kvs []
 
 	dedupKey, err := model.DedupKeyMetric(name, clampedTS, attrs)
 	if err != nil {
-		// M5 audit note: this branch used to be reachable — attrs is built
-		// exclusively from otlpAnyValueToGo's outputs, and a float64 holding
-		// NaN or +/-Inf (OTLP permits a DoubleValue to carry either) made
-		// encoding/json refuse to marshal it. otlpAnyValueToGo now sanitizes
-		// every DoubleValue at decode time (otlpattrs.go's
-		// sanitizeAttrFloat), replacing a non-finite value with its string
-		// form before it ever reaches this map, so attrs always marshals
-		// and this branch is provably unreachable. Kept as defense in depth
-		// (mirroring FromOTLPLogs.buildEvent's identical fallback) rather
-		// than removed, since — unlike the logs path — FromOTLPMetrics's
-		// contract (this file's package doc comment) is to never turn a
-		// value-level problem into an error at all.
+		// (M5) unreachable post-sanitization; fallback key for defense in depth.
 		dedupKey = "metric:unhashable:" + name
 	}
 
@@ -275,16 +204,8 @@ func (n *Normalizer) buildSample(name, vendor string, temporality string, kvs []
 	}
 }
 
-// seriesHash implements SPEC §2.3's "sha256(name + sorted attrs) — series
-// identity". encoding/json already marshals map[string]T with sorted keys at
-// every nesting level (the same property model's canonicalJSON relies on),
-// so json.Marshal(attrs) is sorted-attrs-as-bytes without a bespoke encoder.
-//
-// A marshal error (see buildSample's DedupKeyMetric comment for why this is
-// now provably unreachable post-M5) falls back to hashing the name alone:
-// still deterministic and still distinguishes this metric from every
-// differently-named one, which is the best available substitute for "sorted
-// attrs" when the attrs cannot be canonically rendered at all.
+// seriesHash implements SPEC §2.3's sha256(name + sorted attrs) series
+// identity. Marshal error (unreachable post-M5) falls back to name alone.
 func seriesHash(name string, attrs map[string]any) []byte {
 	canon, err := json.Marshal(attrs)
 	if err != nil {

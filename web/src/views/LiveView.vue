@@ -1,15 +1,15 @@
 <script setup lang="ts">
 /**
- * SPEC §6.2: `/live` — the firehose feed, active-session cards, and the
+ * `/live` — the firehose feed, active-session cards, and the
  * ingest health strip. This view is the sole owner of the tab's firehose
- * subscription for as long as it is mounted (`stores/live.ts`'s exit
- * criterion 6: "exactly one EventSource per tab" — the subscription stack
+ * subscription for as long as it is mounted (`stores/live.ts`'s own
+ * guarantee — "exactly one EventSource per tab" — the subscription stack
  * is how a concurrent `SessionDetailView` session-topic subscription and
  * this one coexist without opening a second connection).
  *
  * Like `AnalyticsView.vue`, this is a thin composition root: no formatting
- * or filtering logic of its own, just wiring `useLiveStore()` (already
- * committed, P5-04) and `useMetaStore()` (exporters-seen) into
+ * or filtering logic of its own, just wiring `useLiveStore()`
+ * and `useMetaStore()` (exporters-seen) into
  * `HealthStrip`/`ActiveSessionCards`/`LiveFeed`.
  */
 import { computed, onMounted, onScopeDispose, onUnmounted } from 'vue'
@@ -36,7 +36,7 @@ onUnmounted(() => {
 })
 
 /**
- * SPEC §5.2: a `reset`/`lag` frame means "the client's local state is
+ * A `reset`/`lag` frame means "the client's local state is
  * provably incomplete, refetch via REST" — `liveStore` already drops its
  * own stream-derived state (events/sessions/stats) before calling this
  * back, so the only *externally fetched* data this view still owns is
@@ -58,9 +58,9 @@ const activeSessions = computed(() => Array.from(live.sessions.values()))
  * "the view has something real on it", not merely mounted) means the
  * stream has actually reached `open` AND at least one frame — an `event`
  * or a `stats` frame — has landed. `status === 'open'` alone is not enough:
- * a genuinely quiet deployment (SPEC's own low-traffic case) could sit at
+ * a genuinely quiet deployment could sit at
  * `open` with an empty ring buffer and no `stats` frame yet (frames arrive
- * every ~2s per SPEC §5.1, not instantly on connect), which would let the
+ * every ~2s, not instantly on connect), which would let the
  * harness photograph a connected-but-empty feed.
  */
 useCaptureReady(() => live.status === 'open' && (live.events.length > 0 || live.stats !== null))
@@ -104,7 +104,7 @@ function onResume(): void {
         <h2 class="text-lg font-medium">
           Active sessions
         </h2>
-        <!-- Round-8 critic ask: the same "N loaded" badge idiom `SessionListView.vue`'s own heading already uses. -->
+        <!-- The same "N loaded" badge idiom SessionListView.vue's own heading already uses. -->
         <Badge
           v-if="activeSessions.length > 0"
           variant="secondary"

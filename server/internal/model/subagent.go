@@ -2,12 +2,8 @@ package model
 
 import "time"
 
-// SubagentNode is one node of the tree GET /api/v1/sessions/{id}/subagents
-// returns (SPEC §4.3). CostUSD and (when the session has no hook coverage)
-// ToolCallCount are nil in v1 — SPEC §1.9 is normative that per-node cost is
-// never knowable from Claude Code's telemetry, and any test asserting it
-// (or "root aggregates = session totals minus children") is invalid per
-// that section.
+// SubagentNode is one node of the subagent tree (SPEC §4.3),
+// with CostUSD and ToolCallCount nil in v1 per SPEC §1.9 (per-node cost not knowable).
 type SubagentNode struct {
 	AgentID        string         `json:"agent_id"`
 	ParentAgentID  *string        `json:"parent_agent_id"`
@@ -22,10 +18,8 @@ type SubagentNode struct {
 	Children       []SubagentNode `json:"children"`
 }
 
-// SubagentCostAttribution is the `cost_attribution` object alongside the
-// subagent tree (SPEC §4.3 and §1.9): the only honest cost split v1 can
-// offer — by raw query_source value, never mapped onto a main/subagent
-// semantic.
+// SubagentCostAttribution is the cost attribution object alongside the subagent tree (SPEC §4.3, §1.9),
+// split by raw query_source value (SPEC §1.9).
 type SubagentCostAttribution struct {
 	ByQuerySource       map[string]float64 `json:"by_query_source"`
 	DominantQuerySource string             `json:"dominant_query_source"`
@@ -34,9 +28,7 @@ type SubagentCostAttribution struct {
 	Note                string             `json:"note"`
 }
 
-// SubagentTree is the full response body of Reader.SubagentTree / GET
-// /api/v1/sessions/{id}/subagents (SPEC §4.3): the assembled tree(s) plus
-// the session-level cost attribution that stands in for per-node cost.
+// SubagentTree is the response body of GET /api/v1/sessions/{id}/subagents (SPEC §4.3).
 type SubagentTree struct {
 	Nodes           []SubagentNode          `json:"data"`
 	CostAttribution SubagentCostAttribution `json:"cost_attribution"`

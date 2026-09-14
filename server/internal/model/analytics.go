@@ -2,10 +2,7 @@ package model
 
 import "time"
 
-// Cost is the fleet-level {usd, reported_usd, estimated_usd,
-// estimated_share} shape used by GET /api/v1/analytics/summary (SPEC §4.3).
-// Unlike SessionCost it carries no by_query_source split — SPEC §4.3 is
-// explicit that split lives only on the session, not at fleet level.
+// Cost is the fleet-level analytics cost shape (SPEC §4.3), without by_query_source split.
 type Cost struct {
 	USD            float64 `json:"usd"`
 	ReportedUSD    float64 `json:"reported_usd"`
@@ -13,9 +10,7 @@ type Cost struct {
 	EstimatedShare float64 `json:"estimated_share"`
 }
 
-// LOC is the {added, removed} lines-of-code shape (SPEC §4.3 analytics
-// summary), sourced from the loc metric series (§1.8) — no log-event
-// equivalent exists.
+// LOC is the lines-of-code shape sourced from the loc metric series (SPEC §4.3, §1.8).
 type LOC struct {
 	Added   int64 `json:"added"`
 	Removed int64 `json:"removed"`
@@ -29,11 +24,8 @@ type Window struct {
 	Bucket string    `json:"bucket"`
 }
 
-// Summary is the body of GET /api/v1/analytics/summary / Reader.
-// AnalyticsSummary (SPEC §4.3). Every counter that is not attributable
-// under a `?model=` filter is a nil pointer, never a zero value (SPEC §4.1
-// "Null vs zero", §4.3 "Model-filtered requests") — NotAttributable lists
-// which ones.
+// Summary is the body of GET /api/v1/analytics/summary (SPEC §4.3).
+// Non-attributable counters are nil pointers, never zero (SPEC §4.1, §4.3).
 type Summary struct {
 	Window Window `json:"window"`
 
@@ -81,10 +73,8 @@ type Series struct {
 	Other   *SeriesOther  `json:"other,omitempty"`
 }
 
-// BreakdownRow is one entry of GET /api/v1/analytics/breakdown (SPEC §4.3:
-// "{key, value, share}"). Key is a raw dimension value (tool name, model
-// name, or an unconstrained vocabulary like decision_source/query_source),
-// so it stays a string.
+// BreakdownRow is one entry of GET /api/v1/analytics/breakdown (SPEC §4.3),
+// with Key as a raw dimension value (tool name, model name, or unconstrained vocabulary).
 type BreakdownRow struct {
 	Key   string  `json:"key"`
 	Value float64 `json:"value"`
@@ -98,9 +88,8 @@ type Breakdown struct {
 	Rows      []BreakdownRow `json:"rows"`
 }
 
-// DecisionMatrixRow is one entry of GET /api/v1/analytics/decisions (SPEC
-// §4.3): "the matrix the product exists for". BySource keys are raw
-// decision_source values (§1.9), unconstrained.
+// DecisionMatrixRow is one entry of GET /api/v1/analytics/decisions (SPEC §4.3),
+// with BySource keys as raw decision_source values (§1.9, unconstrained).
 type DecisionMatrixRow struct {
 	ToolName   string           `json:"tool_name"`
 	Accept     int64            `json:"accept"`

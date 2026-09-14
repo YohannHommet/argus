@@ -1,12 +1,11 @@
 /**
- * Pure period-over-period math for the KPI strip's deltas/sparklines
- * (round-5 UI pass: "flat, equal-weight numbers with no comparison or
- * trend context"). Deliberately has no Vue/store imports — it operates on
+ * Pure period-over-period math for the KPI strip's deltas/sparklines.
+ * Deliberately has no Vue/store imports — it operates on
  * the raw `Series` shape `GET /analytics/timeseries` already returns, so
  * a delta is always "current window's actual buckets minus the preceding
  * window's actual buckets", never a client-side guess.
  *
- * Two null cases stay distinct, matching SPEC §6.1's null-vs-zero thesis:
+ * Two null cases stay distinct, matching the null-vs-zero distinction used throughout:
  *  - `series` itself `null` (the resource was skipped — not attributable
  *    under a `?model=` filter, or simply never fetched) -> both
  *    `seriesTotal` and `computeDelta` return `null`, never `0`.

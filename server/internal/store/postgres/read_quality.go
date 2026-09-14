@@ -1,39 +1,5 @@
-// Package postgres — read_quality.go implements store.Reader's Facets,
-// DataQuality, UnknownKinds, and HookLatency (SPEC §3.3, §4.2, §4.3, P3-08).
-//
-// Facets and DataQuality deliberately never read `events`: every value they
-// report is derivable from sessions/tool_calls/turns/subagents/
-// metric_samples, which SPEC §2.5's EXPLAIN guard does not police at all
-// (its `strings.Contains(plan, "events")` check cannot trip on a plan that
-// never names that relation). DataQuality's four booleans in particular are
-// "has Argus ever received X" questions with no natural time bound — unlike
-// UnknownKinds/HookLatency below, which SPEC §2.5 explicitly allows onto
-// `events` only because both are bounded to the requested window — so
-// answering them from `events` at all would mean an unbounded scan the
-// guard's own spirit forbids even where its regex would not catch it. The
-// promoted-column reasoning behind each of DataQuality's four checks:
-//
-//   - LogsExporterSeen: `api_request`/`llm.request` is the only event kind
-//     with promoted token/cost columns (SPEC §1.5.1), and it exists solely
-//     on the OTel *logs* pipeline — no hook event carries it (SPEC §1.5.2's
-//     mapping table has no equivalent). turns.api_request_count (SPEC
-//     §2.1) is incremented only by that kind, so any turn with a nonzero
-//     count proves at least one OTel log event was ingested.
-//   - MetricsExporterSeen: metric_samples (SPEC §2.3) is written exclusively
-//     by Writer.WriteMetrics, itself fed only by the OTLP metrics receiver
-//     — a non-empty table proves the metrics exporter was ever configured.
-//   - HooksSeen: tool_calls.correlation (SPEC §1.6) is 'exact' or
-//     'hook_only' only when a hook-sourced tool.pre/tool.decision/
-//     tool.result event contributed to that call's correlation;
-//     tool_calls.agent_id is documented "hook-sourced only" (SPEC §2.3).
-//     subagents (SPEC §2.3) is populated exclusively by the hook-only
-//     SubagentStart/SubagentStop events (SPEC §1.5.2; no OTel log
-//     equivalent exists in §1.5.1) — a second, independent witness.
-//   - ToolDetailsSeen: tool_calls.file_path is populated from
-//     `attrs.tool_parameters.file_path` (SPEC §1.5.1's tool_result row),
-//     which requires `OTEL_LOG_TOOL_DETAILS=1` (or a FileChanged hook, SPEC
-//     line "file-touch view"). A non-null file_path proves tool_parameters
-//     detail was actually captured at least once.
+// Package postgres implements store.Reader's quality queries (SPEC §4.2, §4.3, P3-08).
+// Facets/DataQuality avoid events per EXPLAIN guard (SPEC §2.5); UnknownKinds/HookLatency read events as bounded queries.
 package postgres
 
 import (

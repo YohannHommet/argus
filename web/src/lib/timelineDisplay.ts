@@ -1,8 +1,6 @@
 /**
  * Pure display-derivation helpers for `EventRow`/`TimelineGroup` — split out
- * of those components so the round-4 critic's two asks ("give each node a
- * distinguishing primary label" and "a duration bar scaled to the session's
- * max") are table-tested without mounting Vue.
+ * of those components so they're table-tested without mounting Vue.
  *
  * `rowDetail` is deliberately conservative about what counts as an "honest"
  * label: only fields Argus already promotes onto `TimelineItem` are used.
@@ -27,9 +25,8 @@ export function rowDetail(item: Pick<TimelineItem, 'tool_name' | 'model'>): stri
 
 /**
  * `0..100`: a row's duration_ms mapped onto a log scale against the
- * session's max observed duration, for a slim per-row bar (round-4 critic:
- * "duration bar scaled to the session's max event duration, log scale
- * acceptable"). `log1p` rather than `log` so a duration of `0`ms maps to `0`
+ * session's max observed duration, for a slim per-row bar. `log1p` rather
+ * than `log` so a duration of `0`ms maps to `0`
  * instead of `-Infinity`, and small durations aren't crushed against the
  * axis the way a plain `log` would with values near 1.
  *

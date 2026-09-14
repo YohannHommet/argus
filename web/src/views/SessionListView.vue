@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
  * `/sessions`. Two independent "there's nothing here" facts have to stay
- * distinct (PLAN.md P4-10's AC): a genuinely empty database — nothing has
+ * distinct: a genuinely empty database — nothing has
  * ever landed, so the fix is telemetry setup — versus these particular
  * filters matching nothing, where the fix is clearing a filter. Conflating
  * them would tell a user with an active filter to go set up telemetry
@@ -40,13 +40,13 @@ const meta = useMetaStore()
 void meta.load()
 
 /**
- * SPEC §6.4 / PLAN.md P5-06: this view owns the firehose subscription (the sessions *store* only
+ * This view owns the firehose subscription (the sessions *store* only
  * reacts to whatever `liveStore.sessions` already holds — see its own doc comment — it never
  * subscribes itself, matching `liveStore`'s "sole owner of the connection" contract). Scoped to this
  * view's mount so navigating away releases it — a `/sessions/:id` detail page pushes its own
  * session-scoped topic on top instead (`sessionDetail.ts`'s `startLive`), and closing this one on
  * unmount is what lets that topic become active without a second, redundant firehose connection ever
- * competing with it (exit criterion 6).
+ * competing with it.
  */
 const live = useLiveStore()
 let liveSubscription: LiveSubscription | null = null
@@ -84,7 +84,7 @@ function onLoadMore(): void {
 }
 
 /**
- * PLAN.md P6-04: `/` focuses the filter bar's search field (matching `SessionFilterBar.vue`'s
+ * `/` focuses the filter bar's search field (matching `SessionFilterBar.vue`'s
  * `id="session-search"`), `j`/`k` move real DOM focus between rendered `[data-testid="session-row"]`
  * elements — plain focus, not a separate "selected index" concept, since every row is already a
  * focusable, activatable `<tr>` (`SessionRow.vue`'s own `role="row"`/`tabindex="0"`/`@keydown.enter`)
@@ -132,13 +132,7 @@ useShortcuts({
       :sessions="sessions.sessions"
     />
 
-    <!--
-      SessionTable owns its own error/loading/"filtered empty" rendering
-      for every case except the one this ticket adds — a genuinely empty
-      database — so it stays the default path and this view only carves
-      out the one branch it needs to own: SetupCard, which SessionTable
-      has no way to know it should show.
-    -->
+    <!-- SessionTable owns error/loading/"filtered empty" rendering for every case except a genuinely empty database — this view only carves out that one branch: SetupCard. -->
     <SkeletonTable v-if="!sessions.initialized || !metaSettled" />
 
     <SetupCard

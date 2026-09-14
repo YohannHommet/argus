@@ -42,10 +42,7 @@ func TestFacets_DistinctValuesAcrossDimensions(t *testing.T) {
 	require.Contains(t, got.QuerySources, "sdk")
 }
 
-// intersect returns the elements of want that are present in got, so a test
-// asserting on a fleet-wide facet (which necessarily also reflects every
-// OTHER test's fixtures sharing the same database) can check "these are
-// present" without also asserting "these are the only ones".
+// intersect returns elements of want present in got; allows asserting subset on shared test fixtures.
 func intersect(got, want []string) []string {
 	set := make(map[string]bool, len(got))
 	for _, g := range got {
@@ -70,13 +67,7 @@ func seedSessionCostByQuerySource(t *testing.T, pool *pgxpool.Pool, sessionID st
 
 // --- DataQuality -------------------------------------------------------------
 
-// TestDataQuality_FreshDatabaseReportsAllFalse is the ticket note's AC: a
-// database that never received any of the four signals must report every
-// flag false rather than erroring or omitting them. newStore gives every
-// test its own freshly created, freshly migrated schema (harness.go's
-// NewDSN does `CREATE SCHEMA test_<nanos>_<n>` + search_path + Migrate per
-// call), so there is no other suite's fixture to share it with — the four
-// flags below are asserted directly, not just diffed against a "before".
+// TestDataQuality_FreshDatabaseReportsAllFalse verifies all four flags false when no signals received.
 func TestDataQuality_FreshDatabaseReportsAllFalse(t *testing.T) {
 	st, pool := newStore(t)
 	ctx := context.Background()
@@ -91,10 +82,7 @@ func TestDataQuality_FreshDatabaseReportsAllFalse(t *testing.T) {
 	require.False(t, got.ToolDetailsSeen)
 }
 
-// TestDataQuality_LogsExporterSeen_FromTurnAPIRequestCount: only a turn
-// with a nonzero api_request_count (populated exclusively by the OTel-log-
-// only api_request/llm.request kind, SPEC §1.5.1) proves an OTel log event
-// was ever ingested.
+// TestDataQuality_LogsExporterSeen_FromTurnAPIRequestCount verifies logs signal from api_request_count (SPEC §1.5.1).
 func TestDataQuality_LogsExporterSeen_FromTurnAPIRequestCount(t *testing.T) {
 	st, pool := newStore(t)
 	ctx := context.Background()

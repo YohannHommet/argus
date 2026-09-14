@@ -49,12 +49,7 @@ func readyzHandler(hc HealthChecker, mc MigrationsChecker, qc QueueSaturationChe
 		}
 		if hc != nil {
 			if err := hc.Health(r.Context()); err != nil {
-				// m2 audit finding: pool.Ping's own error text can be pgx's
-				// `failed to connect to `user=%s database=%s`:` — and
-				// /readyz sits outside RequireAPIToken (SPEC §3.5's read
-				// API is unauthenticated by default), so that text must
-				// never reach the client. Logged instead (logStoreError),
-				// tagged with the request id this response also carries.
+				// m2: /readyz is unauthenticated; never expose DB error text, log instead.
 				logStoreError(r, logger, err)
 				writeProblem(w, r, http.StatusServiceUnavailable, "not-ready", "database health check failed")
 				return

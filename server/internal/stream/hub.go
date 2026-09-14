@@ -31,11 +31,10 @@ var ErrTooManySubscribers = errors.New("stream: too many subscribers")
 
 // ErrClosed is returned by Subscribe once Hub.Shutdown has run. It is
 // deliberately NOT returned by Publish/PublishStats after Shutdown (SPEC
-// §5.3, and internal/ingest's Publisher contract at pipeline.go:142-148:
-// "a hub must tolerate being called after it considers itself shut down")
-// — those calls become silent no-ops instead, so a publish racing the tail
-// end of shutdown never has to check an error it has no useful response to
-// anyway.
+// §5.3, and internal/ingest's Publisher contract at pipeline.go:73-77:
+// "tolerate Publish after Close returns") — those calls become silent
+// no-ops instead, so a publish racing the tail end of shutdown never has
+// to check an error it has no useful response to anyway.
 var ErrClosed = errors.New("stream: hub is closed")
 
 // hubOptions collects Option values before Hub construction, so unexported
@@ -434,8 +433,8 @@ func (h *Hub) PublishStats(s Stats) {
 // final event: shutdown") — then closes every subscriber channel.
 // Idempotent: a second call is a no-op. After it returns, Subscribe returns
 // ErrClosed and Publish/PublishStats become silent no-ops (the ingest
-// Publisher contract, pipeline.go:142-148, explicitly allows Publish calls
-// after the pipeline — and by extension its hub — considers itself done).
+// Publisher contract, pipeline.go:73-77, explicitly tolerates Publish calls
+// after Close).
 func (h *Hub) Shutdown() {
 	h.mu.Lock()
 	if h.shutdown {

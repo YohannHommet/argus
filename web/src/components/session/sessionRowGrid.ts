@@ -12,7 +12,7 @@ export const SESSION_ROW_GRID_COLS =
 /**
  * Above this many rows, `SessionTable.vue` switches its body from a plain `<table>` to
  * `@vueuse/core`'s `useVirtualList` (a row *count* threshold, not a pixel/viewport heuristic —
- * deliberately simple, and exactly what the AC asks for). Lives here rather than as a `<script
+ * deliberately simple). Lives here rather than as a `<script
  * setup>` export for the same SFC-compiler reason as `SESSION_ROW_GRID_COLS` above.
  */
 export const VIRTUALIZATION_THRESHOLD = 200

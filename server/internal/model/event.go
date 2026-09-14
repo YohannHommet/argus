@@ -2,21 +2,10 @@ package model
 
 import "time"
 
-// Event is the append-only, normalized event record (SPEC §0, §1.3, §2.2):
-// the atom of the system, and the only table every projection is derived
-// from. Field set and nullability mirror the `events` table in SPEC §2.2
-// exactly, column for column — pointers for every nullable column, plain
-// values for every NOT NULL one. `Attrs` carries the full flattened source
-// payload verbatim (SPEC §1.3: "promotion is a copy, not a move"), so a
-// projection rebuild never needs a schema migration.
+// Event is the append-only, normalized event record (SPEC §0, §1.3, §2.2),
+// with field set and nullability mirroring the `events` table exactly (SPEC §2.2).
 //
-// Several fields (QuerySource, Decision, DecisionSource, ToolSource,
-// PermissionMode, Model, ErrorType, and the vendor/terminal/start/end-reason
-// fields on Session/Turn) are deliberately plain *string: SPEC §0 forbids
-// any Go type that could reject a vendor-supplied value, and the live
-// capture (docs/research/live-capture-2026-08-11.md) found values
-// (`query_source: generate_session_title`, `terminal.type: wsl-Ubuntu`) the
-// documentation does not list.
+// Several fields are deliberately plain *string to accept vendor-supplied values unconstrained (SPEC §0).
 type Event struct {
 	Seq        int64     // bigint identity — ordering tiebreak, cursor component (§1.2)
 	ID         string    // uuidv7, opaque, not indexed (§1.2)
@@ -34,10 +23,7 @@ type Event struct {
 	Source Source
 	Kind   Kind
 
-	// EventName is the vendor raw event name, normalized to its unprefixed
-	// form (§1.5.1). Unconstrained text, not a Kind: the taxonomy lives in
-	// Kind, EventName is provenance for debugging and the unknown-kind
-	// inspector.
+	// EventName is the vendor raw event name, normalized to unprefixed form (§1.5.1) — provenance for debugging.
 	EventName string
 
 	VendorSeq *int64 // OTel event.sequence; nil ⇒ hash-fallback dedup form (§1.7 rule 2)
@@ -88,10 +74,7 @@ type Event struct {
 	DedupKey string // idempotency key (§1.7 rule 2)
 }
 
-// MetricSample mirrors the metric_samples table (SPEC §2.3, §1.8). OTLP
-// metric data points are stored here, never in Event — there is no
-// Kind for a metric (§1.4) — and feed only rollup series log events cannot
-// produce, plus the degraded mode when the logs exporter is off.
+// MetricSample mirrors the metric_samples table (SPEC §2.3, §1.8), storing OTLP metric data not in Event.
 type MetricSample struct {
 	TS         time.Time
 	IngestedAt time.Time
@@ -104,10 +87,7 @@ type MetricSample struct {
 	Value float64
 	Delta *float64 // filled by the rollup job for cumulative series (§1.8)
 
-	// Temporality is delta|cumulative|gauge — an OTel wire concept Argus
-	// records as reported, not a Go enum: it is not one of the four
-	// taxonomies SPEC §0 closes, and constraining it would require deciding
-	// in Go what a future OTel temporality value means.
+	// Temporality is delta|cumulative|gauge — recorded as-reported per OTel, not constrained (SPEC §0).
 	Temporality string
 
 	SeriesHash []byte // sha256(name + sorted attrs) — series identity (§2.3)

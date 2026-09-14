@@ -2,9 +2,7 @@ package model
 
 import "time"
 
-// TokenUsage is the {input, output, cache_read, cache_creation} tokens
-// shape shared by the session and analytics-summary wire formats (SPEC
-// §4.3: sessions list "tokens" object, analytics summary "tokens" object).
+// TokenUsage is the token counts shape in session and analytics-summary wire formats (SPEC §4.3).
 type TokenUsage struct {
 	Input         int64 `json:"input"`
 	Output        int64 `json:"output"`
@@ -12,11 +10,8 @@ type TokenUsage struct {
 	CacheCreation int64 `json:"cache_creation"`
 }
 
-// SessionCost is the per-session {usd, reported_usd, ...} cost object (SPEC
-// §4.3 sessions list). ByQuerySource keys are raw agent-supplied
-// query_source values passed through verbatim, `""` for absent (§1.9) — an
-// unconstrained map, never a struct with named fields, because the real
-// vocabulary is unknown and version-dependent.
+// SessionCost is the per-session cost object (SPEC §4.3),
+// with ByQuerySource as raw, unconstrained query_source values (§1.9).
 type SessionCost struct {
 	USD                 float64            `json:"usd"`
 	ReportedUSD         float64            `json:"reported_usd"`
@@ -27,13 +22,7 @@ type SessionCost struct {
 	OtherQuerySourceUSD float64            `json:"other_query_source_usd"`
 }
 
-// Session mirrors the sessions table (SPEC §2.1). Every vendor-supplied
-// field (Vendor, Project, CWD, StartType, EndReason, PermissionMode,
-// AppVersion, Entrypoint, TerminalType, UserEmail, UserAccountUUID,
-// OrganizationID) is a plain string: SPEC §0 forbids a Go type that could
-// reject a vendor-supplied value, and the live capture found a
-// `terminal.type` (`wsl-Ubuntu`) the documentation does not list. Status is
-// the one Argus-computed, closed vocabulary on this table (SPEC §1.7).
+// Session mirrors the sessions table (SPEC §2.1), with vendor-supplied fields as plain strings (SPEC §0).
 type Session struct {
 	ID                string
 	Vendor            string
@@ -70,10 +59,8 @@ type Session struct {
 	UpdatedAt         time.Time
 }
 
-// SessionSummary is the row shape for Reader.ListSessions / GET
-// /api/v1/sessions (SPEC §4.3). Field set and JSON tags mirror that
-// endpoint's example payload; Partial mirrors SPEC §1.7's stub-on-reference
-// state (true when no session.start has ever been seen).
+// SessionSummary is the row shape for GET /api/v1/sessions (SPEC §4.3),
+// with Partial reflecting stub-on-reference state (SPEC §1.7).
 type SessionSummary struct {
 	ID              string        `json:"id"`
 	Vendor          string        `json:"vendor"`

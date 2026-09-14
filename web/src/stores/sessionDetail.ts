@@ -26,8 +26,8 @@ function toStoreError(err: unknown): Error {
 }
 
 /**
- * Per-session bundle: everything P4-03/04/05/06 fetch and cache for one
- * `/sessions/:id`. Every field is its own ref (rather than one big reactive
+ * Per-session bundle: everything a session-detail view fetches and caches
+ * for one `/sessions/:id`. Every field is its own ref (rather than one big reactive
  * object) so a computed reading e.g. `entry.turns.value` re-runs only when
  * turns change, not on every session-detail poll.
  */
@@ -59,7 +59,7 @@ interface SessionDetailEntry {
   timelineError: ShallowRef<StoreError>
   timelineLoaded: boolean
   /**
-   * P5-06: mirrors `timelineItems`' `event_ref`s for O(1) dedupe. A live SSE frame and a REST page
+   * Mirrors `timelineItems`' `event_ref`s for O(1) dedupe. A live SSE frame and a REST page
    * fetch can both deliver the same `event_ref` (a live event arrives, then a later `loadMoreTimeline`
    * page re-delivers it near a cursor boundary, or vice versa) — without this, checking "is this ref
    * already present" would be a `.some()` linear scan of `timelineItems` on every single incoming
@@ -107,9 +107,9 @@ function createEntry(): SessionDetailEntry {
 }
 
 /**
- * Orders two events by `(ts, seq)` — the same tie-break the server's own keyset pagination uses
- * (SPEC §4.3), so a binary search against server-sorted pages and live-inserted events never
- * disagrees with the server about ordering.
+ * Orders two events by `(ts, seq)` — the same tie-break the server's own keyset pagination uses,
+ * so a binary search against server-sorted pages and live-inserted events never disagrees with
+ * the server about ordering.
  */
 function compareEvents(a: TimelineEvent, b: TimelineEvent): number {
   const tsDelta = new Date(a.ts).getTime() - new Date(b.ts).getTime()
@@ -138,8 +138,8 @@ function findInsertIndex(arr: readonly TimelineEvent[], event: TimelineEvent, or
 
 /**
  * The one insertion path both REST pages (`loadTimeline`'s append branch) and live SSE frames
- * (`startLive`'s watcher) funnel through — SPEC §1.7 / ticket P5-06's central point: the same
- * `event_ref` can legitimately arrive from both channels (a live event lands, then a later REST page
+ * (`startLive`'s watcher) funnel through: the same `event_ref` can legitimately arrive from both
+ * channels (a live event lands, then a later REST page
  * re-delivers it near a cursor boundary — or the reverse order), and out-of-order arrival on the live
  * side is a first-class reality, not an edge case (a reordering proxy, a replayed reconnect window,
  * or simply two vendor processes racing).
@@ -163,7 +163,7 @@ function insertEvent(entry: SessionDetailEntry, event: TimelineEvent, order: Tim
   entry.timelineItems.value = next
 }
 
-/** Cap on `docs/PLAN.md` P4-03's "LRU of 3" — one entry per distinct session id visited. */
+/** Cap on the session-detail LRU — one entry per distinct session id visited. */
 export const SESSION_DETAIL_LRU_SIZE = 3
 
 /**
@@ -209,7 +209,7 @@ export const useSessionDetailStore = defineStore('sessionDetail', () => {
     return currentId.value ? entries.get(currentId.value) : undefined
   }
 
-  // --- Timeline filters (SPEC §4.3 / PLAN P4-04) — shared across sessions (only one timeline is ever
+  // --- Timeline filters — shared across sessions (only one timeline is ever
   // on screen), not duplicated per LRU entry. Refetch via `loadTimeline({ reset: true })` after a change.
   const kinds = ref<Kind[]>([])
   const agentId = ref<string | null>(null)
@@ -234,8 +234,8 @@ export const useSessionDetailStore = defineStore('sessionDetail', () => {
    * Loads `id`'s SessionDetail and makes it the current session. A cache
    * hit (an entry that already has a `session` value — i.e. this id is
    * still one of the LRU's 3 slots) returns immediately without calling the
-   * API: this is the whole point of the LRU (PLAN P4-03's sharpest AC —
-   * "back-navigation within the LRU does not refetch").
+   * API: this is the whole point of the LRU — back-navigation within it
+   * does not refetch.
    */
   async function loadSession(id: string): Promise<void> {
     currentId.value = id
@@ -290,7 +290,7 @@ export const useSessionDetailStore = defineStore('sessionDetail', () => {
 
   // --- tool calls ----------------------------------------------------------
 
-  /** Fetches this session's tool calls once; lazy — call on the Tools tab's first activation (PLAN P4-06). */
+  /** Fetches this session's tool calls once; lazy — call on the Tools tab's first activation. */
   async function loadToolCalls(options: { force?: boolean } = {}): Promise<void> {
     const id = currentId.value
     if (!id) return
@@ -319,7 +319,7 @@ export const useSessionDetailStore = defineStore('sessionDetail', () => {
 
   // --- subagents -----------------------------------------------------------
 
-  /** Fetches the subagent tree once; lazy — call on the Subagents tab's first activation (PLAN P4-05). No `page` on this endpoint — it's one full tree, not paginated. */
+  /** Fetches the subagent tree once; lazy — call on the Subagents tab's first activation. No `page` on this endpoint — it's one full tree, not paginated. */
   async function loadSubagents(options: { force?: boolean } = {}): Promise<void> {
     const id = currentId.value
     if (!id) return
@@ -420,9 +420,9 @@ export const useSessionDetailStore = defineStore('sessionDetail', () => {
   /**
    * Bounded cache for `loadEvent` calls made with no session open at all —
    * the `/live` firehose, where clicking a feed row must still fill the detail
-   * sheet. `GET /api/v1/events/{ref}` is addressed purely by `event_ref` (SPEC
-   * §4.1: "there is no lookup by id"), so it never needed a session; the
-   * per-entry cache exists only to pick an LRU slot to evict with.
+   * sheet. `GET /api/v1/events/{ref}` is addressed purely by `event_ref` —
+   * there is no lookup by id — so it never needed a session; the per-entry
+   * cache exists only to pick an LRU slot to evict with.
    *
    * Capped because the firehose has no natural bound on how many distinct
    * events a user can click through in one sitting, unlike a single session's
@@ -432,18 +432,13 @@ export const useSessionDetailStore = defineStore('sessionDetail', () => {
   const orphanEventCache = new Map<string, EventDetail>()
 
   /**
-   * The detail drawer's data source (PLAN P4-04's EventDetailSheet):
-   * `TimelineEvent` (slim, no `attrs`) is what the timeline list holds,
-   * `EventDetail` (with `attrs`) is fetched lazily per event and cached by
-   * `event_ref` for the lifetime of the session's LRU slot — evicted only
-   * when the whole session entry is evicted.
-   *
-   * P5-05 integration gap: this used to `return null` whenever `currentId` was
-   * unset, which is *always* the case on `/live` — a firehose has no single
-   * current session. So a live-feed row click opened the sheet with the right
-   * `event_ref` and permanently blank content. The lookup is by `event_ref`
-   * alone, so the sessionless path is served from `orphanEventCache` instead of
-   * being refused.
+   * The detail drawer's data source: `TimelineEvent` (slim, no `attrs`) is
+   * what the timeline list holds, `EventDetail` (with `attrs`) is fetched
+   * lazily per event and cached by `event_ref` for the lifetime of the
+   * session's LRU slot — evicted only when the whole session entry is
+   * evicted. The sessionless path (`/live`, no `currentId`) is served from
+   * `orphanEventCache` instead of being refused, since the lookup is by
+   * `event_ref` alone.
    */
   async function loadEvent(eventRef: string): Promise<EventDetail | null> {
     const id = currentId.value
@@ -462,18 +457,18 @@ export const useSessionDetailStore = defineStore('sessionDetail', () => {
     return result
   }
 
-  // --- live (PLAN.md P5-06 / Phase-5 exit criterion 2) ----------------------
+  // --- live ------------------------------------------------------------
 
   /**
    * Gates whether an incoming live event is actually appended — the header toggle's "off" state
-   * (`setLiveEnabled(false)`). Deliberately *not* `liveStore.pause()`: that pause is tab-wide (SPEC
-   * P5-04's own doc comment on it), so calling it from a per-view toggle would also freeze e.g. a
+   * (`setLiveEnabled(false)`). Deliberately *not* `liveStore.pause()`: that pause is tab-wide (see
+   * `liveStore.pause()`'s own doc comment), so calling it from a per-view toggle would also freeze e.g. a
    * `LiveView` firehose feed some other tab/route is reading from the very same ring buffer — a side
    * effect this view has no business causing. Keeping the subscription itself open while "off" (see
    * `startLive` below) is the other half of that choice: a toggle a user expects to flip back on
    * without a reconnect/replay round-trip, and one that must never interrupt `loadMoreTimeline` or
-   * the KPI strip's own session-frame updates (the AC: "toggling live off ... keeps the REST view
-   * fully usable").
+   * the KPI strip's own session-frame updates — toggling live off must keep the REST view fully
+   * usable.
    */
   const liveEnabled = ref(true)
 
@@ -493,7 +488,7 @@ export const useSessionDetailStore = defineStore('sessionDetail', () => {
    * indistinguishable from a bug:
    *
    * - **Wrong session** (`event.session_id !== id`): the firehose can be the tab's active topic when
-   *   the user arrives here from `/live` (P5-05's own follow link, or simply a stack transition still
+   *   the user arrives here from `/live` (a follow link, or simply a stack transition still
    *   settling — see `stores/live.ts`'s subscription-stack doc comment), so frames for *other*
    *   sessions genuinely reach this watcher. The ring buffer is also never cleared on a topic switch
    *   (only a `reset` frame or `.clear()` does that), so stale firehose entries can still be sitting
@@ -501,8 +496,8 @@ export const useSessionDetailStore = defineStore('sessionDetail', () => {
    * - **Filtered kind/agent/prompt**: the store's own timeline filters (`kinds`/`agentId`/`promptId`)
    *   are enforced server-side for a REST page, but a live frame bypasses REST entirely — without this
    *   check, live mode would silently *un-filter* rows the user explicitly filtered out.
-   * - **Already known** (`insertEvent`'s own `timelineRefs` check): the dedupe this ticket is
-   *   centrally about — see `insertEvent`'s doc comment.
+   * - **Already known** (`insertEvent`'s own `timelineRefs` check): the dedupe `insertEvent` exists
+   *   for — see its own doc comment.
    */
   function applyLiveEvent(id: string, entry: SessionDetailEntry, event: TimelineEvent): void {
     if (event.session_id !== id) return
@@ -517,9 +512,9 @@ export const useSessionDetailStore = defineStore('sessionDetail', () => {
    * Idempotent for the same id (a route change from `/sessions/a?tab=x` to `/sessions/a?tab=y` must
    * not tear down and reopen the connection), and always tears down any *previous* id's subscription
    * first — `stopLive` — so at most one session-scoped subscription is ever open regardless of how
-   * many ids this LRU has cached (exit criterion 6's "exactly one EventSource" extends to "exactly one
-   * *subscription* stack entry from this store", the same property `liveStore`'s own stack guarantees
-   * for the tab as a whole).
+   * many ids this LRU has cached (the same "exactly one EventSource" property extends to exactly one
+   * *subscription* stack entry from this store, which `liveStore`'s own stack guarantees for the tab
+   * as a whole).
    *
    * `SessionDetailView.vue` does not remount across a `:id` change (it watches `props.id` and calls
    * `loadSession` reactively), so a `watch(currentId)`-shaped teardown is essential here — an
@@ -536,7 +531,7 @@ export const useSessionDetailStore = defineStore('sessionDetail', () => {
     const subscription = live.subscribe({ kind: 'session', id })
     liveSubscription = subscription
 
-    // SPEC §5.2: a `reset` means local stream-derived state is provably incomplete — the only honest
+    // A `reset` means local stream-derived state is provably incomplete — the only honest
     // recovery is the REST refetch this view already knows, same as `liveStore` itself only ever calls back.
     unregisterReset = live.onReset(() => {
       void loadTimeline({ reset: true })

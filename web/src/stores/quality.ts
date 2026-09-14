@@ -12,15 +12,15 @@ export type HookLatencyRow = components['schemas']['HookLatencyRow']
 export type QualityHookLatencyResponse = components['schemas']['QualityHookLatencyResponse']
 
 /**
- * The ticket's "unknown-kind events 24h" tile fixes this window — SPEC
- * §6.2 frames the whole view around "how a new release becomes visible in
- * minutes", which only needs a short, fixed lookback, not a user-facing
- * date-range control (P4-09 ships none).
+ * The "unknown-kind events 24h" tile fixes this window — the whole view is
+ * framed around "how a new release becomes visible in minutes", which only
+ * needs a short, fixed lookback, not a user-facing date-range control
+ * (none is shipped).
  */
 export const UNKNOWN_KINDS_WINDOW = '-24h'
 
 /**
- * Owns Argus's two `/quality/*` REST endpoints (SPEC §6.2): the unmapped
+ * Owns Argus's two `/quality/*` REST endpoints: the unmapped
  * `event_name` inspector and the hook-latency percentiles. Deliberately
  * does NOT fetch `/api/v1/meta` itself — `useMetaStore()` (already fetched
  * app-wide, 5-minute refresh) is the source for every meta-derived tile
@@ -42,7 +42,7 @@ export const useQualityStore = defineStore('quality', () => {
   )
 
   // No from/to: this endpoint is queried with no window at all and returns everything Argus has ever
-  // measured — there is no "last 24h" framing for hook latency in SPEC §6.2, unlike the unknown-kinds tile.
+  // measured — there is no "last 24h" framing for hook latency, unlike the unknown-kinds tile.
   const hookLatency = useApi<QualityHookLatencyResponse>(
     (signal) => {
       const client = useApiClient()
@@ -55,7 +55,7 @@ export const useQualityStore = defineStore('quality', () => {
 
   /**
    * Sum of every unmapped group's `count` in the window. `null` only until
-   * the request has actually resolved once (SPEC §6.1: "we don't know
+   * the request has actually resolved once ("we don't know
    * yet" is not "zero") — an empty `rows: []` (the default, clean-data
    * response) is a real, measured "0 unmapped events", not an unknown.
    */

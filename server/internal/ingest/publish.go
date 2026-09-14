@@ -1,6 +1,3 @@
-// Package ingest — publish.go implements P5-03's real Publisher (HubPublisher):
-// turns persisted flushes into stream.Envelopes with sessions, debounces
-// session frames per SPEC §5.3. Imports internal/stream (allowed SPEC §3.1).
 package ingest
 
 import (
@@ -88,11 +85,8 @@ func (c *projectCache) set(id, project string) {
 	c.m[id] = project
 }
 
-// HubPublisher implements ingest.Publisher (SPEC §5.3): Publish emits envelopes,
-// Run debounces dirty sessions and publishes their summaries. Event has no project
-// field; Project comes from projectCache, populated by debounce loop's SessionSummary
-// reads (Publish never does I/O). New sessions' first events publish Project=""
-// (cache miss), self-correcting when SessionStart lands and Run fills cache.
+// HubPublisher implements ingest.Publisher (SPEC §5.3): fast Publish emits envelopes,
+// Run debounces/publishes session summaries and fills projectCache (cache miss → Project="").
 type HubPublisher struct {
 	hub    HubTarget
 	reader SessionReader

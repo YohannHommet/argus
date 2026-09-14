@@ -1,11 +1,11 @@
 /**
  * Builds the ECharts option fragment (`backgroundColor`, `textStyle`,
  * palette, semantic colors) from `theme.css`'s resolved CSS custom
- * properties, so charts and the rest of the UI can never drift apart
- * (SPEC §6.1). `useChartTheme` re-derives it whenever `uiStore.theme`
- * changes; charts spread the result into their `option` computed so the
- * AC ("toggling the theme changes backgroundColor/textStyle.color in the
- * regenerated option") is literally what a mount test reads back.
+ * properties, so charts and the rest of the UI can never drift apart.
+ * `useChartTheme` re-derives it whenever `uiStore.theme`
+ * changes; charts spread the result into their `option` computed so
+ * toggling the theme changing backgroundColor/textStyle.color in the
+ * regenerated option is literally what a mount test reads back.
  */
 import { computed, type ComputedRef } from 'vue'
 
@@ -59,7 +59,7 @@ const FALLBACKS: Record<string, string> = {
   '--chart-5': 'oklch(0.7 0.17 350)',
   '--accept': 'oklch(0.72 0.17 155)',
   '--reject': 'oklch(0.704 0.191 22.216)',
-  /** --cost's documented fallback is --foreground's own fallback: cost is neutral text, never a second hue (gap #1). */
+  /** --cost's documented fallback is --foreground's own fallback: cost is neutral text, never a second hue. */
   '--cost': 'oklch(0.985 0 0)',
   '--warn': 'oklch(0.78 0.15 85)',
   '--unknown': 'oklch(0.708 0 0)',
@@ -118,8 +118,8 @@ export function useChartTheme(): ComputedRef<ChartTheme> {
 }
 
 /**
- * Cycles the 5-color categorical palette by index. `limit_series` (SPEC
- * §4.3) allows up to 8 named series plus an `other` bucket, well past the
+ * Cycles the 5-color categorical palette by index. `limit_series` allows
+ * up to 8 named series plus an `other` bucket, well past the
  * 5-color palette, so series 6+ intentionally repeat colors 1-5 rather
  * than inventing new hex values.
  */
@@ -131,7 +131,7 @@ export function paletteColor(theme: ChartTheme, index: number): string {
  * Sets a token's resolved `oklch(L C H [/ A%])` string to a new alpha
  * channel — `theme.css` never stores alpha on `--primary`/`--chart-*` (only
  * `--border` and `--input` bake one in), so this is how chart chrome gets a
- * translucent fill (dataZoom's selected range, hover halos, the round-3
+ * translucent fill (dataZoom's selected range, hover halos, the
  * lighter grid lines below) without a second token per color. No-ops
  * (returns the input unchanged) on anything not `oklch(...)`. Replaces
  * (rather than appends) any alpha component already present, so passing an
@@ -214,7 +214,7 @@ export function metricColor(t: ChartTheme, key: MetricKey): string {
 }
 
 /**
- * Shared legend chrome (gap #3, "chart chrome"): a small flat swatch and
+ * Shared legend chrome: a small flat swatch and
  * muted, theme-matched label instead of vue-echarts/ECharts's own default
  * legend styling, which otherwise clashes with the rest of the UI's type
  * scale. Every chart with a legend (`TimeSeriesChart`, `BreakdownChart`'s
@@ -232,7 +232,7 @@ export function chartLegend(t: ChartTheme) {
 }
 
 /**
- * Shared dataZoom chrome (gap #3): a slim, low-contrast slider rather than
+ * Shared dataZoom chrome: a slim, low-contrast slider rather than
  * ECharts's default heavy gray scrollbar-with-handles-and-shadow, which
  * reads as a stray UI widget rather than part of the chart. The inside
  * (scroll/drag) zoom is kept for interaction; only the slider's paint is

@@ -1,13 +1,13 @@
 /**
- * Icon + label metadata for every `Kind` (SPEC §1.5.1) — the Argus-normalised,
+ * Icon + label metadata for every `Kind` — the Argus-normalised,
  * closed vocabulary that Argus itself computes (as opposed to `decision`,
  * `decision_source`, `tool_source`, `query_source`, `permission_mode`, which
  * are vendor-supplied free-form strings and must never be switched over —
- * SPEC §4.4/§6.1, see `RawValue.vue`).
+ * see `RawValue.vue`).
  *
  * `Record<Kind, EventKindMeta>` makes a missing `Kind` a **compile error**:
- * the PLAN.md P4-04 AC ("an icon/label for every Kind including the three
- * hook.* kinds and unknown") becomes structural rather than a test that can
+ * an icon/label for every `Kind`, including the three hook.* kinds and
+ * unknown, becomes structural rather than a test that can
  * rot when `Kind` grows. `eventKinds.test.ts` additionally asserts every
  * entry has a non-empty label at runtime, because a `Record` can still be
  * satisfied by a placeholder (e.g. `label: ''`) without failing the

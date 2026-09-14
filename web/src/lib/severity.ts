@@ -1,8 +1,7 @@
 /**
  * Data-driven severity grading for the sessions table's Reject % and Cost
- * columns (round-4 UI gap: "the table encodes no severity in color"). Pure,
- * no Vue imports — usable from stores/components/tests alike, same spirit
- * as `format.ts`.
+ * columns. Pure, no Vue imports — usable from stores/components/tests
+ * alike, same spirit as `format.ts`.
  */
 
 export type Severity = 'neutral' | 'warn' | 'critical'
@@ -15,7 +14,7 @@ const REJECT_RATE_CRITICAL_THRESHOLD = 0.15
  * rate is a rate regardless of which sessions happen to be loaded, so
  * "5% rejects" should read the same whether it's sitting next to a page of
  * mostly-0% sessions or a page of mostly-10% ones. `null`/`undefined`/`NaN`
- * (rate is undefined, e.g. zero tool calls — SPEC §6.1) grades neutral: an
+ * (rate is undefined, e.g. zero tool calls) grades neutral: an
  * unmeasured rate is not evidence of a problem.
  */
 export function classifyRejectRateSeverity(rate: number | null | undefined): Severity {

@@ -11,13 +11,7 @@ const (
 	metricsSubsystem = "ingest"
 )
 
-// Metrics is the complete SPEC §3.6 self-observability surface for the
-// pipeline: "queue depth gauge, batch-size histogram, per-source event
-// counters, dedup counter, write-duration histogram, retry counters by
-// class, argus_ingest_lag_seconds, dropped, too_old". Fields are exported so
-// callers (tests, and a future /metrics-adjacent admin view) can read them
-// directly with prometheus/client_golang/prometheus/testutil rather than
-// scraping HTTP.
+// Metrics implements SPEC §3.6 self-observability (exported fields for testutil, not scraping).
 type Metrics struct {
 	// QueueDepth is a per-lane gauge ("event"|"metric") of buffered batches.
 	QueueDepth *prometheus.GaugeVec

@@ -19,12 +19,7 @@ import (
 	"github.com/YohannHommet/argus/server/internal/pricing"
 )
 
-// Source ranks for the field_ranks precedence mechanism (SPEC §1.5.3):
-// "Ranks: otel_log=30, hook=20, otel_metric=10, sim = the rank of the source
-// it imitates." sim's imitated source isn't yet expressed on model.Event (no
-// ticket has landed that attribute), so it falls back to the hook rank here
-// — documented as a P2-06 assumption for the simulator ticket to revisit,
-// not a silent guess.
+// Source ranks for field_ranks precedence mechanism (SPEC §1.5.3).
 const (
 	rankOTelMetric = 10
 	rankHook       = 20
@@ -47,10 +42,7 @@ func sourceRank(s model.Source) int {
 	}
 }
 
-// rankedValue is a (value, rank, ts) candidate for one field_ranks-governed
-// column, kept while folding a session's events so the batch-local winner
-// (highest rank, later ts on a tie) can be computed before ever touching the
-// database, per SPEC §1.5.3: "equal rank ⇒ later ts wins".
+// rankedValue is a (value, rank, ts) candidate for field_ranks-governed columns (SPEC §1.5.3).
 type rankedValue struct {
 	val  string
 	rank int
@@ -67,9 +59,7 @@ func (r *rankedValue) offer(val string, rank int, ts time.Time) {
 	}
 }
 
-// sessionAgg accumulates one session's contribution from the batch's
-// candidate events (SPEC §1.6 projections table: "session.* events + first/
-// last event seen + aggregates of llm.request").
+// sessionAgg accumulates one session's contribution from batch events (SPEC §1.6 projections table).
 type sessionAgg struct {
 	id         string
 	vendor     string
@@ -85,18 +75,7 @@ type sessionAgg struct {
 	appVersion, entrypoint, terminalType, userEmail, userAccountUUID, orgID rankedValue
 
 	inputTokens, outputTokens, cacheRead, cacheCreate int64
-	// costUSD is reported-only (D-30, docs/review/phase-4-gauntlet.md):
-	// deliberately never includes costEstimatedUSD at this layer, mirroring
-	// the `sessions.cost_usd` column it feeds. That column backs
-	// sessions_cost_idx and is exactly what SPEC §4.3's `sort=cost_usd`
-	// orders by (read_sessions.go's SessionSortCostUSD), so this fix does
-	// NOT close every honesty gap D-30 named: sorting the session list by
-	// cost still ranks an all-estimated session at 0, same as before.
-	// buildSessionCost (read_sessions.go) is what sums reported+estimated
-	// into the wire-level cost.usd this ticket fixes — closing the sort gap
-	// too would need a new sortable column/index and a SPEC §4.3 change,
-	// which is out of this ticket's scope; flagged to the lead as a
-	// deviation to rule on, not silently left for a reader to rediscover.
+	// costUSD is reported-only (D-30): never includes costEstimatedUSD at this layer.
 	costUSD, costEstimatedUSD float64
 	costByQuerySource         map[string]float64
 	models                    map[string]struct{}
@@ -106,10 +85,7 @@ func newSessionAgg(id string) *sessionAgg {
 	return &sessionAgg{id: id, costByQuerySource: map[string]float64{}, models: map[string]struct{}{}}
 }
 
-// attrStr reads a string attribute out of an event's raw payload (SPEC
-// §1.3's "attrs is the full flattened source payload"). Deliberately
-// forgiving: a missing or wrong-typed key yields "", never an error (SPEC
-// §1.5.2: "a missing field yields NULL, never an error").
+// attrStr reads a string attribute from event's raw payload (forgiving: missing/wrong-type yields "").
 func attrStr(attrs map[string]any, key string) string {
 	v, ok := attrs[key]
 	if !ok {
@@ -119,13 +95,7 @@ func attrStr(attrs map[string]any, key string) string {
 	return s
 }
 
-// foldSessionEvents groups persisted candidate events by session_id and
-// folds each into a sessionAgg, in (ts, dedup_key) order (the same order the
-// caller already sorted candidates into for the lock-ordering invariant), so
-// rankedValue.offer's tie-break ("equal rank ⇒ later ts wins") sees events
-// in a stable, deterministic order. prices is WriteBatch's SPEC §2.4 price
-// table for this transaction — nil when no candidate needs it (see
-// write.go's doc on why loading it is conditional).
+// foldSessionEvents groups and folds candidate events by session_id into sessionAgg (SPEC §2.4 prices conditional).
 func foldSessionEvents(candidates []model.Event, prices []pricing.Price) map[string]*sessionAgg {
 	out := map[string]*sessionAgg{}
 	for _, e := range candidates {
@@ -168,13 +138,7 @@ func (a *sessionAgg) foldEvent(e model.Event, prices []pricing.Price) {
 			ts := e.TS
 			a.startedAt = &ts
 		}
-		// SPEC §1.5.3: "sessions.cwd, project | hook (SessionStart.cwd,
-		// CwdChanged) ... sessions.start_type ... | hook". These columns are
-		// deliberately extracted from hook-sourced events only (never from
-		// an otel_log candidate, however it's spelled in attrs): OTel's only
-		// cwd-adjacent signal is workspace.host_paths, a list SPEC §1.5.3
-		// explicitly rejects as "less direct", so there is nothing for it
-		// to compete with here — the winner is fixed, not just usually-higher-rank.
+		// SPEC §1.5.3: cwd/project/start_type extracted from hook-sourced events only.
 		if e.Source == model.SourceHook {
 			if cwd := attrStr(e.Attrs, "cwd"); cwd != "" {
 				a.cwd.offer(cwd, rankHook, e.TS)
@@ -211,37 +175,18 @@ func (a *sessionAgg) foldEvent(e model.Event, prices []pricing.Price) {
 		if e.CacheCreationTokens != nil {
 			a.cacheCreate += *e.CacheCreationTokens
 		}
-		// D-30 (docs/review/phase-4-gauntlet.md, owner-ratified 2026-08-18):
-		// branch on e.CostUSD, not e.CostSource. Before this fix, this
-		// branched on cost_source=="estimated" — a value nothing in this
-		// codebase ever mints (otel_logs.go stamped "reported"
-		// unconditionally, and no other producer sets "estimated" at all),
-		// so cost_estimated_usd was structurally always 0 regardless of
-		// what internal/pricing could have resolved. Branching on
-		// e.CostUSD instead stays correct no matter what any normalizer
-		// stamps into cost_source (belt and braces with otel_logs.go's own
-		// D-30 fix, which now only ever sets cost_source="reported" when
-		// cost_usd is non-nil).
+		// D-30: branch on e.CostUSD, not e.CostSource.
 		switch {
 		case e.CostUSD != nil:
 			a.costUSD += *e.CostUSD
-			// SPEC §2.1: "map: raw query_source value ('' when absent) ->
-			// summed reported cost. Uninterpreted." This map is
-			// reported-only by design — an estimated contribution must
-			// never widen it (that would be an undocumented SPEC §2.1
-			// deviation).
+			// SPEC §2.1: query_source map is reported-only.
 			qs := ""
 			if e.QuerySource != nil {
 				qs = *e.QuerySource
 			}
 			a.costByQuerySource[qs] += *e.CostUSD
 		case e.Model != nil && *e.Model != "":
-			// No reported cost_usd: SPEC §2.4's estimation rule — price
-			// this event's own tokens at its own ts. pricing.ErrNoPrice
-			// (ok=false) means contribute nothing, never a zero standing
-			// in for a real price (internal/pricing.Estimate's documented
-			// contract) — and never fall into cost_by_query_source, which
-			// is reported-only.
+			// SPEC §2.4: estimate uncosted tokens (pricing.ErrNoPrice contributes nothing).
 			tokens := costTokens{}
 			if e.InputTokens != nil {
 				tokens.input = *e.InputTokens
@@ -264,9 +209,7 @@ func (a *sessionAgg) foldEvent(e model.Event, prices []pricing.Price) {
 		}
 	}
 
-	// SPEC §1.5.3: app_version/entrypoint/terminal_type/user_*/org_id are
-	// otel_log-only ("hooks don't carry them"), with app_version falling
-	// back to the resource service.version attribute.
+	// SPEC §1.5.3: app_version/entrypoint/terminal_type/user_*/org_id are otel_log-only.
 	if e.Source == model.SourceOTelLog {
 		if v := attrStr(e.Attrs, "app.version"); v != "" {
 			a.appVersion.offer(v, rankOTelLog, e.TS)

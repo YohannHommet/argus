@@ -2,9 +2,9 @@
 /**
  * One turn's worth of collapsed timeline items under a sticky header, or —
  * when `promptId` is `null` — the explicit "no turn" group for events with
- * `prompt_id === null` (real data has these, e.g. `hook.registered`;
- * PLAN.md P4-04 AC / Phase-4 exit criterion 3). The header shows per-turn
- * cost/tokens from `turns` (P4-04's `Turn.cost_usd`/token fields) when a
+ * `prompt_id === null` (real data has these, e.g. `hook.registered`).
+ * The header shows per-turn
+ * cost/tokens from `turns` (`Turn.cost_usd`/token fields) when a
  * matching `Turn` is supplied; the no-turn group has no such aggregate, so
  * it never claims one.
  *
@@ -52,9 +52,9 @@ interface Props {
   collapsed?: boolean
   /** True when an earlier group already rendered this same (non-null) prompt_id — see module doc. */
   isContinuation?: boolean
-  /** The currently-open inspector's event_ref, for highlighting the selected row (SPEC/critic: "row selection state must be visible"). */
+  /** The currently-open inspector's event_ref, for highlighting the selected row ("row selection state must be visible"). */
   selectedEventRef?: string | null
-  /** The first event's `ts` in the loaded timeline, forwarded to every `EventRow` for its relative-offset display (round-5: not `session.started_at` — see `EventRow`'s own doc). */
+  /** The first event's `ts` in the loaded timeline, forwarded to every `EventRow` for its relative-offset display (not `session.started_at` — see `EventRow`'s own doc). */
   originTs?: string | null
   /** The session's largest observed `duration_ms`, forwarded to every `EventRow` for its duration bar's scale. */
   maxDurationMs?: number
@@ -78,7 +78,7 @@ const isNoTurn = computed(() => props.promptId === null)
  * A trailing "no turn" group of exactly one event (a stray hook/log line between turns, not a turn
  * in its own right) gets a visually quieter header — no explanatory subtitle, tighter padding — so a
  * run of these doesn't read as a wall of identical, seemingly-broken section headers. Still its own
- * group (SPEC's contiguous-run honesty — see Timeline.vue's module doc), just de-emphasised.
+ * group (an honest contiguous-run split — see Timeline.vue's module doc), just de-emphasised.
  */
 const isCompactSingleton = computed(() => isNoTurn.value && props.items.length === 1)
 
@@ -118,13 +118,7 @@ function isSelected(item: TimelineItem): boolean {
       data-testid="timeline-group-header"
       @click="emit('toggle-collapse')"
     >
-      <!--
-        The real, only interactive control for this header (axe "nested-interactive": a header with
-        its own role="button" wrapping this button was two interactive controls doing the same thing
-        — see PLAN.md P6-04). The header's own @click above is a bonus mouse convenience ("click
-        anywhere in the row"), not a second way to reach this via keyboard/AT; this button alone
-        carries the label, aria-expanded and focus ring a screen reader / keyboard user needs.
-      -->
+      <!-- The only interactive control here (axe nested-interactive: two controls doing the same thing) — the header's own @click is a mouse convenience, not a second keyboard/AT path. -->
       <button
         type="button"
         class="text-muted-foreground hover:text-foreground focus-visible:ring-ring shrink-0 rounded outline-none focus-visible:ring-2"

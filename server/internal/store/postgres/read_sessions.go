@@ -1,22 +1,5 @@
-// Package postgres — read_sessions.go implements store.Reader's ListSessions,
-// GetSession, and ListTurns (SPEC §3.3, §4.3, P3-02). ListSessions is one of
-// the three hand-built dynamic-filter/dynamic-sort queries SPEC §3.3 carves
-// out of sqlc, built from filter.go's whitelist clause builder plus this
-// file's own keyset-pagination predicate and cursor codec. GetSession and
-// ListTurns are fixed, single-session-parameter reads and go through sqlc
-// (db/queries/read_sessions.sql) — except SessionDetail's two
-// percentile-based aggregates (top_tools, hook_latency), which are
-// hand-written pgx queries here for the reason documented in
-// read_sessions.sql: sqlc mis-infers percentile_cont's result column as
-// NOT NULL.
-//
-// Cursor codec note: this file's encode/decodeSessionCursor implement the
-// SAME "base64url(json({k,v}))" wire format httpapi/cursor.go documents
-// (SPEC §4.1), independently rather than by importing that package —
-// depguard forbids internal/store depending on internal/httpapi (SPEC
-// §3.1: dependency direction is strictly inward). The duplication is a
-// handful of lines on each side of a documented wire contract, not two
-// independently-evolving formats.
+// Package postgres implements store.Reader's ListSessions, GetSession, and ListTurns (SPEC §3.3, §4.3, P3-02).
+// Cursor codec mirrors httpapi's format (SPEC §4.1) independently due to depguard constraint (SPEC §3.1).
 package postgres
 
 import (

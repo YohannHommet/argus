@@ -1,25 +1,13 @@
-// Package model holds Argus's canonical domain types (SPEC §3.1): the
-// append-only Event record, its closed Kind/Source/Correlation/Status
-// taxonomies (SPEC §0 — the *only* closed vocabularies in the system), the
-// dedup-key and event-ref codecs, the clock clamp, and the read-side
-// projection shapes the store and HTTP layers pass around. This package
-// depends on nothing but stdlib (depguard-enforced, SPEC §3.1): it is the
-// leaf of the dependency graph so every other package can share these types
-// without a cycle.
+// Package model holds Argus's canonical domain types (SPEC §3.1): Event record,
+// the four closed taxonomies (Kind/Source/Correlation/Status, SPEC §0), codecs,
+// and read-side projection shapes. It is the leaf of the dependency graph (depguard-enforced).
 package model
 
-// Kind is Argus's own normalized event taxonomy (SPEC §1.4). It is a closed
-// set — one of the four vocabularies SPEC §0 permits to be closed (`kind`,
-// `source`, `correlation`, `status`) — but closed does not mean total: any
-// `event_name` the normalizer does not recognize maps to KindUnknown rather
-// than being dropped or rejected, so the taxonomy can never reject an input,
-// only decline to interpret it (SPEC §1.4: "never dropped").
+// Kind is Argus's normalized event taxonomy (SPEC §1.4), closed but not total:
+// unrecognized event_names map to KindUnknown, never dropped or rejected (SPEC §1.4).
 type Kind string
 
-// Kind constants mirror the SPEC §1.4 table exactly, one per row. There is
-// deliberately no `KindMetricSample`: OTLP metric data points are never
-// mirrored into `events` (SPEC §1.4, §1.8), so a permanently-dead switch
-// branch would fail the `exhaustive` linter for nothing.
+// Kind constants mirror SPEC §1.4 exactly. No KindMetricSample: would be permanently dead code (SPEC §1.4, §1.8).
 const (
 	KindSessionStart Kind = "session.start"
 	KindSessionEnd   Kind = "session.end"
@@ -80,9 +68,7 @@ const (
 	KindUnknown Kind = "unknown"
 )
 
-// AllKinds returns every defined Kind, including KindUnknown. Used by tests
-// to assert every constant round-trips and is covered by Valid, and usable
-// by callers (e.g. facets) that need to enumerate the taxonomy.
+// AllKinds returns every defined Kind, including KindUnknown, for tests and enumeration.
 func AllKinds() []Kind {
 	return []Kind{
 		KindSessionStart, KindSessionEnd,
@@ -110,22 +96,13 @@ var validKinds = func() map[Kind]struct{} {
 	return m
 }()
 
-// Valid reports whether k is one of the defined Kind constants. It is a
-// membership check, not a rejection mechanism at the ingest boundary — the
-// normalizer always has KindUnknown available, so Valid is for internal
-// assertions (tests, defensive checks) rather than input validation that
-// could refuse an event (SPEC §0).
+// Valid reports whether k is a defined Kind; not a rejection mechanism (SPEC §0).
 func (k Kind) Valid() bool {
 	_, ok := validKinds[k]
 	return ok
 }
 
-// Group is the SPEC §1.4 table's "Group" column: the coarse category a Kind
-// belongs to, used for faceting and UI grouping without hand-maintaining a
-// second table. The switch below is exhaustive over Kind (golangci-lint's
-// `exhaustive` linter is configured to check exactly this type, SPEC's
-// deviation D-11 in .golangci.yml) so a new Kind constant added without a
-// matching case here fails CI immediately.
+// Group is the coarse category a Kind belongs to (SPEC §1.4), with an exhaustive switch (D-11).
 type Group string
 
 // Group constants match the SPEC §1.4 table's Group column verbatim.
@@ -176,9 +153,6 @@ func (k Kind) Group() Group {
 	case KindUnknown:
 		return GroupFallback
 	}
-	// Unreachable while every Kind constant has a case above; the
-	// `exhaustive` linter (SPEC .golangci.yml deviation D-11) fails the
-	// build if a new Kind is added without a matching case, which is the
-	// point of not having a `default` here.
+	// Unreachable; exhaustive linter (D-11) requires all cases before build.
 	return GroupFallback
 }

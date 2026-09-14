@@ -10,7 +10,7 @@ import { notifyApiFailure } from '@/lib/toast'
 export type Meta = components['schemas']['Meta']
 export type Facets = components['schemas']['Facets']
 
-/** SPEC §6.4: `/api/v1/meta` + `/api/v1/facets`, fetched at boot, refreshed every 5 minutes. */
+/** `/api/v1/meta` + `/api/v1/facets`, fetched at boot, refreshed every 5 minutes. */
 export const META_REFRESH_INTERVAL_MS = 5 * 60 * 1000
 
 export const useMetaStore = defineStore('meta', () => {
@@ -117,7 +117,7 @@ export const useMetaStore = defineStore('meta', () => {
   const hasNoData = computed(() => meta.value !== null && facets.value !== null && facets.value.projects.length === 0)
 
   /**
-   * `metrics_only_projects` (SPEC §4.1 "Null vs zero") lives on the
+   * `metrics_only_projects` lives on the
    * analytics `Summary` response, not on `Meta`/`Facets` — it's a
    * per-window fact ("which of the projects in *this* window only ever
    * emitted metrics, never logs"), not a global one. Neither endpoint this
@@ -132,11 +132,11 @@ export const useMetaStore = defineStore('meta', () => {
   const toolDetailsSeen = computed(() => meta.value?.data_quality.tool_details_seen ?? false)
 
   /**
-   * Where to point a "send your telemetry here" setup hint. `Meta` (SPEC
-   * §4.3) carries no ingest-endpoint field — it describes what Argus has
+   * Where to point a "send your telemetry here" setup hint. `Meta`
+   * carries no ingest-endpoint field — it describes what Argus has
    * already seen, not how to reach it — so this is derived from the
    * browser's own origin, which is correct for Argus's actual deployment
-   * shape (SPEC §4.4: ops/read/ingest are one origin, `servers: [{url: /}]`
+   * shape (ops/read/ingest are one origin, `servers: [{url: /}]`
    * in openapi.yaml).
    */
   const endpointUrl = computed(() => window.location.origin)

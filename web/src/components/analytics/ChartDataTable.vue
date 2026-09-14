@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * PLAN.md P6-04: an accessible fallback for an ECharts canvas, which has no DOM a screen reader (or
+ * An accessible fallback for an ECharts canvas, which has no DOM a screen reader (or
  * axe) can read — a `<details>` disclosure hides a real `<table>` of the same series behind a toggle
  * so the chart's data isn't chart-only, without permanently doubling every panel's vertical space.
  * Shared by `BreakdownChart.vue` and `TimeSeriesChart.vue`: both already compute a formatted

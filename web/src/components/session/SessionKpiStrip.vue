@@ -19,14 +19,14 @@ const props = defineProps<{
 const totalTokens = computed(() => {
   const t = props.session?.tokens
   if (!t) return null
-  // SPEC has no single "session tokens" field — this strip's one number is input + output +
+  // There is no single "session tokens" field — this strip's one number is input + output +
   // cache_read + cache_creation, every token the session actually moved through the model.
   return t.input + t.output + t.cache_read + t.cache_creation
 })
 
 /**
- * `tool_call_count === 0` means the rate is *undefined*, not zero (SPEC
- * §6.1's null-vs-zero rule extended to a derived ratio: a 0/0 division is a
+ * `tool_call_count === 0` means the rate is *undefined*, not zero (the
+ * null-vs-zero distinction extended to a derived ratio: a 0/0 division is a
  * "we don't know" fact, not a measured "0%"). `null`/`undefined` is handled
  * the same way defensively, even though `SessionSummary.tool_call_count` is
  * typed as a non-nullable `number` — schema.d.ts's shape is the contract as
@@ -46,11 +46,10 @@ const rejectRateReason = computed(() => {
 })
 
 /**
- * D-30 (docs/review/phase-4-gauntlet.md, owner-ratified 2026-08-18): `cost.usd`
- * is `reported_usd + estimated_usd` (SPEC §2.4) — before the server-side fix,
+ * `cost.usd` is `reported_usd + estimated_usd` — before a server-side fix,
  * an all-`--cost-mode=omit` session rendered `Cost $0.00` here with nothing to
- * tell an operator that $0.00 meant "never measured", not "measured zero"
- * (SPEC §6.1). `estimated_share` is the number that distinguishes them: 0
+ * tell an operator that $0.00 meant "never measured", not "measured zero".
+ * `estimated_share` is the number that distinguishes them: 0
  * means every dollar shown was vendor-reported (today's behaviour, byte for
  * byte — the marker below simply never renders), `>0` means some or all of it
  * is Argus's own `model_prices` estimate.
@@ -68,10 +67,7 @@ const estimatedBadgeReason = computed(() => {
 </script>
 
 <template>
-  <!--
-    A single-row band, not six bordered cards: the KPI strip is a caption for the tabs below, not
-    its own dashboard, so it's one container with divider lines instead of six boxes of padding.
-  -->
+  <!-- A single-row band, not six bordered cards — the KPI strip is a caption for the tabs below, not its own dashboard. -->
   <div
     data-testid="session-kpi-strip"
     class="border-border divide-border bg-card flex flex-wrap divide-x rounded-lg border"

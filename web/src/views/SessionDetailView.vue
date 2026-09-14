@@ -37,7 +37,7 @@ function tabFromRoute(): Tab {
 }
 
 // Tab state lives in the URL query (?tab=…), not a nested route, so a reload re-derives it from
-// `route.query` on mount instead of resetting to the default (PLAN P4-03's "survives reload" AC).
+// `route.query` on mount instead of resetting to the default ("survives reload").
 const activeTab = ref<Tab>(tabFromRoute())
 
 function setTab(next: string | number): void {
@@ -57,8 +57,7 @@ watch(
   },
 )
 
-// PLAN P4-05: a node click navigates to ?tab=timeline&agent_id=…, and the store's timeline filter
-// must pick that up. `null` clears the filter when the param is absent (e.g. leaving a filtered link).
+// A node click navigates to ?tab=timeline&agent_id=…, and the store's timeline filter must pick that up; `null` clears it when the param is absent (e.g. leaving a filtered link).
 watch(
   () => route.query.agent_id,
   (raw) => {
@@ -85,11 +84,12 @@ watch(
 )
 
 /**
- * PLAN.md P5-06 / SPEC §6.2 ("follow session jumps to detail in live mode"): honours `?live=1`
- * literally. P5-05 owns the actual follow link and its exact param name isn't visible from here, so
- * the *absence* of the param still defaults to live for an `active` session (Phase-5 exit criterion
- * 2 — opening an actively-generating session must show new rows with no manual refresh) — the feature
- * works whether or not P5-05 ends up using this exact name.
+ * "Follow session jumps to detail in live mode": honours `?live=1`
+ * literally. The follow link's exact param name isn't visible from here, so
+ * the *absence* of the param still defaults to live for an `active` session
+ * (opening an actively-generating session must show new rows with no manual
+ * refresh) — the feature works whether or not the follow link ends up using
+ * this exact name.
  */
 function applyLiveDefault(id: string): void {
   const raw = route.query.live
@@ -122,7 +122,7 @@ onBeforeUnmount(() => {
   store.stopLive()
 })
 
-// Lazy per tab (PLAN P4-03): this view owns tab activation, so it triggers each panel's first fetch.
+// Lazy per tab: this view owns tab activation, so it triggers each panel's first fetch.
 watch(
   activeTab,
   (tab) => {
@@ -202,12 +202,7 @@ const hasSessionYet = computed(() => store.session !== null)
           Partial — no session.start seen
         </Badge>
 
-        <!--
-          PLAN.md P5-06: "off" stops the timeline from appending new rows but never closes the
-          underlying subscription — see `sessionDetail.ts`'s `liveEnabled` doc comment for why this is
-          not `liveStore.pause()`. `role="status"`/label text make the toggle's current state
-          announced, not just its control.
-        -->
+        <!-- "off" stops the timeline appending new rows but never closes the subscription — see sessionDetail.ts's liveEnabled doc for why this isn't liveStore.pause(). -->
         <label class="ml-auto flex items-center gap-2 text-xs">
           <span
             class="text-muted-foreground"
@@ -226,10 +221,7 @@ const hasSessionYet = computed(() => store.session !== null)
         {{ store.session!.vendor }} · {{ store.session!.id }} · {{ store.session!.cwd }}
       </p>
 
-      <!--
-        Started/last-event and decision_summary.exact_share (SPEC §4.3) share one compact meta line
-        instead of three stacked paragraphs, so the header stays a caption, not a competing block.
-      -->
+      <!-- Started/last-event and decision_summary.exact_share share one compact meta line instead of three stacked paragraphs, so the header stays a caption. -->
       <p class="text-muted-foreground text-xs">
         Started
         <time :title="formatAbsoluteTime(store.session!.started_at)">
@@ -263,11 +255,7 @@ const hasSessionYet = computed(() => store.session !== null)
       </TabsList>
 
       <TabsContent value="timeline">
-        <!--
-          raw_events_expired (SPEC §1.x, retention): the raw log was pruned, but the aggregates above
-          are still real — a different fact from "no events", so it gets its own notice, not P4-04's
-          empty-timeline placeholder.
-        -->
+        <!-- raw_events_expired: the raw log was pruned, but the aggregates above are still real — a different fact from "no events", so it gets its own notice. -->
         <div
           v-if="store.session!.raw_events_expired"
           data-testid="raw-events-expired-notice"
@@ -288,12 +276,7 @@ const hasSessionYet = computed(() => store.session !== null)
       </TabsContent>
 
       <TabsContent value="subagents">
-        <!--
-          The tree is this tab's primary content; the cost table is reference material, so it's
-          capped and scrollable on its own (CostAttributionCard's `max-h-48`) rather than growing to
-          its row count. The tree sizes to its actual content — a session with only a couple of
-          subagents must not reserve a fixed tall slot it doesn't use.
-        -->
+        <!-- The tree is primary content and sizes to it; the cost table is reference material, capped/scrollable on its own (CostAttributionCard's max-h-48). -->
         <div class="flex flex-col gap-3">
           <div>
             <SubagentTree
@@ -305,11 +288,7 @@ const hasSessionYet = computed(() => store.session !== null)
               @retry="store.loadSubagents({ force: true })"
             />
           </div>
-          <!--
-            estimated-usd/estimated-share come from the *session* projection, not `costAttribution`:
-            SPEC §2.1 makes `by_query_source` reported-cost-only, so an all-estimated session has
-            nothing in it to derive an estimate from (D-30).
-          -->
+          <!-- estimated-usd/estimated-share come from the *session* projection, not costAttribution: by_query_source is reported-cost-only, so an all-estimated session has nothing to derive an estimate from. -->
           <CostAttributionCard
             class="shrink-0"
             :data="store.costAttribution"
@@ -323,11 +302,7 @@ const hasSessionYet = computed(() => store.session !== null)
       </TabsContent>
 
       <TabsContent value="tools">
-        <!--
-          `show-session="false"`: this is one session's tool calls, so a
-          session column would repeat the same id on every row. The
-          cross-session /tools view passes true.
-        -->
+        <!-- show-session="false": this is one session's tool calls, so a session column would repeat the same id on every row; the cross-session /tools view passes true. -->
         <ToolCallTable
           :rows="store.toolCalls"
           :loading="store.toolCallsLoading"

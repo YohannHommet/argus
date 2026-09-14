@@ -1,7 +1,4 @@
-// Package postgres — read_analytics.go implements store.Reader's analytics reads.
-// Queries are fixed (sqlc from db/queries/read_analytics.sql) except filter logic.
-// Tool_name/decision_source/error_type breakdowns read tool_calls (not rollups).
-// dimension=query_source reads sessions.cost_by_query_source (rollups carry no query_source).
+// Package postgres implements store.Reader's analytics reads; queries mostly fixed (sqlc), filter logic hand-built.
 package postgres
 
 import (

@@ -2,9 +2,9 @@
  * Pure formatting helpers (no Vue imports — usable from stores, tests, and
  * components alike). Every function returns `EM_DASH` for `null`/
  * `undefined`/unparseable input rather than `0`, `''`, or `Invalid Date`:
- * SPEC §6.1 treats "we don't know" and "we measured zero" as different
- * facts, and a formatter is the last line of defence against collapsing
- * them back together.
+ * "we don't know" and "we measured zero" are different facts, and a
+ * formatter is the last line of defence against collapsing them back
+ * together.
  */
 
 export const EM_DASH = '—'
@@ -114,7 +114,7 @@ const relativeFormatter = new Intl.RelativeTimeFormat('en', { numeric: 'auto' })
 /**
  * `"3 minutes ago"` via `Intl.RelativeTimeFormat`. Returns `EM_DASH` for a
  * null/unparseable timestamp rather than `Invalid Date` — the `partial:
- * true` session case (`started_at: null`, SPEC §1.7) must never format an
+ * true` session case (`started_at: null`) must never format an
  * un-formattable date.
  */
 export function formatRelativeTime(iso: string | null | undefined, now: Date = new Date()): string {
@@ -172,8 +172,7 @@ function formatElapsed(ms: number): string {
  * in the loaded timeline*, passed in by the caller — see `Timeline.vue`'s `originTs`), not
  * wall-clock "now" (`formatRelativeTime` above is for that): a column of rows each repeating the
  * same absolute date is unscannable, an offset from a shared origin is. `EM_DASH` when either
- * timestamp is missing/unparseable — never a fabricated `"+0s"` for a session with no known origin
- * (SPEC's partial-session case).
+ * timestamp is missing/unparseable — never a fabricated `"+0s"` for a session with no known origin.
  */
 export function formatRelativeOffset(iso: string | null | undefined, originIso: string | null | undefined): string {
   if (!iso || !originIso) return EM_DASH

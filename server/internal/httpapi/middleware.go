@@ -98,10 +98,8 @@ func CORS(origins string) func(http.Handler) http.Handler {
 	}
 }
 
-// StreamAwareTimeout wraps chi's Timeout, exempting SSE routes to avoid killing live streams.
-// SSE handlers select r.Context().Done() for teardown; chi's Timeout would fire at exactly
-// `timeout` and abort the stream. Chi's fixed middleware stack forbids routing-level exemption,
-// so we check isStreamPath (sse.go) per-request to bypass Timeout for stream routes only.
+// StreamAwareTimeout wraps chi's Timeout, exempting SSE routes to avoid killing live streams
+// (chi's middleware stack forbids routing-level exemption, so we check isStreamPath per-request).
 func StreamAwareTimeout(timeout time.Duration) func(http.Handler) http.Handler {
 	bound := chimw.Timeout(timeout)
 	return func(next http.Handler) http.Handler {

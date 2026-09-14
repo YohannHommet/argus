@@ -1,6 +1,6 @@
 package ingest
 
-// White-box tests: in package ingest to reach unexported Pipeline.testAfterClosingCheck (m5 hook).
+// White-box tests: reach unexported Pipeline.testAfterClosingCheck (m5 hook).
 
 import (
 	"context"

@@ -1,19 +1,5 @@
-// Package postgres — prices.go owns the DB side of docs/SPEC.md §2.4's
-// model_prices table: importing the seeded server/db/prices/*.json price
-// table idempotently (the `argusd prices import` subcommand, SPEC §3.8),
-// and reading the full table back out as []PriceRow for the rollup job
-// (P3-05) and any other caller that needs to resolve a price. PriceRow
-// mirrors internal/pricing.Price field-for-field but is declared here
-// rather than being internal/pricing.Price itself: this package's job is
-// isolating every pgtype/numeric/date conversion the DB driver needs behind
-// plain Go types, the same reason gen.ModelPrice (sqlc's own pgtype-typed
-// row) is never handed to a caller directly. internal/pricing is a leaf
-// package depguard's "store" rule permits internal/store to import (it
-// denies only internal/httpapi and internal/query — see internal/pricing's
-// package doc for why the algorithm lives there and not in
-// internal/query/pricing), so the rollup job (rollups.go) converts a
-// []PriceRow into a []pricing.Price once per run and calls pricing.Estimate
-// directly instead of reimplementing its lookup.
+// Package postgres owns the model_prices DB side (SPEC §2.4): seeding and reading for the rollup job (P3-05).
+// PriceRow isolates pgtype conversions; internal/pricing holds the lookup algorithm.
 package postgres
 
 import (
@@ -67,12 +53,7 @@ type PriceImportSummary struct {
 	Unchanged int
 }
 
-// ImportPrices reads every server/db/prices/*.json file embedded in the
-// binary (argusdb.PricesFS) and upserts each row into model_prices,
-// keyed on (model, effective_from) as SPEC §2.4 requires. It is
-// idempotent: re-running it with unchanged seed data updates nothing (see
-// UpsertModelPrice's WHERE clause) — PriceImportSummary.Unchanged counts
-// those rows rather than silently reporting them as updated.
+// ImportPrices upserts embedded price files idempotently; unchanged rows tracked in PriceImportSummary.Unchanged.
 func (s *Store) ImportPrices(ctx context.Context) (PriceImportSummary, error) {
 	rows, err := loadSeedPrices(argusdb.PricesFS)
 	if err != nil {
@@ -103,12 +84,7 @@ func (s *Store) ImportPrices(ctx context.Context) (PriceImportSummary, error) {
 	return summary, nil
 }
 
-// ListModelPrices returns every model_prices row as []PriceRow, ready for
-// the caller (the rollup job, P3-05) to convert into
-// internal/pricing.Price and hand to pricing.Estimate. Ordering is
-// not significant to pricing.Estimate, which scans the whole slice, but
-// ListModelPrices (the sqlc query) orders by (model, effective_from) for
-// deterministic output.
+// ListModelPrices returns all model_prices rows for pricing.Estimate, ordered by (model, effective_from).
 func (s *Store) ListModelPrices(ctx context.Context) ([]PriceRow, error) {
 	rows, err := gen.New(s.pool).ListModelPrices(ctx)
 	if err != nil {

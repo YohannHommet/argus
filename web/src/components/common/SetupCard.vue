@@ -2,17 +2,17 @@
 /**
  * The first thing a brand-new Argus deployment shows: `/sessions` with an
  * empty database (`useMetaStore`'s `hasNoData`) renders this instead of a
- * blank table (Phase-4 exit criterion 9). Three copyable blocks — env
- * vars, the Claude Code hook config, and a demo-data command — each built
- * from the real deployment's own origin (`endpointUrl`, SPEC §4.4: ops/
- * read/ingest share one origin) so what a user copies actually works
- * against *this* Argus, not a `localhost` example that only works in dev.
+ * blank table. Three copyable blocks — env vars, the Claude Code hook
+ * config, and a demo-data command — each built from the real deployment's
+ * own origin (`endpointUrl`; ops/read/ingest share one origin) so what a
+ * user copies actually works against *this* Argus, not a `localhost`
+ * example that only works in dev.
  *
- * SPEC §8.2 / §1.5.2 verbatim, not paraphrased: the env block and hook
- * JSON below are the literal README quickstart and hook config, with only
- * the endpoint substituted in. `OTEL_LOG_TOOL_DETAILS=1` and the
- * `SessionEnd` hook's `timeout: 1` are deliberately not "simplified" —
- * see the inline notes next to each for why.
+ * The env block and hook JSON below are the literal README quickstart and
+ * hook config, verbatim, not paraphrased, with only the endpoint
+ * substituted in. `OTEL_LOG_TOOL_DETAILS=1` and the `SessionEnd` hook's
+ * `timeout: 1` are deliberately not "simplified" — see the inline notes
+ * next to each for why.
  */
 import { computed } from 'vue'
 
@@ -47,8 +47,7 @@ const hookBlock = computed(
 } }`,
 )
 
-// `--target` gets the same substituted origin as the steps above: a copied sim command pointing at
-// `localhost` would seed a *different* Argus than the one the reader is looking at.
+// `--target` uses the same substituted origin — a `localhost` example would seed a different Argus than the one being viewed.
 const simBlock = computed(
   () =>
     `docker compose -f deploy/docker-compose.yml up -d

@@ -17,29 +17,13 @@ import (
 	"github.com/YohannHommet/argus/server/internal/store/postgres/gen"
 )
 
-// syntheticRootAgentID is the sentinel agent_id for the main-agent node
-// SPEC §4.3 that has no subagents row of its own (SPEC lead note 2: the
-// main agent never emits SubagentStart). It is the same literal SPEC §4.3's
-// own worked example uses, so this is the SANCTIONED sentinel, not an
-// invented one — a real Claude Code agent_id observed so far always looks
-// like "ag_<n>" (live capture), never the bare word "root", and this value
-// can never collide with a genuine subagents row because it is never
-// written to that table by upsert_subagent.go.
+// syntheticRootAgentID is the sentinel agent_id for main-agent node (SPEC §4.3, never in subagents table).
 const syntheticRootAgentID = "root"
 
-// syntheticRootAgentType is root's `agent_type` (SPEC §4.3 example: "main").
-// Real agent_type values are unconstrained vendor text (SPEC §0) fed by
-// `subagent_type` on a Task-like tool call, which never names the main
-// agent itself — so "main" cannot collide with a real observed value in
-// practice, and even if it somehow did, root is identified by AgentID, not
-// AgentType.
+// syntheticRootAgentType is root's agent_type (SPEC §4.3 example: "main").
 const syntheticRootAgentType = "main"
 
-// SubagentTree implements store.Reader (SPEC §3.3, §4.3): the assembled
-// subagent tree for one session, rooted at a synthetic "root" node
-// representing the main agent, plus the session-level cost_attribution
-// block that stands in for the per-node cost SPEC §1.9 says is
-// unobtainable.
+// SubagentTree implements store.Reader: assembled tree rooted at synthetic "root" node (SPEC §3.3, §4.3).
 func (s *Store) SubagentTree(ctx context.Context, sessionID string) (model.SubagentTree, error) {
 	q := gen.New(s.pool)
 

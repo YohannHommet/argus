@@ -33,18 +33,9 @@ type SessionReader interface {
 	SubagentTree(ctx context.Context, sessionID string) (model.SubagentTree, error)
 }
 
-// ErrSessionNotFound is query's own not-found sentinel for GetSession
-// (SPEC §4.3's `GET /api/v1/sessions/{id}` 404, and — via the
-// existence-check every session-scoped sub-resource handler runs first —
-// every other `/sessions/{id}/...` 404 too).
-//
-// It is recognised from the seam-level store.ErrSessionNotFound, so this
-// package depends on the store.Reader interface alone (SPEC §3.1's
-// direction) and any implementation — including storetest.Fake — can signal
-// a 404. P3-07 originally matched internal/store/postgres.ErrSessionNotFound
-// directly; the sentinel was moved onto the seam in review, because a Fake
-// that cannot produce it would make the conformance suite validate a 500
-// where production returns 404.
+// ErrSessionNotFound is query's not-found sentinel, recognised from seam-level store.ErrSessionNotFound
+// (SPEC §3.1's direction: query depends on the interface, not implementations).
+// P3-07 moved it to the seam so storetest.Fake can signal 404 in conformance tests.
 var ErrSessionNotFound = errors.New("query: session not found")
 
 // Page is the SPEC §4.1 pagination envelope query computes for every
@@ -91,23 +82,14 @@ func GetSession(ctx context.Context, r SessionReader, id string) (*model.Session
 	return detail, nil
 }
 
-// SessionETag hashes a session detail's (max(ts,seq)) position — here,
-// last_event_at + event_count, the closest proxy for "underlying
-// max(ts,seq)" GetSession's return shape exposes (SPEC §4.1: "hash of the
-// underlying max(ts,seq) + filter"; GetSession takes no filter, so the
-// digest input is the position alone) — plus the session id, so two
-// different sessions' tags never collide. Quoted per RFC 7232's ETag
-// syntax.
+// SessionETag hashes session position (last_event_at + event_count as proxy for max(ts,seq), SPEC §4.1)
+// plus session id to ensure no collisions. Per RFC 7232 ETag syntax.
 func SessionETag(s *model.SessionDetail) string {
 	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|%d|%d", s.ID, s.LastEventAt.UTC().UnixNano(), s.EventCount)))
 	return `"` + hex.EncodeToString(sum[:16]) + `"`
 }
 
-// SubagentTree calls through to the store unchanged: model.SubagentTree
-// already carries SPEC §4.3's exact wire shape (including
-// cost_attribution.per_node_available: false and a nil cost_usd on every
-// node, SPEC §1.9), so there is nothing for query to compute here beyond
-// the call itself.
+// SubagentTree calls through to the store unchanged: model.SubagentTree carries SPEC §4.3's exact wire shape (SPEC §1.9).
 func SubagentTree(ctx context.Context, r SessionReader, sessionID string) (model.SubagentTree, error) {
 	tree, err := r.SubagentTree(ctx, sessionID)
 	if err != nil {
@@ -116,15 +98,8 @@ func SubagentTree(ctx context.Context, r SessionReader, sessionID string) (model
 	return tree, nil
 }
 
-// TurnsSortKey is the fixed cursor-binding tag for `GET
-// /api/v1/sessions/{id}/turns`. Reader.ListTurns takes no store-level
-// filter/page (SPEC §3.3's interface has no pagination on this method —
-// per-session turn counts are always small, unlike events/tool-calls), so
-// ListTurns paginates the store's full result in memory here — query-layer
-// behaviour, not SQL, per the ticket note that this package must never
-// become one. httpapi encodes/decodes the actual cursor string (only
-// httpapi owns that codec, per cursor.go's package doc); this package only
-// works with the decoded position.
+// TurnsSortKey is the cursor-binding tag for GET /api/v1/sessions/{id}/turns.
+// Reader.ListTurns takes no store-level pagination (SPEC §3.3), so paging is in-memory here.
 const TurnsSortKey = "first_seen_at"
 
 // TurnsAfter is the decoded keyset position ListTurns resumes after —
@@ -143,11 +118,8 @@ type TurnsResult struct {
 	HasMore bool
 }
 
-// ListTurns fetches every turn of sessionID, sorts them by
-// (first_seen_at, prompt_id) — first_seen_at is never null and monotonic
-// with ingestion order, unlike the nullable started_at/turn_index — and
-// returns the page starting just after `after` (nil means "from the
-// start"), up to limit rows.
+// ListTurns fetches and sorts every turn by (first_seen_at, prompt_id),
+// returning the page after `after` (nil = from start) up to limit rows.
 func ListTurns(ctx context.Context, r SessionReader, sessionID string, after *TurnsAfter, limit int) (TurnsResult, error) {
 	turns, err := r.ListTurns(ctx, sessionID)
 	if err != nil {

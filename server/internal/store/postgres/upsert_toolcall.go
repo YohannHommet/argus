@@ -1,56 +1,6 @@
-// Package postgres — upsert_toolcall.go builds the `tool_calls` upsert
-// (SPEC §1.6, §1.5.3, §2.3): the P2-07 seam in write.go, filled in.
-//
-// # The normalize/store split (lead note 1)
-//
-// normalize/correlate.go owns everything that can be computed with no I/O:
-// the deterministic id (ToolCallID), what one event contributes
-// (ExtractContribution), and the heuristic's actual one-to-one matching
-// decision (AssignKeylessContributions). This file owns everything that
-// needs a transaction: querying which existing tool_calls rows are "open"
-// candidates for the heuristic (queryOpenCalls, GetOpenToolCalls),
-// allocating ordinals for brand-new keyless calls from a persisted count
-// (nextOrdinalFunc, CountKeylessToolCalls), folding contributions into
-// per-row deltas, issuing the actual upsert SQL, and recomputing
-// sessions.tool_call_count/tool_reject_count and their turns.* counterparts
-// from the tool_calls table itself (lead note 4).
-//
-// # Determinism and late data (lead note 5)
-//
-// A keyed id (tool_use_id present) is a pure hash of (session_id,
-// tool_use_id) — always reproducible, order-independent, no edge case.
-//
-// A keyless id's ordinal is seeded from CountKeylessToolCalls: "how many
-// keyless rows already exist for this (session, prompt, tool) key",
-// queried fresh at the start of each upsertToolCalls call and incremented
-// locally as new calls are minted within that same call, in (ts, seq)
-// order. This is exactly right for `argusd rebuild-projections`, which
-// starts from an empty tool_calls table and replays every event globally
-// in (ts, seq) order in one pass — the invariant P3-10 depends on. It is a
-// documented, accepted approximation for live incremental ingestion: a
-// keyless event arriving late (in a batch processed after later-ts keyless
-// events for the same key already got lower ordinals) is appended at the
-// end of the ordinal sequence rather than being inserted at its true
-// chronological position, so its id depends on arrival order, not ts order,
-// for that one case. This cannot silently corrupt data — every id is still
-// unique and every row still correct — it only means a full rebuild may
-// assign a *different* id to that specific late keyless call than live
-// ingestion did. No v1 feature keys off keyless ids across a rebuild
-// boundary, and SPEC's own guarantee (§1.6) is that decision provenance
-// never depends on the heuristic in the first place.
-//
-// # started_at fallback (lead note 7)
-//
-// tool_calls.started_at is NOT NULL, but a tool.result can arrive with no
-// preceding tool.pre/tool.decision (e.g. the pre event was too_old-dropped,
-// or hooks are disabled). started_at is folded from two trackers: the
-// SPEC-mandated "earliest of tool.pre/tool.decision" when either exists,
-// falling back to the earliest timestamp of *any* folded contribution
-// otherwise, so the NOT NULL constraint is always satisfiable. Because the
-// column is always written via LEAST(existing, incoming) on every write, a
-// later-arriving tool.pre with an earlier true timestamp self-heals a
-// previously-fallback-estimated started_at automatically — no special-case
-// code needed for that healing.
+// Package postgres — upsert_toolcall.go builds the `tool_calls` upsert (SPEC §1.6, §1.5.3, §2.3, P2-07).
+// Split: normalize/ computes deterministic id/keyed; upsert_toolcall.go does tx (queries, ordinals, fold, upsert).
+// Keyless ids: ordered by arrival (live) not ts (rebuild). started_at: SPEC-mandated TOOL.PRE/DECISION, fallback to earliest.
 package postgres
 
 import (

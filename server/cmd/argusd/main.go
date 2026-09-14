@@ -178,12 +178,8 @@ func runMigrate(args []string) int {
 }
 
 // runPrices implements `argusd prices import` (SPEC §3.8, P3-04): reads
-// the embedded/seeded server/db/prices/*.json price table and upserts it
-// into model_prices, printing an inserted/updated/unchanged summary.
-// ImportPrices is idempotent (ON CONFLICT (model, effective_from) DO
-// UPDATE, guarded so a byte-identical re-import touches no rows), which is
-// what lets a re-run of this command be a safe, repeatable operation
-// rather than a one-shot seed.
+// server/db/prices/*.json and upserts into model_prices. ImportPrices is
+// idempotent (byte-identical re-imports are safe, repeatable).
 func runPrices(args []string) int {
 	fs := flag.NewFlagSet("prices", flag.ContinueOnError)
 	configPath := fs.String("config", "", "path to an optional YAML config file")
@@ -505,19 +501,10 @@ func healthcheckHTTPAddr(configPath string) (string, error) {
 	return k.String(key), nil
 }
 
-// healthURL turns an ARGUS_HTTP_ADDR listen address (e.g. ":8080",
-// "0.0.0.0:8080", "[::]:8080", "localhost:8080") into a loopback URL for the
-// healthcheck subcommand to hit, since the address itself may not be
-// dialable (":8080" binds all interfaces but isn't a valid dial target).
-//
-// m36: the pre-fix version split on the FIRST colon (strings.Cut), which
-// mis-parses any bracketed IPv6 form — "[::]:8080" yields host "[" and port
-// "]:8080", producing a URL http.NewRequestWithContext never rejects but
-// that can never actually connect, so the healthcheck always failed for that
-// (valid, net.Listen-accepted) address. net.SplitHostPort/net.JoinHostPort
-// parse and re-quote bracketed IPv6 correctly; "::" (the unspecified IPv6
-// address, ARGUS_HTTP_ADDR's IPv6 equivalent of "0.0.0.0") is mapped to
-// localhost alongside the existing "" and "0.0.0.0" cases.
+// healthURL turns an ARGUS_HTTP_ADDR listen address into a loopback URL for
+// the healthcheck subcommand, converting bind-all forms (":8080", "0.0.0.0:8080",
+// "[::]:8080") to localhost since those addresses aren't valid dial targets.
+// m36 fix: uses net.SplitHostPort/net.JoinHostPort to correctly handle IPv6.
 func healthURL(addr, endpoint string) string {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
