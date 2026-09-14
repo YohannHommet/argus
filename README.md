@@ -54,6 +54,10 @@ ARGUS_HTTP_PORT=18080 docker compose -f deploy/docker-compose.yml up -d
 
 The UI is then at <http://localhost:8080> (or your `ARGUS_HTTP_PORT`).
 
+Prefer a shortcut? `make up` does the same (build, start, wait for ready, print the URL); then
+`make demo` for sample data, `make logs`, `make status`, `make down`. Override the port with
+`make up PORT=18080`. Run `make help` for the full list.
+
 ### 2. Point Claude Code at Argus
 
 Export the OpenTelemetry env vars in the shell you run Claude Code from (swap `http://localhost:8080`
