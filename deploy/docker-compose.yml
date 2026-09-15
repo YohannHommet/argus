@@ -73,6 +73,13 @@ services:
       timeout: 5s
       retries: 20
       start_period: 30s
+    # SPEC §8.2. Postgres had this and argusd did not, so a daemon or host
+    # restart brought the database back and left Argus down, silently losing
+    # every session until someone noticed. `depends_on` does not apply on a
+    # restart, but argusd retries the DB for 15s before exiting non-zero
+    # (app: "database not reachable after 15s"), and Docker's backoff retries
+    # after that — so this policy needs no extra ordering to be enough.
+    restart: unless-stopped
     # 40s: today's ARGUS_SHUTDOWN_GRACE is 15s (config.go), but another
     # ticket is splitting serve.go's HTTP-shutdown and ingest-drain into
     # separate budgets that each get the full grace instead of sharing it,
