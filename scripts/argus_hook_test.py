@@ -15,6 +15,14 @@ from pathlib import Path
 SCRIPT = Path(__file__).with_name("argus_hook.py")
 BASE_URL = "http://localhost:18080"
 
+# The contract: the hook events Claude Code was observed to fire, hardcoded here
+# rather than imported, so a silent edit to the script's WIRING table fails a test.
+EVENTS = (
+    "SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse",
+    "PostToolUseFailure", "PostToolBatch", "SubagentStart", "SubagentStop",
+    "Stop", "SessionEnd", "InstructionsLoaded",
+)
+
 # A hook group Argus does not own, repeated in every case: the merge must
 # leave it byte-identical no matter what else it does.
 FOREIGN_GROUP = {"matcher": "Bash", "hooks": [{"type": "command", "command": "my-own-gate.py"}]}
@@ -87,18 +95,28 @@ class ArgusHookTest(unittest.TestCase):
         self.assertEqual(hooks["SessionStart"][0]["hooks"][0]["type"], "command")
 
     def test_install_preserves_foreign_hooks_and_keys(self) -> None:
+        """A foreign group survives untouched, and first, on every event we wire.
+
+        Asserting it on a wired event is the whole point: on an event Argus
+        ignores, preservation is vacuous.
+        """
+        foreign_on = ["PreToolUse", "PostToolUse", "Stop", "Notification"]
         self.write({
             "model": "opus",
-            "hooks": {"PreToolUse": [FOREIGN_GROUP], "PostToolUse": [FOREIGN_GROUP]},
+            "hooks": {e: [FOREIGN_GROUP] for e in foreign_on},
             "env": {"MY_OWN": "1"},
         })
         run("install", self.path)
         data = self.read()
         self.assertEqual(data["model"], "opus")
-        self.assertEqual(data["hooks"]["PreToolUse"], [FOREIGN_GROUP])
-        self.assertEqual(data["hooks"]["PostToolUse"][0], FOREIGN_GROUP)
-        self.assertEqual(len(data["hooks"]["PostToolUse"]), 2)
         self.assertEqual(data["env"]["MY_OWN"], "1")
+
+        for event in foreign_on:
+            groups = data["hooks"][event]
+            self.assertEqual(groups[0], FOREIGN_GROUP, f"{event}: foreign group altered or displaced")
+            # Notification is not in WIRING, so it must keep exactly what it had.
+            expected = 2 if event in EVENTS else 1
+            self.assertEqual(len(groups), expected, f"{event}: unexpected group count")
 
     def test_uninstall_removes_only_argus_entries(self) -> None:
         self.write({
