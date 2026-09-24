@@ -55,6 +55,7 @@ type Config struct {
 	IngestRetryConflict           int           `env:"ARGUS_INGEST_RETRY_CONFLICT" default:"8" doc:"deadlock/serialization attempts"`
 	IngestRetryTransient          int           `env:"ARGUS_INGEST_RETRY_TRANSIENT" default:"3" doc:"connection-error attempts"`
 	IngestHookAllowMessageDisplay bool          `env:"ARGUS_INGEST_HOOK_ALLOW_MESSAGE_DISPLAY" default:"false" doc:"§1.5.2"`
+	IngestHookAllowPromptContent  bool          `env:"ARGUS_INGEST_HOOK_ALLOW_PROMPT_CONTENT" default:"false" doc:"§1.5.2"`
 	IngestToken                   string        `env:"ARGUS_INGEST_TOKEN" default:"" doc:"ingest auth seam" secret:"true"`
 	APIToken                      string        `env:"ARGUS_API_TOKEN" default:"" doc:"read-API auth seam" secret:"true"`
 

@@ -14,6 +14,7 @@
 | `ARGUS_INGEST_RETRY_CONFLICT` | `8` | deadlock/serialization attempts |
 | `ARGUS_INGEST_RETRY_TRANSIENT` | `3` | connection-error attempts |
 | `ARGUS_INGEST_HOOK_ALLOW_MESSAGE_DISPLAY` | `false` | §1.5.2 |
+| `ARGUS_INGEST_HOOK_ALLOW_PROMPT_CONTENT` | `false` | §1.5.2 |
 | `ARGUS_INGEST_TOKEN` | empty | ingest auth seam |
 | `ARGUS_API_TOKEN` | empty | read-API auth seam |
 | `ARGUS_RETENTION_RAW_DAYS` | `90` | DECISIONS.md; also the clock-clamp lower bound (§1.2) |

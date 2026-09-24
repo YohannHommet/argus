@@ -29,13 +29,38 @@ type HookNormalizer struct {
 	// AllowMessageDisplay gates MessageDisplay hook events (SPEC §1.5.2, env var).
 	// Injected here since package must not import internal/config (depguard).
 	AllowMessageDisplay bool
+
+	// AllowPromptContent keeps prompt/last_assistant_message in stored attrs; off by default (SPEC §1.5.2).
+	AllowPromptContent bool
+}
+
+// hookNormalizerOptions collects HookOption values (standard pattern).
+type hookNormalizerOptions struct {
+	allowPromptContent bool
+}
+
+// HookOption configures optional HookNormalizer behavior.
+type HookOption func(*hookNormalizerOptions)
+
+// WithPromptContent enables retention of prompt and last_assistant_message in hook payloads.
+func WithPromptContent(allow bool) HookOption {
+	return func(o *hookNormalizerOptions) { o.allowPromptContent = allow }
 }
 
 // NewHookNormalizer builds a HookNormalizer with an injected clock,
 // retention window, and MessageDisplay gate, so tests can freeze "now" and
 // assert clamp/gating behaviour deterministically.
-func NewHookNormalizer(now func() time.Time, retentionRaw time.Duration, allowMessageDisplay bool) *HookNormalizer {
-	return &HookNormalizer{Now: now, RetentionRaw: retentionRaw, AllowMessageDisplay: allowMessageDisplay}
+func NewHookNormalizer(now func() time.Time, retentionRaw time.Duration, allowMessageDisplay bool, opts ...HookOption) *HookNormalizer {
+	var o hookNormalizerOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+	return &HookNormalizer{
+		Now:                 now,
+		RetentionRaw:        retentionRaw,
+		AllowMessageDisplay: allowMessageDisplay,
+		AllowPromptContent:  o.allowPromptContent,
+	}
 }
 
 // FromHookPayload implements SPEC §1.5.2 and §3.5 for one hook webhook body
@@ -73,6 +98,10 @@ func (n *HookNormalizer) FromHookPayloadWithEvent(body []byte, fallbackEventName
 		// evt.Attrs or hashed into the dedup key (otlpattrs.go's
 		// sanitizeHookAttrs doc comment).
 		attrs = sanitizeHookAttrs(attrs)
+		// Must precede buildHookEvent: attrs is hashed into the dedup key, and prompt text must not be.
+		if !n.AllowPromptContent {
+			stripHookContentAttrs(attrs)
+		}
 		applyFallbackHookEventName(attrs, fallbackEventName)
 
 		evt, keep, err := n.buildHookEvent(attrs, nowFn())

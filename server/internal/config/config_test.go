@@ -38,6 +38,7 @@ var wantDefaults = map[string]expectedDefault{
 	"ARGUS_INGEST_RETRY_CONFLICT":             {def: "8"},
 	"ARGUS_INGEST_RETRY_TRANSIENT":            {def: "3"},
 	"ARGUS_INGEST_HOOK_ALLOW_MESSAGE_DISPLAY": {def: "false"},
+	"ARGUS_INGEST_HOOK_ALLOW_PROMPT_CONTENT":  {def: "false"},
 	"ARGUS_INGEST_TOKEN":                      {def: ""},
 	"ARGUS_API_TOKEN":                         {def: ""},
 	"ARGUS_RETENTION_RAW_DAYS":                {def: "90"},
