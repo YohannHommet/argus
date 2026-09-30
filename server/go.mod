@@ -11,7 +11,7 @@ require (
 	github.com/knadh/koanf/providers/confmap v1.0.1
 	github.com/knadh/koanf/providers/env/v2 v2.0.1
 	github.com/knadh/koanf/providers/file v1.2.1
-	github.com/knadh/koanf/v2 v2.3.6
+	github.com/knadh/koanf/v2 v2.3.7
 	github.com/lmittmann/tint v1.2.0
 	github.com/pressly/goose/v3 v3.28.0
 	github.com/prometheus/client_golang v1.24.1
