@@ -120,8 +120,9 @@ argusd sim --mode=demo --seed=42 --target ${props.endpointUrl}`,
           label="Copy hook config"
         />
         <p class="text-muted-foreground text-xs">
-          The <code>SessionEnd</code> timeout is 1 second on purpose, not 5 — every
-          <code>SessionEnd</code> hook shares one hard 1.5 s budget across all of them, and Argus
+          The <code>Stop</code>, <code>SubagentStop</code> and <code>SessionEnd</code> timeouts are 1
+          second on purpose, not 5 — every teardown hook shares one hard 1.5 s budget across all of
+          them, and Argus
           itself acks in milliseconds, so a larger value would only eat into other hooks' share of
           that budget for no benefit.
         </p>

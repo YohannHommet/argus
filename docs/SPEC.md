@@ -282,11 +282,16 @@ hook idempotency **cannot** rest on any `ts`-bearing key — it rests on the `in
 
 **Prompt and response text are stripped by default.** `UserPromptSubmit` carries the user's
 `prompt`; `Stop` and `SubagentStop` carry `last_assistant_message`. Argus keeps the events — they
-are the turn and subagent lifecycle — but removes those two fields before storage unless
+are the turn and subagent lifecycle — but removes those two top-level fields before storage unless
 `ARGUS_INGEST_HOOK_ALLOW_PROMPT_CONTENT=true`, matching the OTel side's `OTEL_LOG_USER_PROMPTS`
-posture. The fields are removed **before** the dedup key is computed (§1.7 rule 2), so prompt text
-never reaches the hash input either; a payload differing from another only in its prompt text
+posture. The fields are removed **before** the dedup key is computed (§1.7 rule 2), so those two
+fields never reach the hash input either; a payload differing from another only in them
 deduplicates onto the same row.
+
+The flag does **not** reach text nested in tool payloads: `PreToolUse` for the `Agent` tool stores
+the subagent's prompt in `tool_input.prompt`, and `PostToolUse` stores `tool_response` (the
+subagent's reply for `Agent`). Those stay in `attrs`, as they did for `PostToolUse` before the
+lifecycle events were wired.
 
 **Hook payload field names beyond the common set are [unverified-safe].** The normalizer reads them
 defensively: a missing field yields `NULL`, never an error, never a rejected request. Every hook
