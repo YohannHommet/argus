@@ -85,10 +85,18 @@ itself. Under the hood it merges in:
   "hooks": {
     // Claude Code registers an http SessionStart hook but never fires it, so
     // this one posts with curl instead — see below.
-    "SessionStart": [ { "hooks": [ { "type": "command", "timeout": 2, "command": "curl -sS -m 2 -X POST -H 'Content-Type: application/json' --data-binary @- -o /dev/null 'http://localhost:8080/ingest/hook?event=SessionStart' || true" } ] } ],
-    "PostToolUse":  [ { "hooks": [ { "type": "http", "url": "http://localhost:8080/ingest/hook?event=PostToolUse", "timeout": 5 } ] } ],
+    "SessionStart":       [ { "hooks": [ { "type": "command", "timeout": 2, "command": "curl -sS -m 2 -X POST -H 'Content-Type: application/json' --data-binary @- -o /dev/null 'http://localhost:8080/ingest/hook?event=SessionStart' || true" } ] } ],
+    "UserPromptSubmit":   [ { "hooks": [ { "type": "http", "url": "http://localhost:8080/ingest/hook?event=UserPromptSubmit", "timeout": 2 } ] } ],
+    "PreToolUse":         [ { "hooks": [ { "type": "http", "url": "http://localhost:8080/ingest/hook?event=PreToolUse", "timeout": 2 } ] } ],
+    "PostToolUse":        [ { "hooks": [ { "type": "http", "url": "http://localhost:8080/ingest/hook?event=PostToolUse", "timeout": 5 } ] } ],
+    "PostToolUseFailure": [ { "hooks": [ { "type": "http", "url": "http://localhost:8080/ingest/hook?event=PostToolUseFailure", "timeout": 5 } ] } ],
+    "PostToolBatch":      [ { "hooks": [ { "type": "http", "url": "http://localhost:8080/ingest/hook?event=PostToolBatch", "timeout": 5 } ] } ],
+    "SubagentStart":      [ { "hooks": [ { "type": "http", "url": "http://localhost:8080/ingest/hook?event=SubagentStart", "timeout": 2 } ] } ],
+    "SubagentStop":       [ { "hooks": [ { "type": "http", "url": "http://localhost:8080/ingest/hook?event=SubagentStop", "timeout": 1 } ] } ],
+    "Stop":               [ { "hooks": [ { "type": "http", "url": "http://localhost:8080/ingest/hook?event=Stop", "timeout": 1 } ] } ],
     // SessionEnd hooks share a hard 1.5 s budget — keep this at 1.
-    "SessionEnd":   [ { "hooks": [ { "type": "http", "url": "http://localhost:8080/ingest/hook?event=SessionEnd", "timeout": 1 } ] } ]
+    "SessionEnd":         [ { "hooks": [ { "type": "http", "url": "http://localhost:8080/ingest/hook?event=SessionEnd", "timeout": 1 } ] } ],
+    "InstructionsLoaded": [ { "hooks": [ { "type": "http", "url": "http://localhost:8080/ingest/hook?event=InstructionsLoaded", "timeout": 2 } ] } ]
   }
 }
 ```
@@ -97,9 +105,11 @@ itself. Under the hood it merges in:
 file-touch view — without it those fields stay empty. It also makes Claude Code log full tool
 parameters (including Bash command text) to your collector, so it is your call; Argus works without
 it, you just lose those three views. The hooks cover the events OTel doesn't emit (session
-lifecycle, tool decisions); `SessionEnd`'s 1 second timeout is on purpose — every `SessionEnd` hook
-shares one hard 1.5 s budget, and Argus acks in milliseconds, so a larger value only eats into other
-hooks' share.
+lifecycle, tool decisions, subagent start and stop); the teardown events (`Stop`, `SubagentStop`,
+`SessionEnd`) use a 1 second timeout on purpose — they share one hard 1.5 s budget, and Argus acks
+in milliseconds, so a larger value only eats into other hooks' share. Prompt and reply text carried
+by `UserPromptSubmit`, `Stop` and `SubagentStop` is dropped server-side unless you set
+`ARGUS_INGEST_HOOK_ALLOW_PROMPT_CONTENT=true`.
 
 Each hook posts to its own `?event=` URL so Argus can classify it from the URL alone. `SessionStart`
 is the odd one out: Claude Code accepts and registers a `type: http` hook for it but never sends the
@@ -181,7 +191,7 @@ make setup
 
 `make setup` checks for Docker, creates `deploy/.env` from `deploy/.env.example` (skipped if it
 already exists), builds and starts the stack, and runs `make install-hook` for the port you're on —
-merging Argus's hooks (`PostToolUse`, `SessionEnd`, `SessionStart`) and its OTel env block into
+merging Argus's 11 hooks (listed in step 2) and its OTel env block into
 `~/.claude/settings.json`. `make install-hook` / `make uninstall-hook` do just that step on their
 own, at any time — both are idempotent and touch only Argus's own hook and env entries: every other
 hook and env key already in your `settings.json` is preserved, and a `.bak` is written before
