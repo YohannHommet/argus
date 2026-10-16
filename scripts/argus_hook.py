@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Merge or remove Argus's Claude Code wiring in a Claude Code settings.json:
-the SessionStart/PostToolUse/SessionEnd hooks and the OTel env block.
+the hooks listed in WIRING below, and the OTel env block.
 
 Invoked by scripts/install-hook.sh (`make install-hook` / `make
 uninstall-hook`) — never run directly by a user. stdlib json only, so every
@@ -10,8 +10,8 @@ hooks arrays and env keys this script edits.
 Each hook posts to its own URL (`/ingest/hook?event=<HookEvent>`) so the
 receiver classifies the event from the transport, not only from the body.
 
-SessionStart is wired as a `command` hook running curl, not as an `http` hook
-like the other two: Claude Code registers a `type: http` SessionStart hook but
+SessionStart is the one `command` hook running curl, not an `http` hook like
+every other row: Claude Code registers a `type: http` SessionStart hook but
 never dispatches it (verified on 2.1.260/2.1.270 — a capture server saw
 PostToolUse and SessionEnd arrive while SessionStart never fired, and a
 `command` hook on the same event fired normally). Without this, Argus never
@@ -35,11 +35,33 @@ import re
 import sys
 from pathlib import Path
 
-EVENTS = ("SessionStart", "PostToolUse", "SessionEnd")
-# SessionEnd hooks share one hard 1.5s budget across all of them, hence 1.
-TIMEOUTS = {"SessionStart": 2, "PostToolUse": 5, "SessionEnd": 1}
-# Events Claude Code does not deliver over an `http` hook (see module docstring).
-COMMAND_EVENTS = frozenset({"SessionStart"})
+# The wiring table — the single source of truth for what Argus asks Claude Code
+# for. One row per hook event: (event, transport, timeout_seconds, reason).
+#
+# Only events Claude Code was *observed* to fire are listed. The other 19 names
+# normalize/hooks.go can map were never seen firing, so wiring them would ask for
+# events that never come.
+#
+# The reason column is not decoration: three distinct timeouts across eleven rows
+# cannot be explained by one comment, and the next reader lowering PostToolUse to
+# 1 or raising Stop to 5 needs to know locally which value is load-bearing.
+WIRING = (
+    ("SessionStart",       "command", 2, "Claude Code registers an http SessionStart hook but never dispatches it"),
+    ("UserPromptSubmit",   "http",    2, "blocks the start of a turn; Argus acks in milliseconds"),
+    ("PreToolUse",         "http",    2, "blocks every tool call; carries the tool_use_id the subagent tree is built from"),
+    ("PostToolUse",        "http",    5, "the bulk of the traffic, and off the critical path"),
+    ("PostToolUseFailure", "http",    5, "mirrors PostToolUse"),
+    ("PostToolBatch",      "http",    5, "mirrors PostToolUse; larger body (tool_calls array)"),
+    ("SubagentStart",      "http",    2, "the only source of the subagents projection"),
+    ("SubagentStop",       "http",    1, "teardown: shares the hard 1.5s budget"),
+    ("Stop",               "http",    1, "teardown: shares the hard 1.5s budget"),
+    ("SessionEnd",         "http",    1, "teardown: shares the hard 1.5s budget"),
+    ("InstructionsLoaded", "http",    2, "fires on every CLAUDE.md load; carries file_path and load_reason"),
+)
+
+EVENTS = tuple(event for event, _transport, _timeout, _reason in WIRING)
+TRANSPORTS = {event: transport for event, transport, _t, _r in WIRING}
+TIMEOUTS = {event: timeout for event, _tr, timeout, _r in WIRING}
 
 # Matches an Argus ingest URL wherever it appears: an `http` hook's url field,
 # or somewhere inside a `command` hook's command string.
@@ -82,7 +104,7 @@ def is_argus_group(group: object) -> bool:
 def argus_group(base_url: str, event: str) -> dict:
     timeout = TIMEOUTS[event]
     url = hook_url(base_url, event)
-    if event in COMMAND_EVENTS:
+    if TRANSPORTS[event] == "command":
         # `|| true` on purpose: observability must never fail or delay a
         # session start, so a stack that is down stays a silent no-op.
         command = (

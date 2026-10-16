@@ -3,5 +3,6 @@
   "prompt_id": "prompt-0001",
   "hook_event_name": "SubagentStop",
   "agent_id": "agent-0001",
-  "success": true
+  "success": true,
+  "last_assistant_message": "subagent response text"
 }

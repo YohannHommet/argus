@@ -128,3 +128,9 @@ func sanitizeHookAttrs(attrs map[string]any) map[string]any {
 	sanitizeHookAttrValue(attrs)
 	return attrs
 }
+
+// stripHookContentAttrs drops the two hook fields that carry user/assistant text (SPEC §1.5.2).
+func stripHookContentAttrs(attrs map[string]any) {
+	delete(attrs, "prompt")
+	delete(attrs, "last_assistant_message")
+}

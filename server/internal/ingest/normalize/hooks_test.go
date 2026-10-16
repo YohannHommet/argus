@@ -89,8 +89,8 @@ func TestFromHookPayload_MappingTableRows(t *testing.T) {
 		e := normalizeOneHook(t, "user_prompt_submit.json")
 		require.Equal(t, model.KindTurnStart, e.Kind)
 		require.Equal(t, hookStrp("prompt-0001"), e.PromptID)
-		// Prompt text stays attrs-only; no model.Event field carries it.
-		require.Equal(t, "please refactor this function", e.Attrs["prompt"])
+		// Stripped by default; the verbatim round-trip is TestFromHookPayload_StripsPromptContentByDefault's gate-open arm.
+		require.NotContains(t, e.Attrs, "prompt")
 	})
 
 	t.Run("Stop", func(t *testing.T) {
@@ -569,4 +569,67 @@ func TestFromHookPayload_SanitizesNULByteInNestedAttr(t *testing.T) {
 	// sanitized attrs, and produce a real, non-fallback key.
 	require.NotEmpty(t, events[0].DedupKey)
 	require.NotContains(t, events[0].DedupKey, "unhashable")
+}
+
+// newPromptContentNormalizer is newTestHookNormalizer with the prompt-content gate opened.
+func newPromptContentNormalizer() *HookNormalizer {
+	return NewHookNormalizer(func() time.Time { return hookFixedNow }, hookTestRetention, false, WithPromptContent(true))
+}
+
+// TestFromHookPayload_StripsPromptContentByDefault covers every observed hook
+// that carries user/assistant text: stripped by default, kept verbatim once the
+// gate is opened (SPEC §1.5.2).
+func TestFromHookPayload_StripsPromptContentByDefault(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct{ fixture, field, value string }{
+		{"user_prompt_submit.json", "prompt", "please refactor this function"},
+		{"stop.json", "last_assistant_message", "assistant response text"},
+		{"subagent_stop.json", "last_assistant_message", "subagent response text"},
+	}
+	for _, c := range cases {
+		t.Run(c.fixture, func(t *testing.T) {
+			t.Parallel()
+			body := loadHookFixture(t, c.fixture)
+
+			off, err := newTestHookNormalizer(false).FromHookPayload(body)
+			require.NoError(t, err)
+			require.Len(t, off, 1)
+			require.NotContains(t, off[0].Attrs, c.field, "stored by default")
+			require.NotEqual(t, model.KindUnknown, off[0].Kind, "stripping must not cost the lifecycle event")
+
+			on, err := newPromptContentNormalizer().FromHookPayload(body)
+			require.NoError(t, err)
+			require.Len(t, on, 1)
+			require.Equal(t, c.value, on[0].Attrs[c.field], "gate open: the text round-trips verbatim")
+		})
+	}
+}
+
+// TestFromHookPayload_PromptTextStaysOutOfTheDedupKey pins that stripping
+// happens before the dedup hash: with the gate closed, two prompts differing
+// only in their text must collide, or the text is still inside the hash input.
+func TestFromHookPayload_PromptTextStaysOutOfTheDedupKey(t *testing.T) {
+	t.Parallel()
+
+	withPrompt := func(text string) []byte {
+		var m map[string]any
+		require.NoError(t, json.Unmarshal(loadHookFixture(t, "user_prompt_submit.json"), &m))
+		m["prompt"] = text
+		b, err := json.Marshal(m)
+		require.NoError(t, err)
+		return b
+	}
+	key := func(n *HookNormalizer, body []byte) string {
+		events, err := n.FromHookPayload(body)
+		require.NoError(t, err)
+		require.Len(t, events, 1)
+		return events[0].DedupKey
+	}
+	a, b := withPrompt("first secret prompt"), withPrompt("a completely different one")
+
+	require.Equal(t, key(newTestHookNormalizer(false), a), key(newTestHookNormalizer(false), b),
+		"gate closed: prompt text must not reach the dedup key")
+	// Proves the assertion above is not vacuous: the text does feed the key when kept.
+	require.NotEqual(t, key(newPromptContentNormalizer(), a), key(newPromptContentNormalizer(), b))
 }

@@ -60,7 +60,7 @@ make up PORT="${port}"
 
 # --- 4. install the hook + OTel env into Claude Code's settings.json --------
 # make install-hook (scripts/install-hook.sh -> scripts/argus_hook.py) writes
-# both the OTel env block and the PostToolUse/SessionEnd/SessionStart hooks
+# both the OTel env block and every hook in argus_hook.py's WIRING table
 # into ~/.claude/settings.json for the port just started on — no manual
 # export, no hand-editing. Re-run it any time the port changes.
 make install-hook PORT="${port}"
@@ -69,7 +69,7 @@ cat <<WIRING
 
 --------------------------------------------------------------------------
 Claude Code wiring merged into ~/.claude/settings.json for ${base_url}:
-env (OTel export) + hooks (SessionStart, PostToolUse, SessionEnd -> /ingest/hook?event=…).
+env (OTel export) + 11 hooks (session, turn, tool and subagent lifecycle -> /ingest/hook?event=…).
 Changed the port? Re-run: make install-hook
 --------------------------------------------------------------------------
 WIRING

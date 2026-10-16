@@ -15,6 +15,14 @@ from pathlib import Path
 SCRIPT = Path(__file__).with_name("argus_hook.py")
 BASE_URL = "http://localhost:18080"
 
+# The contract: the hook events Claude Code was observed to fire, hardcoded here
+# rather than imported, so a silent edit to the script's WIRING table fails a test.
+EVENTS = (
+    "SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse",
+    "PostToolUseFailure", "PostToolBatch", "SubagentStart", "SubagentStop",
+    "Stop", "SessionEnd", "InstructionsLoaded",
+)
+
 # A hook group Argus does not own, repeated in every case: the merge must
 # leave it byte-identical no matter what else it does.
 FOREIGN_GROUP = {"matcher": "Bash", "hooks": [{"type": "command", "command": "my-own-gate.py"}]}
@@ -40,22 +48,35 @@ class ArgusHookTest(unittest.TestCase):
         return json.loads(self.path.read_text())
 
     def test_install_writes_per_event_urls_and_session_start_command(self) -> None:
+        """Every wired event gets its own ?event= URL on the right port, transport and timeout."""
+        expected_hooks = [
+            ("SessionStart", "command", 2),
+            ("UserPromptSubmit", "http", 2),
+            ("PreToolUse", "http", 2),
+            ("PostToolUse", "http", 5),
+            ("PostToolUseFailure", "http", 5),
+            ("PostToolBatch", "http", 5),
+            ("SubagentStart", "http", 2),
+            ("SubagentStop", "http", 1),
+            ("Stop", "http", 1),
+            ("SessionEnd", "http", 1),
+            ("InstructionsLoaded", "http", 2),
+        ]
+
         run("install", self.path)
         hooks = self.read()["hooks"]
 
-        http_hook = hooks["PostToolUse"][0]["hooks"][0]
-        self.assertEqual(http_hook["type"], "http")
-        self.assertEqual(http_hook["url"], f"{BASE_URL}/ingest/hook?event=PostToolUse")
-        self.assertEqual(http_hook["timeout"], 5)
+        for event, expected_transport, expected_timeout in expected_hooks:
+            self.assertIn(event, hooks, f"event {event} not wired")
+            group = hooks[event][0]
+            hook = group["hooks"][0]
+            self.assertEqual(hook["type"], expected_transport, f"{event}: expected transport {expected_transport}, got {hook.get('type')}")
+            self.assertEqual(hook["timeout"], expected_timeout, f"{event}: expected timeout {expected_timeout}, got {hook.get('timeout')}")
 
-        self.assertEqual(hooks["SessionEnd"][0]["hooks"][0]["url"], f"{BASE_URL}/ingest/hook?event=SessionEnd")
-        self.assertEqual(hooks["SessionEnd"][0]["hooks"][0]["timeout"], 1)
-
-        # SessionStart is a command hook: Claude Code never dispatches an http one.
-        start_hook = hooks["SessionStart"][0]["hooks"][0]
-        self.assertEqual(start_hook["type"], "command")
-        self.assertIn(f"{BASE_URL}/ingest/hook?event=SessionStart", start_hook["command"])
-        self.assertEqual(start_hook["timeout"], 2)
+            if expected_transport == "command":
+                self.assertIn(f"{BASE_URL}/ingest/hook?event={event}", hook["command"], f"{event} command URL mismatch")
+            else:
+                self.assertEqual(hook["url"], f"{BASE_URL}/ingest/hook?event={event}", f"{event} URL mismatch")
 
     def test_install_is_idempotent(self) -> None:
         run("install", self.path)
@@ -65,10 +86,11 @@ class ArgusHookTest(unittest.TestCase):
         self.assertEqual(first, self.read())
 
     def test_reinstall_on_new_port_replaces_without_duplicating(self) -> None:
+        """A port change moves every wired event, leaving no duplicate and no stale port."""
         run("install", self.path)
         run("install", self.path, "http://localhost:19999")
         hooks = self.read()["hooks"]
-        for event in ("SessionStart", "PostToolUse", "SessionEnd"):
+        for event in EVENTS:
             self.assertEqual(len(hooks[event]), 1, f"{event} duplicated on port change")
         self.assertEqual(self.read()["env"]["OTEL_EXPORTER_OTLP_ENDPOINT"], "http://localhost:19999")
         self.assertNotIn("18080", json.dumps(hooks))
@@ -87,30 +109,37 @@ class ArgusHookTest(unittest.TestCase):
         self.assertEqual(hooks["SessionStart"][0]["hooks"][0]["type"], "command")
 
     def test_install_preserves_foreign_hooks_and_keys(self) -> None:
+        """Foreign groups survive, first, on wired events — on ignored ones the check would be vacuous."""
+        foreign_on = ["PreToolUse", "PostToolUse", "Stop", "Notification"]
         self.write({
             "model": "opus",
-            "hooks": {"PreToolUse": [FOREIGN_GROUP], "PostToolUse": [FOREIGN_GROUP]},
+            "hooks": {e: [FOREIGN_GROUP] for e in foreign_on},
             "env": {"MY_OWN": "1"},
         })
         run("install", self.path)
         data = self.read()
         self.assertEqual(data["model"], "opus")
-        self.assertEqual(data["hooks"]["PreToolUse"], [FOREIGN_GROUP])
-        self.assertEqual(data["hooks"]["PostToolUse"][0], FOREIGN_GROUP)
-        self.assertEqual(len(data["hooks"]["PostToolUse"]), 2)
         self.assertEqual(data["env"]["MY_OWN"], "1")
 
+        for event in foreign_on:
+            groups = data["hooks"][event]
+            self.assertEqual(groups[0], FOREIGN_GROUP, f"{event}: foreign group altered or displaced")
+            # Notification is not in WIRING, so it must keep exactly what it had.
+            expected = 2 if event in EVENTS else 1
+            self.assertEqual(len(groups), expected, f"{event}: unexpected group count")
+
     def test_uninstall_removes_only_argus_entries(self) -> None:
+        """Uninstall spares foreign groups, including on newly wired events such as Stop."""
         self.write({
             "model": "opus",
-            "hooks": {"PreToolUse": [FOREIGN_GROUP], "PostToolUse": [FOREIGN_GROUP]},
+            "hooks": {"PreToolUse": [FOREIGN_GROUP], "PostToolUse": [FOREIGN_GROUP], "Stop": [FOREIGN_GROUP]},
             "env": {"MY_OWN": "1"},
         })
         run("install", self.path)
         run("uninstall", self.path)
         data = self.read()
         self.assertEqual(data["model"], "opus")
-        self.assertEqual(data["hooks"], {"PreToolUse": [FOREIGN_GROUP], "PostToolUse": [FOREIGN_GROUP]})
+        self.assertEqual(data["hooks"], {"PreToolUse": [FOREIGN_GROUP], "PostToolUse": [FOREIGN_GROUP], "Stop": [FOREIGN_GROUP]})
         self.assertEqual(data["env"], {"MY_OWN": "1"})
 
     def test_uninstall_removes_the_pre_event_param_http_shape(self) -> None:
@@ -181,6 +210,25 @@ class ArgusHookTest(unittest.TestCase):
         command = self.read()["hooks"]["SessionStart"][0]["hooks"][0]["command"]
         done = subprocess.run(["bash", "-c", command], input="{}", capture_output=True, text=True)
         self.assertEqual(done.returncode, 0, "a down stack must never fail a session start")
+
+    def test_teardown_trio_has_timeout_one(self) -> None:
+        """Teardown hooks share Claude Code's hard 1.5s budget, so each gets 1s."""
+        run("install", self.path)
+        hooks = self.read()["hooks"]
+        for event in ("SessionEnd", "Stop", "SubagentStop"):
+            timeout = hooks[event][0]["hooks"][0]["timeout"]
+            self.assertEqual(timeout, 1, f"{event} teardown hook must have timeout 1, got {timeout}")
+
+    def test_exactly_one_command_hook_is_session_start(self) -> None:
+        """Flipping any other event to a curl command must be a deliberate, reviewed change."""
+        run("install", self.path)
+        hooks = self.read()["hooks"]
+        command_hooks = []
+        for event in EVENTS:
+            hook_type = hooks[event][0]["hooks"][0]["type"]
+            if hook_type == "command":
+                command_hooks.append(event)
+        self.assertEqual(command_hooks, ["SessionStart"], f"Expected only SessionStart as command hook, got {command_hooks}")
 
 
 if __name__ == "__main__":

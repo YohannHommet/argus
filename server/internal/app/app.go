@@ -197,10 +197,14 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, opts ...O
 
 	// P2-11: the hooks webhook (SPEC §3.5). hookNormalizer built here because
 	// it needs config keys; internal/ingest/hooks stays config-free (depguard).
+	hookNormalizerOpts := []normalize.HookOption{
+		normalize.WithPromptContent(cfg.IngestHookAllowPromptContent),
+	}
 	hookNormalizer := normalize.NewHookNormalizer(
 		time.Now,
 		time.Duration(cfg.RetentionRawDays)*24*time.Hour,
 		cfg.IngestHookAllowMessageDisplay,
+		hookNormalizerOpts...,
 	)
 	hookHandlerOpts := []hooks.Option{hooks.WithLogger(logger)}
 	if o.registerer != nil {
