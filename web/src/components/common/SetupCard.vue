@@ -10,10 +10,10 @@
  *
  * The env block and hook JSON below are the literal README quickstart and
  * hook config, verbatim, not paraphrased, with only the endpoint
- * substituted in. `OTEL_LOG_TOOL_DETAILS=1`, the `SessionEnd` hook's
- * `timeout: 1` and `SessionStart` being a curl command rather than an http
- * hook are deliberately not "simplified" — see the inline notes next to
- * each, and scripts/argus_hook.py, for why.
+ * substituted in. `OTEL_LOG_TOOL_DETAILS=1`, the 1 s `timeout` on the teardown
+ * hooks (`Stop`, `SubagentStop`, `SessionEnd`) and `SessionStart` being a curl
+ * command rather than an http hook are deliberately not "simplified" — see the
+ * inline notes next to each, and scripts/argus_hook.py, for why.
  */
 import { computed } from 'vue'
 
@@ -41,13 +41,29 @@ const hookBlock = computed(
   () =>
     `{ "hooks": {
   // Claude Code registers an http SessionStart hook but never fires it, so this one posts with curl.
-  "SessionStart": [ { "hooks": [
+  "SessionStart":       [ { "hooks": [
     { "type": "command", "timeout": 2, "command": "curl -sS -m 2 -X POST -H 'Content-Type: application/json' --data-binary @- -o /dev/null '${props.endpointUrl}/ingest/hook?event=SessionStart' || true" } ] } ],
-  "PostToolUse":  [ { "hooks": [
+  "UserPromptSubmit":   [ { "hooks": [
+    { "type": "http", "url": "${props.endpointUrl}/ingest/hook?event=UserPromptSubmit", "timeout": 2 } ] } ],
+  "PreToolUse":         [ { "hooks": [
+    { "type": "http", "url": "${props.endpointUrl}/ingest/hook?event=PreToolUse", "timeout": 2 } ] } ],
+  "PostToolUse":        [ { "hooks": [
     { "type": "http", "url": "${props.endpointUrl}/ingest/hook?event=PostToolUse", "timeout": 5 } ] } ],
+  "PostToolUseFailure": [ { "hooks": [
+    { "type": "http", "url": "${props.endpointUrl}/ingest/hook?event=PostToolUseFailure", "timeout": 5 } ] } ],
+  "PostToolBatch":      [ { "hooks": [
+    { "type": "http", "url": "${props.endpointUrl}/ingest/hook?event=PostToolBatch", "timeout": 5 } ] } ],
+  "SubagentStart":      [ { "hooks": [
+    { "type": "http", "url": "${props.endpointUrl}/ingest/hook?event=SubagentStart", "timeout": 2 } ] } ],
+  "SubagentStop":       [ { "hooks": [
+    { "type": "http", "url": "${props.endpointUrl}/ingest/hook?event=SubagentStop", "timeout": 1 } ] } ],
+  "Stop":               [ { "hooks": [
+    { "type": "http", "url": "${props.endpointUrl}/ingest/hook?event=Stop", "timeout": 1 } ] } ],
   // SessionEnd hooks share a hard 1.5 s budget — keep this at 1.
-  "SessionEnd":   [ { "hooks": [
-    { "type": "http", "url": "${props.endpointUrl}/ingest/hook?event=SessionEnd", "timeout": 1 } ] } ]
+  "SessionEnd":         [ { "hooks": [
+    { "type": "http", "url": "${props.endpointUrl}/ingest/hook?event=SessionEnd", "timeout": 1 } ] } ],
+  "InstructionsLoaded": [ { "hooks": [
+    { "type": "http", "url": "${props.endpointUrl}/ingest/hook?event=InstructionsLoaded", "timeout": 2 } ] } ]
 } }`,
 )
 
